@@ -193,6 +193,23 @@ pub unsafe fn draw(
         dot(dc, p, 6, rgb(76, 98, 142));
         dot(dc, p, 3, rgb(235, 250, 255));
     }
+    let current = path.last().and_then(|id| c.find(*id)).unwrap_or(&c.root);
+    if !preview
+        && current
+            .children
+            .as_ref()
+            .is_some_and(|children| children.is_empty())
+    {
+        text(
+            dc,
+            &format!("{} is empty · Backspace or center to return", current.name),
+            origin.x as i32 - 230,
+            origin.y as i32 + (c.layout.radius * scale) as i32 + 10,
+            460,
+            rgb(205, 215, 235),
+            13,
+        );
+    }
     let radius = (c.layout.radius * 0.27 * scale).max(3.) as i32;
     dot(dc, origin, radius, rgb(18, 25, 39));
     text(

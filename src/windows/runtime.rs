@@ -14,7 +14,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::{LibraryLoader::GetModuleHandleW, Threading::*},
+    System::{LibraryLoader::GetModuleHandleW, RemoteDesktop::*, Threading::*},
     UI::{
         Accessibility::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*,
     },
@@ -53,11 +53,11 @@ struct Runtime {
     bindings: Vec<Binding>,
     registered: Vec<bool>,
     engine: Engine,
-    keys: [bool; 256],
-    eaten: [bool; 256],
-    mouse_eaten: [bool; 6],
-    pending: Option<usize>,
     paused: bool,
+    session_blocked: bool,
+    sleeping: bool,
+    session_notifications: bool,
+    taskbar_created: u32,
     origin: Point,
     scale: f64,
     saved: POINT,
@@ -74,6 +74,31 @@ struct Runtime {
     reload_requested: bool,
 }
 static mut APP: *mut Runtime = null_mut();
+static mut RESIDENT_WINDOW: HWND = null_mut();
+struct HookState {
+    hwnd: HWND,
+    bindings: Vec<Binding>,
+    modes: Vec<Mode>,
+    registered: Vec<bool>,
+    keys: [bool; 256],
+    eaten: [bool; 256],
+    mouse_eaten: [bool; 6],
+    active: Option<usize>,
+    enabled: bool,
+}
+static mut HOOKS: *mut HookState = null_mut();
+thread_local! { static IN_HOOK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+struct HookGuard;
+impl HookGuard {
+    fn enter() -> Option<Self> {
+        IN_HOOK.with(|v| if v.replace(true) { None } else { Some(Self) })
+    }
+}
+impl Drop for HookGuard {
+    fn drop(&mut self) {
+        IN_HOOK.with(|v| v.set(false));
+    }
+}
 
 pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
     unsafe {
@@ -137,11 +162,11 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             bindings,
             registered: vec![],
             engine: Engine::default(),
-            keys: [false; 256],
-            eaten: [false; 256],
-            mouse_eaten: [false; 6],
-            pending: None,
             paused: false,
+            session_blocked: false,
+            sleeping: false,
+            session_notifications: false,
+            taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
             origin: Point::default(),
             scale: 1.,
             saved: zeroed(),
@@ -158,10 +183,24 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             reload_requested: false,
         });
         APP = Box::into_raw(app);
+        RESIDENT_WINDOW = hwnd;
+        let startup_guard = super::DispatchGuard::enter().expect("resident startup dispatch");
         let a = &mut *APP;
-        for vk in 0..256 {
-            a.keys[vk] = (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
+        let mut keys = [false; 256];
+        for (vk, key) in keys.iter_mut().enumerate() {
+            *key = GetAsyncKeyState(vk as i32) < 0;
         }
+        HOOKS = Box::into_raw(Box::new(HookState {
+            hwnd,
+            bindings: a.bindings.clone(),
+            modes: a.config.profiles.iter().map(|p| p.mode).collect(),
+            registered: vec![],
+            keys,
+            eaten: [false; 256],
+            mouse_eaten: [false; 6],
+            active: None,
+            enabled: false,
+        }));
         a.keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0);
         a.mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0);
         if a.keyboard.is_null() || a.mouse.is_null() {
@@ -186,23 +225,21 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             0,
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
-        let mut tray: NOTIFYICONDATAW = zeroed();
-        tray.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-        tray.hWnd = hwnd;
-        tray.uID = 1;
-        tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        tray.uCallbackMessage = TRAY;
-        tray.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
-        let tip = wide("Constellation — right-click for settings");
-        tray.szTip[..tip.len()].copy_from_slice(&tip);
-        if Shell_NotifyIconW(NIM_ADD, &tray) == 0 {
+        if !add_tray(hwnd) {
             cleanup();
             return Err("Could not add Constellation to the notification area".into());
+        }
+        a.session_notifications =
+            WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) != 0;
+        if !a.session_notifications {
+            cleanup();
+            return Err("Cannot subscribe to Windows session changes".into());
         }
         a.refresh_registration();
         if smoke {
             SetTimer(hwnd, 10, 350, None);
         }
+        drop(startup_guard);
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
@@ -216,6 +253,19 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
         cleanup();
         Ok(())
     }
+}
+
+unsafe fn add_tray(hwnd: HWND) -> bool {
+    let mut tray: NOTIFYICONDATAW = zeroed();
+    tray.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+    tray.hWnd = hwnd;
+    tray.uID = 1;
+    tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    tray.uCallbackMessage = TRAY;
+    tray.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+    let tip = wide("Constellation — right-click for settings");
+    tray.szTip[..tip.len()].copy_from_slice(&tip);
+    Shell_NotifyIconW(NIM_ADD, &tray) != 0 || Shell_NotifyIconW(NIM_MODIFY, &tray) != 0
 }
 
 unsafe fn cleanup() {
@@ -234,15 +284,23 @@ unsafe fn cleanup() {
     if !a.mouse.is_null() {
         UnhookWindowsHookEx(a.mouse);
     }
+    if !HOOKS.is_null() {
+        drop(Box::from_raw(HOOKS));
+        HOOKS = null_mut();
+    }
     if !a.foreground_hook.is_null() {
         UnhookWinEvent(a.foreground_hook);
     }
     if !a.location_hook.is_null() {
         UnhookWinEvent(a.location_hook);
     }
+    if a.session_notifications {
+        WTSUnRegisterSessionNotification(a.hwnd);
+    }
     DestroyWindow(a.hwnd);
     ReleaseMutex(a.instance);
     CloseHandle(a.instance);
+    RESIDENT_WINDOW = null_mut();
 }
 
 /// Yield input to fullscreen applications and the shortcut-profile editor.
@@ -279,14 +337,31 @@ unsafe fn foreground_blocks_launcher(overlay: HWND) -> bool {
 }
 
 impl Runtime {
+    unsafe fn sync_hooks(&self, enabled: bool) {
+        if HOOKS.is_null() {
+            return;
+        }
+        let h = &mut *HOOKS;
+        h.bindings = self.bindings.clone();
+        h.modes = self.config.profiles.iter().map(|p| p.mode).collect();
+        h.registered = self.registered.clone();
+        h.enabled = enabled;
+    }
     unsafe fn refresh_registration(&mut self) {
+        if !HOOKS.is_null() {
+            (*HOOKS).enabled = false;
+        }
         for i in 0..self.registered.len() {
             if self.registered[i] {
                 UnregisterHotKey(self.hwnd, i as i32 + 100);
             }
         }
         self.registered = vec![false; self.bindings.len()];
-        if self.paused || foreground_blocks_launcher(self.hwnd) {
+        if self.paused
+            || self.session_blocked
+            || self.sleeping
+            || foreground_blocks_launcher(self.hwnd)
+        {
             return;
         }
         let mut failures = vec![];
@@ -305,6 +380,7 @@ impl Runtime {
                 self.registered[i] = true;
             }
         }
+        self.sync_hooks(true);
         if !failures.is_empty() {
             self.notice(&format!(
                 "Unavailable global bindings: {}. Other profiles remain usable.",
@@ -343,9 +419,18 @@ impl Runtime {
             Err(e) => self.notice(&e),
         }
     }
-    unsafe fn open(&mut self, mut i: usize) {
-        self.pending = None;
-        if self.paused || foreground_blocks_launcher(self.hwnd) {
+    unsafe fn open(&mut self, i: usize) {
+        self.open_inner(i);
+        if !HOOKS.is_null() {
+            (*HOOKS).active = self.engine.profile;
+        }
+    }
+    unsafe fn open_inner(&mut self, mut i: usize) {
+        if self.paused
+            || self.session_blocked
+            || self.sleeping
+            || foreground_blocks_launcher(self.hwnd)
+        {
             self.refresh_registration();
             return;
         }
@@ -428,7 +513,11 @@ impl Runtime {
             return;
         }
         ShowWindow(self.hwnd, SW_SHOW);
-        SetForegroundWindow(self.hwnd);
+        if !super::focus_window(self.hwnd) {
+            self.dismiss(true);
+            self.notice("Windows did not allow the radial to receive focus; invocation cancelled.");
+            return;
+        }
         SetFocus(self.hwnd);
         InvalidateRect(self.hwnd, null(), 0);
     }
@@ -439,7 +528,7 @@ impl Runtime {
             .is_some_and(|i| self.config.profiles[i].restore_cursor)
             && restore;
         self.engine.close();
-        self.pending = None;
+        self.cancel_packets();
         ShowWindow(self.hwnd, SW_HIDE);
         if should {
             SetCursorPos(self.saved.x, self.saved.y);
@@ -447,6 +536,16 @@ impl Runtime {
         if self.reload_requested {
             self.reload();
         }
+    }
+    unsafe fn cancel_packets(&mut self) {
+        if !HOOKS.is_null() {
+            (*HOOKS).active = None;
+        }
+        // Drop queued invocation/selection packets from the cancelled gesture.
+        // In particular, a late Hold release must never select from a later menu.
+        let mut stale: MSG = zeroed();
+        while PeekMessageW(&mut stale, self.hwnd, INVOKE, CLICK, PM_REMOVE) != 0 {}
+        self.foreground_pending = false;
     }
     unsafe fn pointer_at(&mut self, mut p: POINT) {
         if self.engine.profile.is_none() {
@@ -487,6 +586,36 @@ impl Runtime {
             Action::None => {}
         }
     }
+    unsafe fn selection_allowed(&mut self) -> bool {
+        if self.engine.profile.is_none() {
+            return false;
+        }
+        if self.session_blocked
+            || self.sleeping
+            || foreground_blocks_launcher(self.hwnd)
+            || GetForegroundWindow() != self.hwnd
+        {
+            self.dismiss(
+                !self.session_blocked && !self.sleeping && !foreground_blocks_launcher(self.hwnd),
+            );
+            return false;
+        }
+        true
+    }
+    unsafe fn resync_input(&mut self) {
+        let mut keys = [false; 256];
+        for (vk, key) in keys.iter_mut().enumerate() {
+            *key = GetAsyncKeyState(vk as i32) < 0;
+        }
+        let h = &mut *HOOKS;
+        h.keys = keys;
+        for (vk, key) in keys.iter().enumerate() {
+            h.eaten[vk] &= *key;
+        }
+        for (button, vk) in [(1, 1), (2, 2), (3, 4), (4, 5), (5, 6)] {
+            h.mouse_eaten[button] &= keys[vk];
+        }
+    }
     unsafe fn configure(&mut self) {
         self.dismiss(true);
         if let Err(e) = editor::spawn() {
@@ -496,13 +625,13 @@ impl Runtime {
 }
 
 unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code < 0 || APP.is_null() {
+    if code < 0 || HOOKS.is_null() {
         return CallNextHookEx(null_mut(), code, w, l);
     }
-    let Some(_guard) = super::DispatchGuard::enter() else {
+    let Some(_guard) = HookGuard::enter() else {
         return CallNextHookEx(null_mut(), code, w, l);
     };
-    let a = &mut *APP;
+    let a = &mut *HOOKS;
     let e = &*(l as *const KBDLLHOOKSTRUCT);
     let vk = e.vkCode as usize;
     if vk >= 256 {
@@ -524,14 +653,10 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
     if matches!(vk, 0xa4 | 0xa5) {
         a.keys[0x12] = a.keys[0xa4] || a.keys[0xa5];
     }
-    let active = a.engine.profile.or(a.pending);
+    let active = a.active;
     if up {
         if let Some(i) = active {
-            if a.config
-                .profiles
-                .get(i)
-                .is_some_and(|p| p.mode == Mode::Hold)
-                && a.bindings[i].requires(Input::Key(vk as u16))
+            if a.modes.get(i) == Some(&Mode::Hold) && a.bindings[i].requires(Input::Key(vk as u16))
             {
                 PostMessageW(a.hwnd, RELEASE, i, pointer_packet());
             }
@@ -565,19 +690,16 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
         })
         .map(|(i, _)| i);
     if let Some(i) = profile {
-        if a.paused || foreground_blocks_launcher(a.hwnd) {
-            a.refresh_registration();
-            if active.is_some() {
-                PostMessageW(a.hwnd, FOREGROUND, 0, 0);
-            }
+        if !a.enabled || foreground_blocks_launcher(a.hwnd) {
+            PostMessageW(a.hwnd, FOREGROUND, 0, 0);
             return CallNextHookEx(null_mut(), code, w, l);
         }
         a.eaten[vk] = true;
         if !repeat {
             if active.is_none() {
-                a.pending = Some(i);
+                a.active = Some(i);
                 PostMessageW(a.hwnd, INVOKE, i, 0);
-            } else if active == Some(i) && a.config.profiles[i].mode == Mode::Click {
+            } else if active == Some(i) && a.modes[i] == Mode::Click {
                 PostMessageW(a.hwnd, INVOKE, i, 0);
             }
         }
@@ -592,17 +714,17 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
 }
 
 unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code < 0 || APP.is_null() {
+    if code < 0 || HOOKS.is_null() {
         return CallNextHookEx(null_mut(), code, w, l);
     }
-    let Some(_guard) = super::DispatchGuard::enter() else {
+    let Some(_guard) = HookGuard::enter() else {
         return CallNextHookEx(null_mut(), code, w, l);
     };
-    let a = &mut *APP;
+    let a = &mut *HOOKS;
     let e = &*(l as *const MSLLHOOKSTRUCT);
     let msg = w as u32;
     if msg == WM_MOUSEMOVE {
-        if a.engine.profile.is_some() {
+        if a.active.is_some() {
             PostMessageW(a.hwnd, POINTER_MOVE, 0, pack_point(e.pt));
         }
         return CallNextHookEx(null_mut(), code, w, l);
@@ -620,11 +742,10 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
         ),
         _ => return CallNextHookEx(null_mut(), code, w, l),
     };
-    let active = a.engine.profile.or(a.pending);
+    let active = a.active;
     if !down {
         if let Some(i) = active {
-            if a.config.profiles[i].mode == Mode::Hold && a.bindings[i].key == Input::Mouse(button)
-            {
+            if a.modes[i] == Mode::Hold && a.bindings[i].key == Input::Mouse(button) {
                 PostMessageW(a.hwnd, RELEASE, i, pack_point(e.pt));
             }
         }
@@ -636,7 +757,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
             CallNextHookEx(null_mut(), code, w, l)
         };
     }
-    if a.paused || foreground_blocks_launcher(a.hwnd) {
+    if !a.enabled || foreground_blocks_launcher(a.hwnd) {
         if active.is_some() {
             PostMessageW(a.hwnd, FOREGROUND, 0, 0);
         }
@@ -651,9 +772,9 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
     {
         a.mouse_eaten[button as usize] = true;
         if active.is_none() {
-            a.pending = Some(i);
+            a.active = Some(i);
             PostMessageW(a.hwnd, INVOKE, i, 0);
-        } else if active == Some(i) && a.config.profiles[i].mode == Mode::Click {
+        } else if active == Some(i) && a.modes[i] == Mode::Click {
             PostMessageW(a.hwnd, INVOKE, i, 0);
         }
         return 1;
@@ -679,7 +800,7 @@ unsafe extern "system" fn foreground_event(
         return;
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
-        PostMessageW((*APP).hwnd, FOREGROUND, 0, 0);
+        PostMessageW(RESIDENT_WINDOW, FOREGROUND, 0, 0);
         return;
     };
     let a = &mut *APP;
@@ -697,9 +818,42 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if matches!(
+            msg,
+            WM_WTSSESSION_CHANGE
+                | WM_POWERBROADCAST
+                | WM_DISPLAYCHANGE
+                | WM_DPICHANGED
+                | WM_CANCELMODE
+                | WM_CAPTURECHANGED
+                | RELOAD_CONFIG
+                | FOREGROUND
+                | INVOKE
+                | RELEASE
+                | KEY_ACTION
+                | CLICK
+                | POINTER_MOVE
+        ) {
+            // Native interruption payloads are not retained; input packets are
+            // owned integer coordinates. Never queue an OS-owned RECT pointer.
+            let payload = if matches!(msg, WM_DPICHANGED | WM_POWERBROADCAST) {
+                0
+            } else {
+                l
+            };
+            PostMessageW(hwnd, msg, w, payload);
+        }
+        if msg == WM_QUERYENDSESSION {
+            PostMessageW(hwnd, WM_CANCELMODE, 0, 0);
+            return 1;
+        }
         return DefWindowProcW(hwnd, msg, w, l);
     };
     let a = &mut *APP;
+    if msg == a.taskbar_created && msg != 0 {
+        add_tray(hwnd);
+        return 0;
+    }
     match msg {
         RELOAD_CONFIG => {
             if a.engine.profile.is_some() {
@@ -745,11 +899,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         RELEASE => {
-            if a.engine.profile == Some(w) {
+            if a.selection_allowed() && a.engine.profile == Some(w) {
                 a.pointer_at(unpack_point(l));
                 let restore = a.config.profiles[w].restore_cursor;
                 let result = a.engine.release(&a.config);
                 if a.engine.profile.is_none() {
+                    a.cancel_packets();
                     ShowWindow(hwnd, SW_HIDE);
                     if restore && !foreground_blocks_launcher(hwnd) {
                         SetCursorPos(a.saved.x, a.saved.y);
@@ -764,7 +919,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         KEY_ACTION => {
-            if a.engine.profile.is_none() {
+            if !a.selection_allowed() {
                 return 0;
             }
             match w {
@@ -788,7 +943,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         CLICK => {
-            if a.engine.profile.is_none() {
+            if !a.selection_allowed() {
                 return 0;
             }
             a.pointer_at(unpack_point(l));
@@ -826,6 +981,52 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             if w & 0xffff == WA_INACTIVE as usize && a.engine.profile.is_some() {
                 PostMessageW(hwnd, FOREGROUND, 0, 0);
             }
+            0
+        }
+        WM_WTSSESSION_CHANGE => {
+            match w as u32 {
+                WTS_SESSION_LOCK
+                | WTS_CONSOLE_DISCONNECT
+                | WTS_REMOTE_DISCONNECT
+                | WTS_SESSION_LOGOFF => {
+                    a.session_blocked = true;
+                    a.dismiss(false);
+                }
+                WTS_SESSION_UNLOCK | WTS_CONSOLE_CONNECT | WTS_REMOTE_CONNECT
+                | WTS_SESSION_LOGON => {
+                    a.session_blocked = false;
+                    a.resync_input();
+                }
+                _ => {}
+            }
+            a.refresh_registration();
+            0
+        }
+        WM_POWERBROADCAST => {
+            match w as u32 {
+                PBT_APMSUSPEND => {
+                    a.sleeping = true;
+                    a.dismiss(false);
+                }
+                PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => {
+                    a.sleeping = false;
+                    a.resync_input();
+                }
+                _ => {}
+            }
+            a.refresh_registration();
+            1
+        }
+        WM_QUERYENDSESSION => {
+            a.dismiss(false);
+            1
+        }
+        WM_ENDSESSION if w != 0 => {
+            PostQuitMessage(0);
+            0
+        }
+        WM_CANCELMODE | WM_CAPTURECHANGED => {
+            a.dismiss(!foreground_blocks_launcher(hwnd));
             0
         }
         WM_DISPLAYCHANGE => {

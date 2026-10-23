@@ -7,17 +7,19 @@
 - Shared Rust configuration model, validation, radial geometry/hit testing, navigation state, and portable storage.
 - Native Windows tray, global keyboard/mouse bindings, input consumption, centered overlay/cursor, restoration, and fullscreen suspension.
 - Continuous subdivision with saved geometry; dots, parent/child lines, and generated pentatonic bell feedback.
-- A separate native configuration process: item editing/reparenting/order, four spacing controls, monitor preview with full fan-out and advisory warnings, sound controls, graphical shortcut profiles with keyboard/mouse recording, and advanced JSON.
-- Local save/backup/recovery and a portable ZIP packaging command. New configuration is signaled to the resident process; changes are deferred during an active radial gesture.
+- A separate native configuration process: item editing/reparenting/order, four numeric/slider spacing controls, monitor preview with full fan-out and advisory overflow/narrow/overlap warnings, sound controls, graphical shortcut profiles with keyboard/mouse recording, and advanced JSON.
+- Stable profile IDs with legacy migration; repaired saves preserve valid backups. Local save/backup/recovery and a portable ZIP packaging command. New configuration is signaled to the resident process; changes are deferred during an active radial gesture.
+- Lock/disconnect/suspend cancellation and input resynchronization on resume; late selection checks; independent hook state to preserve input through reentrant UI calls; taskbar icon recreation; explicit empty-Constellation feedback.
 
 ## Automated evidence
 
 | Check | Evidence / scope |
 |---|---|
-| Rust core | 15 integration tests: subdivision, stable ancestor geometry, immediate hover, gaps, click/hold, profile isolation, validation, local saving, backup recovery, relocation, and failed-write behavior. |
-| Windows desktop | `tests/native_smoke.py` creates an isolated portable copy and its own foreground probe window. It verifies Ctrl+Q consumption, ignored profiles, Space launching, Hold cancellation, modifier release, live reload, single-key and Mouse4 Hold, relative script launch, nested fan rendering, fullscreen input pass-through, cursor restoration, warning-only saving, and process exit. Profile checks cover recording an existing Ctrl+Q without invoking the resident, duplicate validation, keyboard/mouse capture, Escape cancellation, per-profile options, live F9 Hold reload, and cancelling removals. |
-| Visual inspection | Program-owned screenshots of the radial, nested connection, full fan-out editor, graphical profiles, and overflow warning were inspected. Screenshot backgrounds outside the radial are black in PrintWindow capture; the actual overlay uses color-key transparency. |
-| Idle sample | One 60-second tray-only sample of the static-CRT build: **8.33 MiB working set**, **1.62 MiB private bytes**, **0.0000 additional CPU seconds** at the API's reporting resolution. Release x64, default sample tree, editor/radial closed; target processes excluded. This is one sample, not a worst-case guarantee. |
+| Rust core | 17 integration tests: subdivision, stable ancestor geometry, immediate hover, gaps, click/hold, profile isolation, validation, local saving, backup recovery/repair, relocation, stable legacy profile IDs, advisory overlap warnings, and failed-write behavior. |
+| Windows launch targets | Five native tests cover program arguments/cwd, batch and PowerShell scripts, a real generated `.lnk` launching a controlled target, missing targets, and URL/folder dispatch. URL/folder handlers are replaced with a recording callback; no browser or Explorer window is opened. |
+| Windows desktop | 29 checks in `tests/native_smoke.py` create an isolated portable copy and its own foreground probe window. It verifies Ctrl+Q consumption, ignored profiles, Space launching, Hold cancellation, modifier release, live reload, single-key and Mouse4 Hold, relative script launch, nested fan rendering, fullscreen input pass-through, cursor restoration, warning-only saving, and process exit. Profile checks cover recording an existing Ctrl+Q without invoking the resident, duplicate validation, keyboard/mouse capture, Escape cancellation, per-profile options, live F9 Hold reload, and cancelling removals. Extended checks cover empty-folder navigation, simulated lock/sleep/display/capture interruptions, focus loss before Hold release, rapid repeated gestures, taskbar recreation, sliders, relocated launch from a foreign working directory, alternate-storage sentinels, an NTFS write-denied folder with ACL restoration, and control reachability in a 900×650 configuration window. |
+| Visual inspection | Program-owned screenshots of the radial, nested connection, full fan-out editor, graphical profiles, empty-folder feedback, a scrolled small window, and overflow warning were inspected. Screenshot backgrounds outside the radial are black in PrintWindow capture; the actual overlay uses color-key transparency. |
+| Idle sample | One 60-second tray-only sample of the static-CRT build: **8.97 MiB working set**, **1.77 MiB private bytes**, **0.0000 additional CPU seconds** at the API's reporting resolution. Release x64, default sample tree, editor/radial closed; target processes excluded. This is one sample, not a worst-case guarantee. |
 | Portable executable | PE imports inspected after enabling static CRT: Windows system libraries only; no VCRUNTIME140.dll / Visual C++ redistributable dependency. Packaging explicitly excludes runtime configuration and checks for dynamic MSVC runtime imports. |
 
 Local generated evidence is under `.local/native-smoke` and `.local/idle-check`, ignored by Git. `scripts/measure_idle.py` reproduces the lightweight idle sample. The Windows/Linux CI matrix tests core portability; Linux desktop integration is not implemented.
@@ -25,15 +27,15 @@ Local generated evidence is under `.local/native-smoke` and `.local/idle-check`,
 ## Verify when back at the PC
 
 - Gesture precision with the real tree, large/narrow fans, and rapid cross-branch movement.
-- Cursor placement/restoration across the actual monitor arrangement, display scaling, disconnected displays, and focus changes.
+- Cursor placement/restoration across the actual monitor arrangement, display scaling, and disconnected displays. Lock/suspend/display/capture tests deliver synthetic notifications to the isolated app; they do not physically lock, sleep, disconnect, or reconfigure this PC.
 - Fullscreen suspension with the user's actual games/apps. Detection is a native window/style heuristic; the automated check covers a controlled borderless fullscreen window.
 - Bell timbre, loudness, mute, and rapid-note feel. Audio is bounded to one voice, so a new note replaces the previous tail. Desktop tests mute audio and do not establish perceived audio quality.
-- Program, URL, folder, shortcut, and script targets using real user configurations. Automated end-to-end launch checks cover a controlled program and Python script; they do not open user browsers or folders.
-- Direct portable-folder write behavior under additional policies/filesystems; existing checks cover isolated storage, malformed data, and failure with a non-directory storage path, not a complete system-wide file-write trace.
+- Program, URL, folder, shortcut, and script targets using real user configurations. Automated launches cover controlled programs, Python/batch/PowerShell scripts, and a generated Windows shortcut; URL/folder routing is checked without opening user handlers.
+- Direct portable-folder write behavior under additional policies/filesystems. Checks cover relocation, foreign working directory, redirected alternate-storage sentinels, malformed data, and a real NTFS write denial. Sentinel checks detect writes to the tested environment paths; they are not a system-wide filesystem trace.
 
 ## Current limits
 
 - Supported bindings are documented in the user guide. Modifier+mouse combinations and primary-button invocation are not included.
-- The configuration window uses plain native controls. Very small/high-DPI desktops and keyboard accessibility need further UI review.
+- The configuration window uses plain native controls. Scrolling and Tab access are implemented, with a 900×650 window probe; mixed-DPI behavior and accessibility still need hands-on review.
 - Script runners must already be installed. Batch metacharacters are rejected to avoid unintended shell interpretation; a shortcut wrapper can handle advanced cases.
 - No installer, startup registration, automatic updater, or Linux desktop adapter is included.

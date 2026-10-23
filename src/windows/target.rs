@@ -7,6 +7,13 @@ use std::{
 use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
 
 pub fn launch(root: &Path, target: &Target) -> Result<(), String> {
+    launch_using(root, target, &mut shell)
+}
+fn launch_using(
+    root: &Path,
+    target: &Target,
+    open: &mut impl FnMut(&str, &Path) -> Result<(), String>,
+) -> Result<(), String> {
     match target {
         Target::Program { path, args, cwd } => spawn(root, path, args, cwd.as_deref()),
         Target::Script {
@@ -74,9 +81,21 @@ pub fn launch(root: &Path, target: &Target) -> Result<(), String> {
             spawn(root, runner, &argv, cwd.as_deref())
         }
         Target::Shortcut { path } | Target::Folder { path } => {
-            shell(&storage::resolve(root, path).to_string_lossy(), root)
+            let resolved = storage::resolve(root, path);
+            let exists = if matches!(target, Target::Folder { .. }) {
+                resolved.is_dir()
+            } else {
+                resolved.is_file()
+            };
+            if !exists {
+                return Err(format!(
+                    "Target does not exist or has the wrong type: {}",
+                    resolved.display()
+                ));
+            }
+            open(&resolved.to_string_lossy(), root)
         }
-        Target::Url { url } => shell(url, root),
+        Target::Url { url } => open(url, root),
     }
 }
 fn spawn(root: &Path, path: &str, args: &[String], cwd: Option<&str>) -> Result<(), String> {
@@ -115,5 +134,207 @@ fn shell(target: &str, root: &Path) -> Result<(), String> {
         ))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::{Duration, Instant},
+    };
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    fn sandbox() -> std::path::PathBuf {
+        let p = std::env::current_dir()
+            .unwrap()
+            .join("target/launch-checks")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+    fn wait(path: &Path) {
+        let until = Instant::now() + Duration::from_secs(15);
+        while !path.exists() {
+            assert!(Instant::now() < until, "Missing {}", path.display());
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    #[test]
+    fn program_arguments_and_cwd_are_literal() {
+        let root = sandbox();
+        fs::create_dir(root.join("working folder")).unwrap();
+        launch(&root,&Target::Program { path:"powershell.exe".into(), cwd:Some("working folder".into()),
+            args:vec!["-NoProfile".into(),"-NonInteractive".into(),"-Command".into(),
+                "[IO.File]::WriteAllText((Join-Path (Get-Location) 'program.txt'), 'spaces & literal')".into()] }).unwrap();
+        wait(&root.join("working folder/program.txt"));
+        assert_eq!(
+            fs::read_to_string(root.join("working folder/program.txt")).unwrap(),
+            "spaces & literal"
+        );
+    }
+    #[test]
+    fn batch_and_powershell_scripts_run_from_portable_root() {
+        let root = sandbox();
+        fs::write(
+            root.join("mark.cmd"),
+            "@echo off\r\n> batch.txt echo %~1\r\n",
+        )
+        .unwrap();
+        launch(
+            &root,
+            &Target::Script {
+                path: "mark.cmd".into(),
+                runner: None,
+                args: vec!["two words".into()],
+                cwd: None,
+            },
+        )
+        .unwrap();
+        wait(&root.join("batch.txt"));
+        assert_eq!(
+            fs::read_to_string(root.join("batch.txt")).unwrap().trim(),
+            "two words"
+        );
+        fs::write(root.join("mark.ps1"),"param([string]$Message)\n[IO.File]::WriteAllText((Join-Path (Get-Location) 'ps.txt'), $Message)").unwrap();
+        launch(
+            &root,
+            &Target::Script {
+                path: "mark.ps1".into(),
+                runner: None,
+                args: vec!["literal & value".into()],
+                cwd: None,
+            },
+        )
+        .unwrap();
+        wait(&root.join("ps.txt"));
+        assert_eq!(
+            fs::read_to_string(root.join("ps.txt")).unwrap(),
+            "literal & value"
+        );
+        assert!(
+            launch(
+                &root,
+                &Target::Script {
+                    path: "mark.cmd".into(),
+                    runner: None,
+                    args: vec!["unsafe&argument".into()],
+                    cwd: None
+                }
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn shell_routes_urls_and_relative_folders_without_opening_handlers() {
+        let root = sandbox();
+        fs::create_dir(root.join("folder")).unwrap();
+        let mut calls = vec![];
+        let mut open = |target: &str, cwd: &Path| {
+            calls.push((target.to_string(), cwd.to_path_buf()));
+            Ok(())
+        };
+        launch_using(
+            &root,
+            &Target::Url {
+                url: "https://example.invalid/path?q=hello%20world".into(),
+            },
+            &mut open,
+        )
+        .unwrap();
+        launch_using(
+            &root,
+            &Target::Folder {
+                path: "folder".into(),
+            },
+            &mut open,
+        )
+        .unwrap();
+        assert_eq!(calls[0].0, "https://example.invalid/path?q=hello%20world");
+        assert_eq!(std::path::PathBuf::from(&calls[1].0), root.join("folder"));
+        assert!(calls.iter().all(|(_, cwd)| cwd == &root));
+    }
+    #[test]
+    fn missing_targets_return_errors_before_shell_dispatch() {
+        let root = sandbox();
+        let mut calls = 0;
+        for target in [
+            Target::Folder {
+                path: "missing".into(),
+            },
+            Target::Shortcut {
+                path: "missing.lnk".into(),
+            },
+        ] {
+            assert!(
+                launch_using(&root, &target, &mut |_, _| {
+                    calls += 1;
+                    Ok(())
+                })
+                .is_err()
+            );
+        }
+        assert_eq!(calls, 0);
+        assert!(
+            launch(
+                &root,
+                &Target::Program {
+                    path: ".\\missing.exe".into(),
+                    args: vec![],
+                    cwd: None
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            launch(
+                &root,
+                &Target::Script {
+                    path: "missing.ps1".into(),
+                    runner: None,
+                    args: vec![],
+                    cwd: None
+                }
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn windows_shortcut_dispatches_once_to_a_controlled_target() {
+        let root = sandbox();
+        let quote = |p: &Path| p.to_string_lossy().replace("'", "''");
+        let script = format!(
+            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath=$env:ComSpec; $s.Arguments='/d /c echo shortcut>shortcut.txt'; $s.WorkingDirectory='{}'; $s.WindowStyle=7; $s.Save()",
+            quote(&root.join("mark.lnk")),
+            quote(&root)
+        );
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        launch(
+            &root,
+            &Target::Shortcut {
+                path: "mark.lnk".into(),
+            },
+        )
+        .unwrap();
+        wait(&root.join("shortcut.txt"));
+        assert_eq!(
+            fs::read_to_string(root.join("shortcut.txt"))
+                .unwrap()
+                .trim(),
+            "shortcut"
+        );
     }
 }

@@ -237,4 +237,83 @@ fn corrupted_config_can_recover_backup_without_overwriting_original() {
         b"broken"
     );
     assert!(root.join("data/recovery.txt").is_file());
+    storage::save(&root, &loaded).unwrap();
+    let backup: Config =
+        serde_json::from_slice(&std::fs::read(root.join("data/config.backup.json")).unwrap())
+            .unwrap();
+    backup.validate().unwrap();
+    assert_eq!(backup.root.name, "Your universe");
+}
+
+#[test]
+fn legacy_profiles_get_stable_ids_across_rename_reorder_and_relocation() {
+    let root = sandbox();
+    let mut c = Config::default();
+    c.profiles[0].id = 0;
+    let mut second = c.profiles[0].clone();
+    second.binding = "F8".into();
+    c.profiles.push(second);
+    std::fs::create_dir_all(root.join("data")).unwrap();
+    std::fs::write(
+        root.join("data/config.json"),
+        serde_json::to_vec(&c).unwrap(),
+    )
+    .unwrap();
+    let mut loaded = storage::read(&root).unwrap();
+    let id = loaded.profiles[0].id;
+    assert_ne!(id, 0);
+    assert_ne!(id, loaded.profiles[1].id);
+    loaded.profiles[0].name = "Renamed".into();
+    loaded.profiles.reverse();
+    let other = sandbox();
+    storage::save(&other, &loaded).unwrap();
+    let moved = storage::read(&other).unwrap();
+    assert_eq!(moved.profiles[1].id, id);
+    assert_eq!(moved.profiles[1].name, "Renamed");
+    let mut invalid = moved.clone();
+    invalid.profiles[0].id = id;
+    assert!(
+        storage::save(&other, &invalid)
+            .unwrap_err()
+            .contains("Duplicate profile ID")
+    );
+    assert_eq!(storage::read(&other).unwrap().profiles[1].id, id);
+}
+#[test]
+fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
+    let star = |id| Node {
+        id,
+        name: format!("Star {id}"),
+        children: None,
+        target: Some(Target::Folder { path: ".".into() }),
+    };
+    let mut c = Config::default();
+    c.root.children = Some(vec![Node {
+        id: 2,
+        name: "One".into(),
+        children: Some(vec![star(3)]),
+        target: None,
+    }]);
+    assert!(
+        !geometry::warnings(&c, 1920., 1080.)
+            .iter()
+            .any(|s| s.contains("overlap"))
+    );
+    c.root.children.as_mut().unwrap().push(Node {
+        id: 4,
+        name: "Two".into(),
+        children: Some(vec![star(5)]),
+        target: None,
+    });
+    c.layout.distance = 0.;
+    c.layout.spread = 360.;
+    c.layout.gap = 0.;
+    assert!(
+        geometry::warnings(&c, 1920., 1080.)
+            .iter()
+            .any(|s| s.contains("overlap"))
+    );
+    let root = sandbox();
+    storage::save(&root, &c).unwrap();
+    assert_eq!(storage::read(&root).unwrap().layout.distance, 0.);
 }

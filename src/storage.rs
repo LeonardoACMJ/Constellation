@@ -22,8 +22,9 @@ pub fn resolve(root: &Path, path: &str) -> PathBuf {
 pub fn read(root: &Path) -> Result<Config, String> {
     let bytes = fs::read(root.join("data/config.json"))
         .map_err(|e| format!("Cannot read portable config: {e}"))?;
-    let c: Config =
+    let mut c: Config =
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid config JSON: {e}"))?;
+    c.assign_profile_ids()?;
     c.validate()?;
     Ok(c)
 }
@@ -38,7 +39,9 @@ pub fn load_or_create(root: &Path) -> Result<Config, String> {
             Err(original) => {
                 let backup =
                     fs::read(root.join("data/config.backup.json")).map_err(|_| original.clone())?;
-                let c: Config = serde_json::from_slice(&backup).map_err(|_| original.clone())?;
+                let mut c: Config =
+                    serde_json::from_slice(&backup).map_err(|_| original.clone())?;
+                c.assign_profile_ids().map_err(|_| original.clone())?;
                 c.validate().map_err(|_| original.clone())?;
                 // Preserve the broken original for repair; never write a recovered
                 // backup over it without an explicit Save from configuration.
@@ -59,10 +62,12 @@ pub fn load_or_create(root: &Path) -> Result<Config, String> {
 }
 static SAVE_ID: AtomicU64 = AtomicU64::new(0);
 pub fn save(root: &Path, c: &Config) -> Result<(), String> {
+    let mut c = c.clone();
+    c.assign_profile_ids()?;
     c.validate()?;
     let dir = root.join("data");
     fs::create_dir_all(&dir).map_err(|e| format!("Portable folder is not writable: {e}"))?;
-    let bytes = serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(&c).map_err(|e| e.to_string())?;
     let path = dir.join("config.json");
     // Same-directory temp + atomic replacement; a failed replacement preserves the old file.
     let temp = dir.join(format!(
@@ -79,7 +84,9 @@ pub fn save(root: &Path, c: &Config) -> Result<(), String> {
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
-        if path.exists() {
+        // A repaired Save must not replace a known-good backup with the
+        // malformed file from which recovery was necessary.
+        if path.exists() && read(root).is_ok() {
             fs::copy(&path, dir.join("config.backup.json"))?;
         }
         replace(&temp, &path)

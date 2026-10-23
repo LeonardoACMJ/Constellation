@@ -58,6 +58,8 @@ pub enum Target {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
+    #[serde(default)]
+    pub id: u64,
     pub name: String,
     pub binding: String,
     #[serde(default)]
@@ -234,11 +236,29 @@ impl Config {
         if !(0. ..=1.).contains(&self.sound.volume) {
             return Err("Sound volume must be between 0 and 1".into());
         }
+        let mut profile_ids = HashSet::new();
         let mut bindings = HashSet::new();
         for p in &self.profiles {
             let b = Binding::parse(&p.binding)?;
             if !bindings.insert(b) {
                 return Err("Duplicate shortcut bindings".into());
+            }
+            if p.id != 0 && !profile_ids.insert(p.id) {
+                return Err("Duplicate profile ID".into());
+            }
+            if p.name.trim().is_empty() {
+                return Err("Every shortcut profile needs a name".into());
+            }
+        }
+        Ok(())
+    }
+    /// Upgrade legacy profiles without IDs. Explicit IDs are never rewritten.
+    pub fn assign_profile_ids(&mut self) -> Result<(), String> {
+        let mut next = self.profiles.iter().map(|p| p.id).max().unwrap_or(0);
+        for p in &mut self.profiles {
+            if p.id == 0 {
+                next = next.checked_add(1).ok_or("Profile ID space exhausted")?;
+                p.id = next;
             }
         }
         Ok(())
@@ -342,6 +362,7 @@ impl Default for Config {
                 ]),
             },
             profiles: vec![Profile {
+                id: 1,
                 name: "Default".into(),
                 binding: "Ctrl+Q".into(),
                 mode: Mode::Click,

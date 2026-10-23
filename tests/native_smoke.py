@@ -153,11 +153,12 @@ try:
     mark("another profile is ignored while the Click profile remains open")
     scale=U.GetDpiForWindow(overlay)/96
     U.SetCursorPos(center[0],round(center[1]-144*.65*scale)); pause(); screenshot(overlay,"radial.png")
+    assert U.GetForegroundWindow()==overlay,("Radial failed to take foreground",U.GetForegroundWindow(),overlay)
     keys((0x20,False),(0x20,True)); wait(lambda:not visible(overlay));wait(marker.exists)
     assert point()==origin,(point(),origin)
     mark("Space launches one target and restores the saved cursor")
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();U.SetCursorPos(320,260);origin=point()
-    keys((0x11,False),(0x45,False));wait(lambda:visible(overlay));keys((0x45,True),(0x11,True));wait(lambda:not visible(overlay));assert point()==origin
+    keys((0x11,False),(0x45,False));wait(lambda:visible(overlay));keys((0x45,True),(0x11,True));wait(lambda:not visible(overlay));wait(lambda:point()==origin)
     mark("Hold release over the neutral hub cancels and restores cursor")
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause()
     keys((0x11,False),(0x45,False));wait(lambda:visible(overlay));center=point()
@@ -175,7 +176,7 @@ try:
     mark("single-key F8 Hold opens and cancels on release")
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();marker.unlink()
     mouse_side(True);wait(lambda:visible(overlay));center=point();U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause();mouse_side(False)
-    wait(lambda:not visible(overlay));wait(marker.exists);assert marker.read_text()=="script"
+    wait(lambda:not visible(overlay));wait(lambda:marker.exists() and marker.read_text()=="script")
     mark("live profile reload, Mouse4 Hold, and executable-root-relative script launch")
     # A real nested branch; snapshot captures the illuminated path and connection.
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();invoke();wait(lambda:visible(overlay));center=point()
@@ -187,6 +188,51 @@ try:
         assert pixel!=(0,0,0),"Expected a visible child fan outside the root circle"
     keys((0x1b,False),(0x1b,True));wait(lambda:not visible(overlay))
     mark("nested hover path renders and Escape restores the interaction")
+    c["root"]["children"][1]["children"]=[]
+    config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
+    U.SetForegroundWindow(probe);U.SetFocus(probe);pause();invoke();wait(lambda:visible(overlay));center=point()
+    move_cursor(center[0],round(center[1]+144*.65*scale));pause();screenshot(overlay,"empty-constellation.png")
+    assert visible(overlay);keys((0x08,False),(0x08,True),(0x1b,False),(0x1b,True));wait(lambda:not visible(overlay))
+    c["root"]["children"][1]["children"]=[{"id":21,"name":"Nested Star","target":target}]
+    config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
+    mark("empty Constellation stays open with a visible message and an escape route")
+    # Interruptions are simulated messages to this isolated process. The test
+    # never locks the user's real desktop, sleeps the PC, or changes displays.
+    for message,begin,end,label in [(0x2B1,7,8,"session lock/unlock"),(0x218,4,18,"sleep/resume")]:
+        U.SetForegroundWindow(probe);U.SetFocus(probe);pause()
+        marker.unlink(missing_ok=True)
+        keys((0x77,False));wait(lambda:visible(overlay));center=point()
+        U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause()
+        U.SendMessageW(overlay,message,begin,0);wait(lambda:not visible(overlay))
+        keys((0x77,True));pause();assert not marker.exists()
+        U.SetForegroundWindow(probe);U.SetFocus(probe);pause();observed.clear();invoke();pause()
+        assert not visible(overlay) and 0x51 in observed
+        U.SendMessageW(overlay,message,end,0);pause()
+        U.SetForegroundWindow(probe);U.SetFocus(probe);pause();keys((0x77,False));wait(lambda:visible(overlay))
+        keys((0x77,True));wait(lambda:not visible(overlay))
+        mark(f"simulated {label} cancels Hold, passes input, and resumes invocation")
+    for message,label in [(0x7E,"display change"),(0x215,"capture cancellation")]:
+        U.SetForegroundWindow(probe);U.SetFocus(probe);pause();marker.unlink(missing_ok=True)
+        keys((0x77,False));wait(lambda:visible(overlay));center=point()
+        U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause()
+        U.SendMessageW(overlay,message,0,0);wait(lambda:not visible(overlay))
+        keys((0x77,True));pause();assert not marker.exists()
+        mark(f"simulated {label} cancels without a late Hold launch")
+    U.SetForegroundWindow(probe);U.SetFocus(probe);pause();marker.unlink(missing_ok=True)
+    keys((0x77,False));wait(lambda:visible(overlay));center=point()
+    U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause()
+    U.SetForegroundWindow(probe);U.SetFocus(probe);keys((0x77,True));wait(lambda:not visible(overlay));pause()
+    assert not marker.exists()
+    mark("focus loss immediately before Hold release cannot launch")
+    for _ in range(12):
+        U.SetForegroundWindow(probe);U.SetFocus(probe);pause(.03);invoke();wait(lambda:visible(overlay))
+        keys((0x08,False),(0x08,True),(0x1b,False),(0x1b,True));wait(lambda:not visible(overlay))
+    mark("rapid open/Backspace/Escape cycles do not leave consumed keys stuck")
+    U.RegisterWindowMessageW.argtypes=[W.LPCWSTR];U.RegisterWindowMessageW.restype=UINT
+    U.SendMessageW(overlay,U.RegisterWindowMessageW("TaskbarCreated"),0,0)
+    U.SetForegroundWindow(probe);U.SetFocus(probe);pause();invoke();wait(lambda:visible(overlay))
+    keys((0x1b,False),(0x1b,True));wait(lambda:not visible(overlay))
+    mark("simulated taskbar recreation keeps the tray launcher usable")
     # A borderless test window spans the monitor. Confirm input passes through.
     U.SetForegroundWindow(probe);pause(); info=MONINFO();info.size=C.sizeof(info);U.GetMonitorInfoW(U.MonitorFromPoint(W.POINT(100,100),2),C.byref(info))
     # SetWindowLongPtrW is pointer-sized; GWL_STYLE still receives a 32-bit style value.
@@ -201,6 +247,17 @@ try:
     editor=subprocess.Popen([str(EXE),"--configure"]);processes.append(editor)
     wait(lambda:U.FindWindowW("Constellation.Config",None));window=U.FindWindowW("Constellation.Config",None);pause(.3)
     screenshot(window,"configuration.png")
+    # All controls remain reachable when the desktop/window is smaller than
+    # the logical editor layout. Restore the original bounds after the probe.
+    original=W.RECT();U.GetWindowRect(window,C.byref(original))
+    U.SetWindowPos(window,None,80,80,900,650,0);pause()
+    U.SendMessageW(window,0x114,7,0);U.SendMessageW(window,0x115,7,0);pause()
+    action=W.RECT();outer=W.RECT();U.GetWindowRect(U.GetDlgItem(window,403),C.byref(action));U.GetWindowRect(window,C.byref(outer))
+    screenshot(window,"small-window-scrolled.png")
+    assert outer.left <= action.left < action.right <= outer.right and outer.top < action.top < action.bottom < outer.bottom, (tuple(getattr(action,k) for k in ['left','top','right','bottom']),tuple(getattr(outer,k) for k in ['left','top','right','bottom']))
+    U.SendMessageW(window,0x114,6,0);U.SendMessageW(window,0x115,6,0)
+    U.SetWindowPos(window,None,original.left,original.top,original.right-original.left,original.bottom-original.top,0);pause()
+    mark("small configuration window scrolls to reveal its controls")
     # Graphical profiles edit a draft, capture configured keys without invoking
     # the resident, validate duplicate bindings, and propagate via normal Save.
     def text_at(parent, child):
@@ -244,7 +301,8 @@ try:
     click(profiles,610);wait(lambda:not U.FindWindowW("Constellation.Profiles",None))
     click(window,401)
     saved=json.loads(config_path.read_text())["profiles"]
-    assert saved[-1]=={"name":"Recorded hold","binding":"F9","mode":"hold","hover":False,"restore_cursor":False},saved[-1]
+    assert saved[-1]["id"] > 0
+    assert {k:v for k,v in saved[-1].items() if k!="id"}=={"name":"Recorded hold","binding":"F9","mode":"hold","hover":False,"restore_cursor":False},saved[-1]
     mark("keyboard/mouse recording and per-profile options persist through Done and Save")
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause(.25)
     U.SetCursorPos(320,260);keys((0x78,False));wait(lambda:visible(overlay));center=point()
@@ -259,6 +317,13 @@ try:
     U.PostMessageW(overlay,0x2,0,0);resident.wait(timeout=5)
     mark("resident exits and releases its hooks")
     assert U.GetDlgItem(window,100) and U.GetDlgItem(window,501)
+    # Exercise the actual slider notification and unrestricted numeric override.
+    slider=U.GetDlgItem(window,511);assert slider
+    U.SendMessageW(slider,0x405,1,200)
+    U.SendMessageW(window,0x114,5,slider);pause()
+    assert text_at(window,501)=="200",text_at(window,501)
+    click(window,401);assert json.loads(config_path.read_text())["layout"]["radius"]==200
+    mark("spacing slider updates preview/settings and saves its selected value")
     new_radius=C.create_unicode_buffer("4000")
     U.SendMessageW(U.GetDlgItem(window,501),0x000C,0,C.addressof(new_radius))
     U.SendMessageW(window,0x111,401,0);pause(.2)
@@ -270,6 +335,52 @@ try:
     mark("configuration saves an overflowing layout without blocking")
     U.PostMessageW(window,0x10,0,0);editor.wait(timeout=5)
     mark("configuration closes normally")
+    # Copy the stopped app to a new location. Keep the original intact; all
+    # generated assets and alternate-storage sentinels belong to this test.
+    import os
+    relocated=OUT/"relocated";relocated.mkdir(exist_ok=True)
+    shutil.copy2(EXE,relocated/"constellation.exe")
+    (relocated/"data").mkdir(exist_ok=True);(relocated/"scripts").mkdir(exist_ok=True)
+    moved=json.loads(config_path.read_text());moved["layout"]["radius"]=144
+    (relocated/"data/config.json").write_text(json.dumps(moved),encoding="utf-8")
+    (relocated/"scripts/mark.py").write_text("from pathlib import Path\nPath('relocation.txt').write_text(str(Path.cwd()))\n")
+    foreign=OUT/"foreign-cwd";foreign.mkdir(exist_ok=True)
+    sentinels=OUT/"alternate-storage";sentinels.mkdir(exist_ok=True)
+    env=os.environ.copy()
+    for name in ["APPDATA","LOCALAPPDATA","TEMP","TMP","HOME","USERPROFILE","XDG_CONFIG_HOME","XDG_CACHE_HOME"]:
+        folder=sentinels/name;folder.mkdir(exist_ok=True);env[name]=str(folder)
+    baseline={str(p.relative_to(sentinels)) for p in sentinels.rglob("*")}
+    original_bytes=config_path.read_bytes()
+    subprocess.run([str(relocated/"constellation.exe"),"--check-config"],cwd=foreign,env=env,check=True,timeout=5)
+    resident=subprocess.Popen([str(relocated/"constellation.exe")],cwd=foreign,env=env);processes.append(resident)
+    wait(lambda:U.FindWindowW("Constellation.Native.Radial",None));overlay=U.FindWindowW("Constellation.Native.Radial",None)
+    relocation_marker=relocated/"relocation.txt";relocation_marker.unlink(missing_ok=True)
+    U.SetForegroundWindow(probe);U.SetFocus(probe);pause();invoke();wait(lambda:visible(overlay));center=point()
+    U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause();keys((0x20,False),(0x20,True))
+    wait(lambda:not visible(overlay));wait(lambda:relocation_marker.exists() and relocation_marker.read_text()==str(relocated))
+    assert Path(relocation_marker.read_text()).resolve()==relocated.resolve()
+    U.PostMessageW(overlay,0x2,0,0);resident.wait(timeout=5)
+    assert config_path.read_bytes()==original_bytes
+    assert {str(p.relative_to(sentinels)) for p in sentinels.rglob("*")}==baseline
+    assert not list(foreign.iterdir())
+    mark("relocated app launches its relative script from a foreign cwd without alternate-storage writes")
+    # Deny writes on one exact, test-owned NTFS directory and restore its ACL
+    # even if the assertion fails. No PC session or system policy is changed.
+    import csv,io
+    denied=OUT/"denied-folder";denied.mkdir(exist_ok=True)
+    shutil.copy2(EXE,denied/"constellation.exe")
+    sid=list(csv.reader(io.StringIO(subprocess.check_output(["whoami","/user","/fo","csv","/nh"],text=True))))[0][1]
+    acl=subprocess.run(["icacls",str(denied),"/deny",f"*{sid}:(WD,AD)"],capture_output=True,text=True)
+    if acl.returncode: raise AssertionError(acl.stdout+acl.stderr)
+    try:
+        failure=subprocess.run([str(denied/"constellation.exe"),"--check-config"],cwd=foreign,env=env,capture_output=True,text=True,timeout=5)
+        assert failure.returncode!=0 and "writable" in failure.stderr,failure
+        assert {str(p.relative_to(sentinels)) for p in sentinels.rglob("*")}==baseline
+        assert not (denied/"data/config.json").exists()
+    finally:
+        restored=subprocess.run(["icacls",str(denied),"/remove:d",f"*{sid}"],capture_output=True,text=True)
+        assert restored.returncode==0,restored.stdout+restored.stderr
+    mark("NTFS write denial reports failure with no alternate-storage fallback; test ACL restored")
     (OUT/"results.json").write_text(json.dumps({"checks":checks},indent=2))
 finally:
     for proc in processes:

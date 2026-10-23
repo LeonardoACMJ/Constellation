@@ -11,6 +11,8 @@ The app stays in the notification area (system tray); it does not show a permane
 - The cursor returns to its saved position when the radial closes, unless restoration is disabled for that profile.
 - Another shortcut profile is ignored while one is active. Pressing the active Click binding again closes the radial.
 - Shortcuts are suspended while a fullscreen app is foreground. The app does not intentionally overlay fullscreen windows or move their cursor.
+- Locking/disconnecting the session or suspending the PC cancels the current gesture. Availability resumes after unlock/reconnect/resume. Late releases cannot launch from the cancelled gesture.
+- If Windows refuses the radial focus, invocation cancels instead of accepting selection in the background. The tray icon is restored after Explorer recreates the taskbar.
 
 The sample tree includes Calculator, Notepad, the portable folder, and a GitHub URL. Customize it before relying on fixed gestures.
 
@@ -22,10 +24,11 @@ Right-click the tray icon and choose **Configure / Visualize…**, or double-cli
 constellation.exe --configure
 ```
 
+- The panel has scrollbars for smaller windows; the mouse wheel scrolls vertically. Its controls can be reached with Tab.
 - Select an item in the left list. Edit its name, kind, target, arguments, script runner, working directory, or parent, then **Apply item**.
 - Add Stars/Constellations, move them using the Parent field, reorder with Up/Down, or delete them. Converting a nonempty Constellation to a Star requires moving/removing its children first.
-- Tune Radius, Distance (a multiplier of radius), Spread (degrees), and Gap. The full fan-out preview uses the selected monitor's work-area outline. The overview zoom is labeled.
-- Overflow and narrow-target warnings are advisory. They do not block saving or force a fit. Fans keep subdividing; no paging is added.
+- Tune Radius, Distance (a multiplier of radius), Spread (degrees), and Gap using sliders or direct numeric entry. Slider ranges are conveniences; numeric values can exceed them. The full fan-out preview uses the selected monitor's work-area outline. The overview zoom is labeled.
+- Overflow, narrow-target, and full-preview overlap warnings are advisory. Intentional parent/descendant stacking is excluded from overlap warnings; mutually exclusive sibling branches can overlap in the full preview. They do not block saving or force a fit. Fans keep subdividing; no paging is added.
 - Set Chimes and Volume (0–1). The current lightweight bell uses random pentatonic notes and one voice, replacing the previous tail during fast navigation.
 - **Save** writes configuration. New settings apply to the next invocation; an already-open gesture is not rearranged.
 
@@ -54,7 +57,7 @@ Relative file paths resolve from this folder, not the directory from which the a
 
 ## Files and exit
 
-`data/config.json` and `data/config.backup.json` live beside the executable. Errors, when present, are recorded in the same `data` directory. No installer, AppData fallback, startup registration, or global PATH modification is used.
+`data/config.json` and `data/config.backup.json` live beside the executable. Profiles carry stable numeric IDs; older configurations without IDs are upgraded when loaded and persist those IDs on Save. Saving a repaired configuration preserves an existing valid backup instead of backing up malformed JSON. Errors, when present, are recorded in the same `data` directory. No installer, AppData fallback, startup registration, or global PATH modification is used.
 
 Stop the resident app using **Quit** in its tray menu. Closing the configuration window leaves the tray app running. Stop before moving the folder or replacing the executable; preserve `data` when updating.
 

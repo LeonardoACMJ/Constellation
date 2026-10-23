@@ -23,6 +23,32 @@ impl Drop for DispatchGuard {
 }
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+// Used only when the user explicitly invokes the launcher or opens an owned
+// configuration window. Never retain an attachment to another input queue.
+pub unsafe fn focus_window(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+    use windows_sys::Win32::{
+        System::Threading::{AttachThreadInput, GetCurrentThreadId},
+        UI::Input::KeyboardAndMouse::SetFocus,
+    };
+    unsafe {
+        SetForegroundWindow(hwnd);
+        if GetForegroundWindow() != hwnd {
+            let foreground_thread =
+                GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
+            let ours = GetCurrentThreadId();
+            if foreground_thread != 0
+                && foreground_thread != ours
+                && AttachThreadInput(ours, foreground_thread, 1) != 0
+            {
+                SetForegroundWindow(hwnd);
+                SetFocus(hwnd);
+                AttachThreadInput(ours, foreground_thread, 0);
+            }
+        }
+        GetForegroundWindow() == hwnd
+    }
+}
+
 pub fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
     s.as_ref().encode_wide().chain(Some(0)).collect()
 }

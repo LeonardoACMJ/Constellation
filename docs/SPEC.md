@@ -201,7 +201,7 @@ No installer, automatic system registration, or startup registration is part of 
 | PERF-02 | Process eligible hover navigation without intentional timers or debounce delays. A 0 ms configured delay means no added wait, not literally zero input-to-display latency. | Agreed |
 | PERF-03 | Treat roughly 50–200 MB of idle resident RAM as an acceptable initial planning range, with about 200 MB as a soft upper target. Lower usage is welcome; 50 MB is not a minimum. This is not a measured result or hard release gate. | Agreed rough target |
 | PERF-04 | Do not block initial implementation on further CPU/latency budgets or intensive memory tuning. Check basic idle use and interaction responsiveness; revisit resource targets if real measurements reveal a problem. | Agreed priority |
-| ARCH-01 | Prefer a Rust resident process using native Windows input and drawing; keep a browser runtime out of that process. | Proposed, pending a native resource measurement |
+| ARCH-01 | Prefer a Rust resident process using native Windows input and drawing; keep a browser runtime out of that process. | Proposed; implemented in the native preview, with a recorded idle sample |
 | ARCH-02 | Use native global hotkey registration for supported keyboard invocations; evaluate lightweight keyboard/mouse hooks where release tracking or suppression requires them. Keep hook callbacks short and perform layout/launch work outside them. | Proposed; BIND-03–04 require native verification |
 | ARCH-03 | Keep hierarchy, configuration model, radial geometry, hit testing, and interaction state portable. Isolate tray, overlay/window integration, global input, cursor/monitor control, and target execution behind platform adapters. Detect desktop capabilities rather than assuming Windows behavior is universally available. | Agreed portability direction; Linux capability fallbacks need review before its port |
 
@@ -216,11 +216,11 @@ The initial RAM reference is the user's approximate recollection of KROW's tray 
 | Opening latency | Binding event → first usable radial frame | Responsive interaction; no numerical gate |
 | Navigation latency | Eligible hover/click → usable child fan | PERF-02; no intentional delay or numerical gate |
 
-Browser prototype resource use is not evidence of native launcher performance. Native resource use and responsiveness have not been validated yet.
+Browser prototype resource use is not evidence of native launcher performance. A native idle sample and automated interaction checks are recorded in [verification](VERIFICATION.md); perceived responsiveness still requires hands-on review.
 
 ## 7. Acceptance checks
 
-These describe intended verification, not tests already performed on a native app. Checks involving proposals become release criteria only when those proposals are agreed.
+These describe acceptance criteria; the [verification record](VERIFICATION.md) states actual native coverage and remaining checks. Checks involving proposals become release criteria only when those proposals are agreed.
 
 | Check | Covers | Observable pass condition |
 |---|---|---|

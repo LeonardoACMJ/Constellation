@@ -14,7 +14,7 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
     System::LibraryLoader::GetModuleHandleW,
-    UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
+    UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
 
 const TREE: i32 = 100;
@@ -62,6 +62,8 @@ struct Editor {
     status: String,
     preview: RECT,
     dirty: bool,
+    scroll_x: i32,
+    scroll_y: i32,
 }
 static mut EDITOR: *mut Editor = null_mut();
 
@@ -94,7 +96,7 @@ unsafe fn control(
         0,
         wide(class).as_ptr(),
         wide(label).as_ptr(),
-        WS_CHILD | WS_VISIBLE | style,
+        WS_CHILD | WS_VISIBLE | style | if class == "STATIC" { 0 } else { WS_TABSTOP },
         x,
         y,
         w,
@@ -124,6 +126,13 @@ unsafe fn label(hwnd: HWND, text: &str, x: i32, y: i32, w: i32) {
 
 pub fn run(root: PathBuf) -> Result<(), String> {
     unsafe {
+        let controls = INITCOMMONCONTROLSEX {
+            dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_BAR_CLASSES,
+        };
+        if InitCommonControlsEx(&controls) == 0 {
+            return Err("Cannot initialize layout sliders".into());
+        }
         let c = storage::load_or_create(&root)?;
         let module = GetModuleHandleW(null());
         let class = wide("Constellation.Config");
@@ -140,7 +149,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             0,
             class.as_ptr(),
             wide("Constellation — Configure & Visualize").as_ptr(),
-            WS_OVERLAPPEDWINDOW,
+            WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_HSCROLL,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             1380,
@@ -175,12 +184,15 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             status: "Edit items, tune spacing or shortcut profiles, then Save.".into(),
             preview: RECT {
                 left: 700,
-                top: 75,
+                top: 85,
                 right: 1335,
                 bottom: 690,
             },
             dirty: false,
+            scroll_x: 0,
+            scroll_y: 0,
         }));
+        let startup_guard = super::DispatchGuard::enter().expect("editor startup dispatch");
         label(hwnd, "STARS & CONSTELLATIONS", 20, 18, 270);
         control(
             hwnd,
@@ -264,10 +276,29 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                 id,
                 x,
                 y + 20,
-                170,
+                80,
                 28,
                 WS_BORDER | ES_AUTOHSCROLL as u32 | WS_TABSTOP,
             );
+            control(
+                hwnd,
+                "msctls_trackbar32",
+                "",
+                id + 10,
+                x + 83,
+                y + 18,
+                92,
+                32,
+                WS_TABSTOP | TBS_NOTICKS,
+            );
+            let (min, max) = match id {
+                RADIUS => (32, 400),
+                DISTANCE => (0, 200),
+                SPREAD => (10, 360),
+                _ => (0, 24),
+            };
+            send(hwnd, id + 10, TBM_SETRANGEMIN, 0, min);
+            send(hwnd, id + 10, TBM_SETRANGEMAX, 1, max);
         }
         control(
             hwnd,
@@ -298,8 +329,8 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "COMBOBOX",
             "",
             MONITOR,
-            1010,
-            13,
+            700,
+            40,
             320,
             250,
             WS_BORDER | CBS_DROPDOWNLIST as u32 | WS_VSCROLL,
@@ -358,8 +389,11 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         e.refresh();
         e.settings_to_controls();
         e.dirty = false;
+        e.resize_view();
+        drop(startup_guard);
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
+        super::focus_window(hwnd);
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             let e = &*EDITOR;
@@ -394,6 +428,104 @@ unsafe extern "system" fn monitor_callback(
 }
 
 impl Editor {
+    unsafe fn scroll_to(&mut self, x: i32, y: i32) {
+        let (dx, dy) = (self.scroll_x - x, self.scroll_y - y);
+        self.scroll_x = x;
+        self.scroll_y = y;
+        SetScrollPos(self.hwnd, SB_HORZ, x, 1);
+        SetScrollPos(self.hwnd, SB_VERT, y, 1);
+        let mut child = GetWindow(self.hwnd, GW_CHILD);
+        while !child.is_null() {
+            let next = GetWindow(child, GW_HWNDNEXT);
+            let mut rect: RECT = zeroed();
+            GetWindowRect(child, &mut rect);
+            let mut point = POINT {
+                x: rect.left,
+                y: rect.top,
+            };
+            ScreenToClient(self.hwnd, &mut point);
+            SetWindowPos(
+                child,
+                null_mut(),
+                point.x + dx,
+                point.y + dy,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            child = next;
+        }
+        InvalidateRect(self.hwnd, null(), 1);
+    }
+    unsafe fn resize_view(&mut self) {
+        let mut client: RECT = zeroed();
+        GetClientRect(self.hwnd, &mut client);
+        let mut positions = [0; 2];
+        for (i, bar, page, max, pos) in [
+            (
+                0,
+                SB_HORZ,
+                client.right,
+                client.right.max(1050),
+                self.scroll_x,
+            ),
+            (
+                1,
+                SB_VERT,
+                client.bottom,
+                client.bottom.max(835),
+                self.scroll_y,
+            ),
+        ] {
+            let info = SCROLLINFO {
+                cbSize: size_of::<SCROLLINFO>() as u32,
+                fMask: SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL,
+                nMin: 0,
+                nMax: max - 1,
+                nPage: page.max(1) as u32,
+                nPos: pos,
+                nTrackPos: 0,
+            };
+            positions[i] = SetScrollInfo(self.hwnd, bar, &info, 1);
+        }
+        self.scroll_to(positions[0], positions[1]);
+        self.preview.right = client.right.max(1050) - 30;
+        MoveWindow(
+            GetDlgItem(self.hwnd, MONITOR),
+            self.preview.left - self.scroll_x,
+            40 - self.scroll_y,
+            self.preview.right - self.preview.left,
+            250,
+            1,
+        );
+        InvalidateRect(self.hwnd, null(), 1);
+    }
+    unsafe fn scroll(&mut self, vertical: bool, request: i32) {
+        let bar = if vertical { SB_VERT } else { SB_HORZ };
+        let mut info: SCROLLINFO = zeroed();
+        info.cbSize = size_of::<SCROLLINFO>() as u32;
+        info.fMask = SIF_ALL;
+        GetScrollInfo(self.hwnd, bar, &mut info);
+        let proposed = match request {
+            SB_LINELEFT => info.nPos - 24,
+            SB_LINERIGHT => info.nPos + 24,
+            SB_PAGELEFT => info.nPos - info.nPage as i32,
+            SB_PAGERIGHT => info.nPos + info.nPage as i32,
+            SB_THUMBPOSITION | SB_THUMBTRACK => info.nTrackPos,
+            SB_LEFT => 0,
+            SB_RIGHT => info.nMax,
+            _ => return,
+        };
+        info.fMask = SIF_POS;
+        info.nPos = proposed;
+        let pos = SetScrollInfo(self.hwnd, bar, &info, 1);
+        if vertical {
+            self.scroll_to(self.scroll_x, pos);
+        } else {
+            self.scroll_to(pos, self.scroll_y);
+        }
+    }
+
     unsafe fn refresh(&mut self) {
         send(self.hwnd, TREE, LB_RESETCONTENT, 0, 0);
         self.rows.clear();
@@ -510,7 +642,24 @@ impl Editor {
             .unwrap_or(0);
         send(self.hwnd, PARENT, CB_SETCURSEL, idx, 0);
     }
+    unsafe fn sync_sliders(&self) {
+        for (id, value) in [
+            (RADIUS, self.c.layout.radius),
+            (DISTANCE, self.c.layout.distance * 100.),
+            (SPREAD, self.c.layout.spread),
+            (GAP, self.c.layout.gap),
+        ] {
+            send(
+                self.hwnd,
+                id + 10,
+                TBM_SETPOS,
+                1,
+                value.round().clamp(0., i32::MAX as f64) as isize,
+            );
+        }
+    }
     unsafe fn settings_to_controls(&self) {
+        self.sync_sliders();
         let l = self.c.layout;
         for (id, value) in [
             (RADIUS, l.radius),
@@ -794,8 +943,9 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         }
         WM_COMMAND if w & 0xffff == JSON_SAVE as usize => {
             let result = (|| -> Result<(), String> {
-                let c: Config =
+                let mut c: Config =
                     serde_json::from_str(&get(hwnd, JSON_TEXT)).map_err(|x| x.to_string())?;
+                c.assign_profile_ids()?;
                 storage::save(&e.root, &c)?;
                 notify_resident();
                 e.c = c;
@@ -830,6 +980,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if matches!(msg, WM_SIZE | WM_HSCROLL | WM_VSCROLL) {
+            PostMessageW(hwnd, msg, w, l);
+        }
         if msg == WM_COMMAND && (w >> 16) as u32 == BN_CLICKED && (w & 0xffff) >= APPLY as usize {
             PostMessageW(hwnd, msg, w, l);
         }
@@ -837,6 +990,35 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     };
     let e = &mut *EDITOR;
     match msg {
+        WM_HSCROLL | WM_VSCROLL if l == 0 => {
+            e.scroll(msg == WM_VSCROLL, (w & 0xffff) as i32);
+            0
+        }
+        WM_MOUSEWHEEL => {
+            let request = if ((w >> 16) as u16 as i16) > 0 {
+                SB_LINEUP
+            } else {
+                SB_LINEDOWN
+            };
+            for _ in 0..3 {
+                e.scroll(true, request);
+            }
+            0
+        }
+        WM_HSCROLL if l != 0 => {
+            let slider = GetDlgCtrlID(l as HWND);
+            let id = slider - 10;
+            if matches!(id, RADIUS | DISTANCE | SPREAD | GAP) {
+                let value = send(hwnd, slider, WM_USER, 0, 0) as f64
+                    / if id == DISTANCE { 100. } else { 1. };
+                set(hwnd, id, &value.to_string());
+                if e.controls_to_settings().is_ok() {
+                    e.dirty = true;
+                    InvalidateRect(hwnd, null(), 1);
+                }
+            }
+            0
+        }
         WM_COMMAND => {
             let id = (w & 0xffff) as i32;
             let notify = (w >> 16) as u32;
@@ -856,7 +1038,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if matches!(id, RADIUS | DISTANCE | SPREAD | GAP | VOLUME) && notify == EN_CHANGE {
                 if e.controls_to_settings().is_ok() {
                     e.dirty = true;
-                    InvalidateRect(hwnd, &e.preview, 1);
+                    e.sync_sliders();
+                    InvalidateRect(hwnd, null(), 1);
                 }
                 return 0;
             }
@@ -889,7 +1072,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     e.reorder(true);
                     Ok(())
                 }
-                SAVE => (|| {
+                SAVE | 1 => (|| {
                     e.apply()?;
                     e.controls_to_settings()?;
                     storage::save(&e.root, &e.c)?;
@@ -932,14 +1115,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_SIZE => {
-            let width = (l as u32 & 0xffff) as i32;
-            e.preview.right = (width - 30).max(e.preview.left + 100);
-            InvalidateRect(hwnd, null(), 1);
+            e.resize_view();
             0
         }
         WM_PAINT => {
             let mut ps = zeroed();
             let dc = BeginPaint(hwnd, &mut ps);
+            SetViewportOrgEx(dc, -e.scroll_x, -e.scroll_y, null_mut());
             render::fill(dc, &e.preview, render::rgb(15, 22, 36));
             let all = geometry::full(&e.c);
             let (workw, workh) = if let Some(d) = e.displays.get(e.monitor) {
@@ -1023,7 +1205,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     e.status
                 ),
                 15,
-                cr.bottom - 32,
+                cr.bottom.max(835) - 32,
                 cr.right - 30,
                 render::rgb(85, 90, 105),
                 12,
@@ -1140,6 +1322,7 @@ impl Profiles {
             return Err("That shortcut is already used by another profile.".into());
         }
         self.draft[i] = Profile {
+            id: self.draft[i].id,
             name,
             binding,
             mode: if send(self.hwnd, P_MODE, CB_GETCURSEL, 0, 0) == 1 {
@@ -1184,7 +1367,7 @@ impl Profiles {
 }
 unsafe fn profiles(e: &mut Editor) {
     if let Some(p) = &e.profiles {
-        SetForegroundWindow(p.hwnd);
+        super::focus_window(p.hwnd);
         return;
     }
     // Preserve any current item and spacing edits before opening the modal draft.
@@ -1368,7 +1551,7 @@ unsafe fn profiles(e: &mut Editor) {
         EnableWindow(e.json, 0);
     }
     ShowWindow(hwnd, SW_SHOW);
-    SetForegroundWindow(hwnd);
+    super::focus_window(hwnd);
 }
 unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     if EDITOR.is_null() {
@@ -1416,7 +1599,7 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
             WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
                 let button = if msg == WM_MBUTTONDOWN {
                     3
-                } else if w >> 16 == 1 {
+                } else if (w >> 16) & 0xffff == 1 {
                     4
                 } else {
                     5
@@ -1481,7 +1664,16 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
                         .ok_or(
                             "No unused function key available. Edit an existing profile first.",
                         )?;
+                    let id = p
+                        .draft
+                        .iter()
+                        .map(|p| p.id)
+                        .max()
+                        .unwrap_or(0)
+                        .checked_add(1)
+                        .ok_or("Profile ID space exhausted")?;
                     p.draft.push(Profile {
+                        id,
                         name: "New shortcut".into(),
                         binding,
                         mode: Mode::Click,

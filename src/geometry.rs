@@ -185,5 +185,104 @@ pub fn warnings(config: &Config, width: f64, height: f64) -> Vec<String> {
     if narrow {
         result.push("Some sectors are narrow or hidden by gaps; saving is still allowed.".into())
     }
+    if preview_overlap(config, &sectors) {
+        result
+            .push("Some target areas overlap in the full preview; saving is still allowed.".into());
+    }
     result
+}
+
+// Normal parent/descendant stacking is intentional. Report intersections between
+// other target areas in the full preview, including mutually exclusive branches.
+fn preview_overlap(config: &Config, sectors: &[Sector]) -> bool {
+    use std::collections::HashMap;
+    fn parents(node: &Node, out: &mut HashMap<u64, u64>) {
+        if let Some(children) = &node.children {
+            for c in children {
+                out.insert(c.id, node.id);
+                parents(c, out);
+            }
+        }
+    }
+    let mut links = HashMap::new();
+    parents(&config.root, &mut links);
+    let ancestor = |a: u64, mut b: u64| {
+        while let Some(parent) = links.get(&b) {
+            if *parent == a {
+                return true;
+            }
+            b = *parent;
+        }
+        false
+    };
+    let shapes: Vec<_> = sectors
+        .iter()
+        .map(|s| {
+            let p = s.polygon();
+            let bounds = p.iter().fold(
+                (
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::NEG_INFINITY,
+                ),
+                |(x, y, r, b), p| (x.min(p.x), y.min(p.y), r.max(p.x), b.max(p.y)),
+            );
+            (p, bounds)
+        })
+        .collect();
+    for (i, a) in sectors.iter().enumerate().filter(|(_, s)| s.sweep > 0.) {
+        for (j, b) in sectors
+            .iter()
+            .enumerate()
+            .take(i)
+            .filter(|(_, s)| s.sweep > 0.)
+        {
+            if links.get(&a.id) == links.get(&b.id) || ancestor(a.id, b.id) || ancestor(b.id, a.id)
+            {
+                continue;
+            }
+            let (pa, ra) = &shapes[i];
+            let (pb, rb) = &shapes[j];
+            if ra.0 >= rb.2 || rb.0 >= ra.2 || ra.1 >= rb.3 || rb.1 >= ra.3 {
+                continue;
+            }
+            if a.contains(b.dot) || b.contains(a.dot) || polygons_intersect(pa, pb) {
+                return true;
+            }
+        }
+    }
+    false
+}
+fn polygons_intersect(a: &[Point], b: &[Point]) -> bool {
+    fn cross(a: Point, b: Point, c: Point) -> f64 {
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    }
+    let edges = |p: &[Point]| -> Vec<(Point, Point)> {
+        p.iter()
+            .copied()
+            .zip(p.iter().copied().cycle().skip(1))
+            .take(p.len())
+            .collect()
+    };
+    let ae = edges(a);
+    let be = edges(b);
+    if ae.iter().any(|(a, b)| {
+        be.iter().any(|(c, d)| {
+            cross(*a, *b, *c) * cross(*a, *b, *d) < -1e-10
+                && cross(*c, *d, *a) * cross(*c, *d, *b) < -1e-10
+        })
+    }) {
+        return true;
+    }
+    fn inside(p: Point, edges: &[(Point, Point)]) -> bool {
+        let mut inside = false;
+        for (a, b) in edges {
+            if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+    a.first().is_some_and(|p| inside(*p, &be)) || b.first().is_some_and(|p| inside(*p, &ae))
 }
