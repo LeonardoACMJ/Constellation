@@ -29,17 +29,14 @@ constellation.exe --configure
 - Set Chimes and Volume (0–1). The current lightweight bell uses random pentatonic notes and one voice, replacing the previous tail during fast navigation.
 - **Save** writes configuration. New settings apply to the next invocation; an already-open gesture is not rearranged.
 
-**Profiles / Advanced JSON…** edits the complete configuration, including shortcut profiles. Example profile:
+**Shortcut profiles…** opens the graphical profile editor:
 
-```json
-{
-  "name": "Mouse hold",
-  "binding": "Mouse4",
-  "mode": "hold",
-  "hover": true,
-  "restore_cursor": true
-}
-```
+- Add or remove profiles. Each profile has a name, shortcut, Click/Hold activation, hover-to-open setting, and cursor-restoration setting.
+- Type a binding or choose **Record shortcut** and press it. For a middle/side mouse button, click inside the recorder window. Escape cancels recording. The resident launcher suspends shortcuts while this window has focus.
+- **Apply profile** keeps the current fields in the dialog draft; apply before selecting another profile. Duplicate bindings produce an inline message.
+- **Done** transfers the draft to the main editor; then **Save** writes it and updates the resident launcher. **Cancel** or closing the profile window discards that dialog's changes.
+
+**Advanced JSON…** remains available for editing the complete configuration directly.
 
 Bindings support A–Z, 0–9, Space, F1–F24 except Windows-reserved F12, and Ctrl/Shift/Alt combinations. Mouse3 is middle; Mouse4/5 are side buttons. Left/right click are reserved for menu interaction. Modifier+mouse combinations are not supported in this preview. A mouse's software can map a button to a keyboard combination instead.
 
@@ -63,4 +60,4 @@ Stop the resident app using **Quit** in its tray menu. Closing the configuration
 
 ## Preview limits
 
-This is the first native build. The configuration UI is functional and deliberately plain; profile editing currently uses JSON. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.
+This is the first native build. The configuration UI is functional and deliberately plain. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.

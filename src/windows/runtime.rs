@@ -245,19 +245,22 @@ unsafe fn cleanup() {
     CloseHandle(a.instance);
 }
 
-/// Desktop shell windows cover the screen but are not fullscreen applications.
-unsafe fn fullscreen(overlay: HWND) -> bool {
+/// Yield input to fullscreen applications and the shortcut-profile editor.
+unsafe fn foreground_blocks_launcher(overlay: HWND) -> bool {
     let hwnd = GetForegroundWindow();
     if hwnd.is_null() || hwnd == overlay || IsIconic(hwnd) != 0 {
-        return false;
-    }
-    if IsZoomed(hwnd) != 0 && (GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_CAPTION) == WS_CAPTION
-    {
         return false;
     }
     let mut class = [0u16; 128];
     let n = GetClassNameW(hwnd, class.as_mut_ptr(), 128);
     let class = String::from_utf16_lossy(&class[..n as usize]);
+    if class == "Constellation.Profiles" {
+        return true;
+    }
+    if IsZoomed(hwnd) != 0 && (GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_CAPTION) == WS_CAPTION
+    {
+        return false;
+    }
     if matches!(
         class.as_str(),
         "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
@@ -283,7 +286,7 @@ impl Runtime {
             }
         }
         self.registered = vec![false; self.bindings.len()];
-        if self.paused || fullscreen(self.hwnd) {
+        if self.paused || foreground_blocks_launcher(self.hwnd) {
             return;
         }
         let mut failures = vec![];
@@ -342,7 +345,7 @@ impl Runtime {
     }
     unsafe fn open(&mut self, mut i: usize) {
         self.pending = None;
-        if self.paused || fullscreen(self.hwnd) {
+        if self.paused || foreground_blocks_launcher(self.hwnd) {
             self.refresh_registration();
             return;
         }
@@ -468,7 +471,7 @@ impl Runtime {
         match a {
             Action::Launch(id) => {
                 let t = self.config.find(id).and_then(|n| n.target.clone());
-                self.dismiss(!fullscreen(self.hwnd));
+                self.dismiss(!foreground_blocks_launcher(self.hwnd));
                 if let Some(t) = t {
                     if let Err(e) = target::launch(&self.root, &t) {
                         self.notice(&e);
@@ -562,7 +565,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
         })
         .map(|(i, _)| i);
     if let Some(i) = profile {
-        if a.paused || fullscreen(a.hwnd) {
+        if a.paused || foreground_blocks_launcher(a.hwnd) {
             a.refresh_registration();
             if active.is_some() {
                 PostMessageW(a.hwnd, FOREGROUND, 0, 0);
@@ -633,7 +636,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
             CallNextHookEx(null_mut(), code, w, l)
         };
     }
-    if a.paused || fullscreen(a.hwnd) {
+    if a.paused || foreground_blocks_launcher(a.hwnd) {
         if active.is_some() {
             PostMessageW(a.hwnd, FOREGROUND, 0, 0);
         }
@@ -748,7 +751,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 let result = a.engine.release(&a.config);
                 if a.engine.profile.is_none() {
                     ShowWindow(hwnd, SW_HIDE);
-                    if restore && !fullscreen(hwnd) {
+                    if restore && !foreground_blocks_launcher(hwnd) {
                         SetCursorPos(a.saved.x, a.saved.y);
                     }
                     if a.reload_requested {
@@ -810,7 +813,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         }
         FOREGROUND => {
             a.foreground_pending = false;
-            let full = fullscreen(hwnd);
+            let full = foreground_blocks_launcher(hwnd);
             if a.engine.profile.is_some() && (full || GetForegroundWindow() != hwnd) {
                 a.dismiss(!full);
             }
@@ -826,12 +829,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         WM_DISPLAYCHANGE => {
-            a.dismiss(!fullscreen(hwnd));
+            a.dismiss(!foreground_blocks_launcher(hwnd));
             a.refresh_registration();
             0
         }
         WM_DPICHANGED => {
-            a.dismiss(!fullscreen(hwnd));
+            a.dismiss(!foreground_blocks_launcher(hwnd));
             0
         }
         TRAY => {

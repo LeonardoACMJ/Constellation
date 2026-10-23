@@ -1,7 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use super::{error, render, wide};
 use crate::{
-    config::{Config, Node, Target},
+    config::{Binding, Config, Mode, Node, Profile, Target},
     geometry::{self, Point},
     storage,
 };
@@ -14,7 +14,7 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
     System::LibraryLoader::GetModuleHandleW,
-    UI::{HiDpi::*, WindowsAndMessaging::*},
+    UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
 
 const TREE: i32 = 100;
@@ -34,6 +34,7 @@ const DOWN: i32 = 306;
 const SAVE: i32 = 401;
 const RELOAD: i32 = 402;
 const ADVANCED: i32 = 403;
+const PROFILES: i32 = 404;
 const JSON_TEXT: i32 = 410;
 const JSON_SAVE: i32 = 411;
 const RADIUS: i32 = 501;
@@ -57,6 +58,7 @@ struct Editor {
     displays: Vec<Display>,
     monitor: usize,
     json: HWND,
+    profiles: Option<Profiles>,
     status: String,
     preview: RECT,
     dirty: bool,
@@ -169,8 +171,8 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             displays,
             monitor: 0,
             json: null_mut(),
-            status: "Edit items, tune spacing, then Save. Use Advanced JSON for shortcut profiles."
-                .into(),
+            profiles: None,
+            status: "Edit items, tune spacing or shortcut profiles, then Save.".into(),
             preview: RECT {
                 left: 700,
                 top: 75,
@@ -334,13 +336,24 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         control(
             hwnd,
             "BUTTON",
-            "Profiles / Advanced JSON…",
-            ADVANCED,
+            "Shortcut profiles…",
+            PROFILES,
             240,
             745,
             250,
             35,
             0,
+        );
+        control(
+            hwnd,
+            "BUTTON",
+            "Advanced JSON…",
+            ADVANCED,
+            500,
+            745,
+            170,
+            35,
+            WS_TABSTOP,
         );
         e.refresh();
         e.settings_to_controls();
@@ -349,7 +362,10 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         UpdateWindow(hwnd);
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            if !IsDialogMessageW(hwnd, &msg).is_positive() {
+            let e = &*EDITOR;
+            let dialog = e.profiles.as_ref().map_or(hwnd, |p| p.hwnd);
+            let recording = e.profiles.as_ref().is_some_and(|p| p.recording);
+            if recording || IsDialogMessageW(dialog, &msg) == 0 {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -698,7 +714,7 @@ unsafe fn advanced(e: &mut Editor) {
     let hwnd = CreateWindowExW(
         0,
         class.as_ptr(),
-        wide("Constellation — Profiles & Advanced JSON").as_ptr(),
+        wide("Constellation — Advanced JSON").as_ptr(),
         WS_OVERLAPPEDWINDOW,
         80,
         80,
@@ -712,7 +728,7 @@ unsafe fn advanced(e: &mut Editor) {
     e.json = hwnd;
     label(
         hwnd,
-        "Edit profiles, bindings and advanced values. Save validates and writes only inside the portable folder.",
+        "Edit the complete configuration. Save validates and writes only inside the portable folder.",
         15,
         12,
         800,
@@ -893,6 +909,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     }
                     Err(s) => Err(s),
                 },
+                PROFILES => {
+                    profiles(e);
+                    Ok(())
+                }
                 ADVANCED => {
                     advanced(e);
                     Ok(())
@@ -1027,6 +1047,499 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         WM_DESTROY => {
             PostQuitMessage(0);
+            0
+        }
+        _ => DefWindowProcW(hwnd, msg, w, l),
+    }
+}
+// The owned profile dialog edits a private draft; Done transfers it to the main
+// editor and its normal Save persists it. Cancel leaves the main draft untouched.
+const P_LIST: i32 = 601;
+const P_NAME: i32 = 602;
+const P_BINDING: i32 = 603;
+const P_MODE: i32 = 604;
+const P_HOVER: i32 = 605;
+const P_RESTORE: i32 = 606;
+const P_ADD: i32 = 607;
+const P_REMOVE: i32 = 608;
+const P_APPLY: i32 = 609;
+const P_DONE: i32 = 610;
+const P_RECORD: i32 = 611;
+const P_STATUS: i32 = 612;
+const P_CANCEL: i32 = 613;
+struct Profiles {
+    hwnd: HWND,
+    draft: Vec<Profile>,
+    selected: Option<usize>,
+    recording: bool,
+}
+impl Profiles {
+    unsafe fn refresh(&mut self) {
+        send(self.hwnd, P_LIST, LB_RESETCONTENT, 0, 0);
+        for p in &self.draft {
+            send(
+                self.hwnd,
+                P_LIST,
+                LB_ADDSTRING,
+                0,
+                wide(format!("{} · {}", p.name, p.binding)).as_ptr() as isize,
+            );
+        }
+        if let Some(i) = self.selected {
+            send(self.hwnd, P_LIST, LB_SETCURSEL, i, 0);
+        }
+        self.fields();
+    }
+    unsafe fn fields(&self) {
+        let p = self.selected.and_then(|i| self.draft.get(i));
+        for id in [
+            P_NAME, P_BINDING, P_MODE, P_HOVER, P_RESTORE, P_REMOVE, P_APPLY, P_RECORD,
+        ] {
+            EnableWindow(GetDlgItem(self.hwnd, id), p.is_some() as i32);
+        }
+        set(self.hwnd, P_NAME, p.map_or("", |p| p.name.as_str()));
+        set(self.hwnd, P_BINDING, p.map_or("", |p| p.binding.as_str()));
+        send(
+            self.hwnd,
+            P_MODE,
+            CB_SETCURSEL,
+            usize::from(p.is_some_and(|p| p.mode == Mode::Hold)),
+            0,
+        );
+        send(
+            self.hwnd,
+            P_HOVER,
+            BM_SETCHECK,
+            usize::from(p.is_some_and(|p| p.hover)),
+            0,
+        );
+        send(
+            self.hwnd,
+            P_RESTORE,
+            BM_SETCHECK,
+            usize::from(p.is_some_and(|p| p.restore_cursor)),
+            0,
+        );
+    }
+    unsafe fn apply(&mut self) -> Result<(), String> {
+        let Some(i) = self.selected else {
+            return Ok(());
+        };
+        let name = get(self.hwnd, P_NAME).trim().to_string();
+        if name.is_empty() {
+            return Err("Give this shortcut profile a name.".into());
+        }
+        let binding = get(self.hwnd, P_BINDING).trim().to_string();
+        let parsed = Binding::parse(&binding)?;
+        if self
+            .draft
+            .iter()
+            .enumerate()
+            .any(|(j, p)| j != i && Binding::parse(&p.binding).ok().as_ref() == Some(&parsed))
+        {
+            return Err("That shortcut is already used by another profile.".into());
+        }
+        self.draft[i] = Profile {
+            name,
+            binding,
+            mode: if send(self.hwnd, P_MODE, CB_GETCURSEL, 0, 0) == 1 {
+                Mode::Hold
+            } else {
+                Mode::Click
+            },
+            hover: send(self.hwnd, P_HOVER, BM_GETCHECK, 0, 0) == 1,
+            restore_cursor: send(self.hwnd, P_RESTORE, BM_GETCHECK, 0, 0) == 1,
+        };
+        self.refresh();
+        Ok(())
+    }
+    unsafe fn stop_recording(&mut self) {
+        self.recording = false;
+        ReleaseCapture();
+        set(self.hwnd, P_RECORD, "Record shortcut");
+    }
+    unsafe fn capture(&mut self, trigger: &str, modifiers: bool) {
+        let mut binding = String::new();
+        if modifiers {
+            for (vk, label) in [(0x11, "Ctrl+"), (0x10, "Shift+"), (0x12, "Alt+")] {
+                if GetKeyState(vk) < 0 {
+                    binding.push_str(label);
+                }
+            }
+        }
+        binding.push_str(trigger);
+        match Binding::parse(&binding) {
+            Ok(_) => {
+                set(self.hwnd, P_BINDING, &binding);
+                self.stop_recording();
+                set(
+                    self.hwnd,
+                    P_STATUS,
+                    "Recorded. Apply profile or Done to keep it.",
+                );
+            }
+            Err(e) => set(self.hwnd, P_STATUS, &e),
+        }
+    }
+}
+unsafe fn profiles(e: &mut Editor) {
+    if let Some(p) = &e.profiles {
+        SetForegroundWindow(p.hwnd);
+        return;
+    }
+    // Preserve any current item and spacing edits before opening the modal draft.
+    if let Err(err) = e.apply().and_then(|_| e.controls_to_settings()) {
+        error(&err);
+        return;
+    }
+    let class = wide("Constellation.Profiles");
+    let module = GetModuleHandleW(null());
+    let wc = WNDCLASSW {
+        lpfnWndProc: Some(profiles_proc),
+        hInstance: module,
+        lpszClassName: class.as_ptr(),
+        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+        hbrBackground: GetSysColorBrush(COLOR_BTNFACE),
+        ..zeroed()
+    };
+    RegisterClassW(&wc);
+    // Reserve the intended client area, including the current DPI's title bar
+    // and frame rather than clipping the bottom row of controls.
+    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+    let mut bounds = RECT {
+        left: 0,
+        top: 0,
+        right: 810,
+        bottom: 515,
+    };
+    AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
+    let hwnd = CreateWindowExW(
+        0,
+        class.as_ptr(),
+        wide("Constellation — Shortcut profiles").as_ptr(),
+        style,
+        100,
+        100,
+        bounds.right - bounds.left,
+        bounds.bottom - bounds.top,
+        e.hwnd,
+        null_mut(),
+        module,
+        null(),
+    );
+    if hwnd.is_null() {
+        error("Cannot create shortcut profile window");
+        return;
+    }
+    e.profiles = Some(Profiles {
+        hwnd,
+        draft: e.c.profiles.clone(),
+        selected: if e.c.profiles.is_empty() {
+            None
+        } else {
+            Some(0)
+        },
+        recording: false,
+    });
+    label(hwnd, "SHORTCUT PROFILES", 20, 18, 260);
+    control(
+        hwnd,
+        "LISTBOX",
+        "",
+        P_LIST,
+        20,
+        45,
+        260,
+        330,
+        WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY as u32,
+    );
+    control(hwnd, "BUTTON", "Add", P_ADD, 20, 390, 120, 30, WS_TABSTOP);
+    control(
+        hwnd, "BUTTON", "Remove", P_REMOVE, 150, 390, 130, 30, WS_TABSTOP,
+    );
+    for (id, title, y) in [(P_NAME, "Name", 25), (P_BINDING, "Shortcut", 90)] {
+        label(hwnd, title, 310, y, 450);
+        control(
+            hwnd,
+            "EDIT",
+            "",
+            id,
+            310,
+            y + 23,
+            460,
+            28,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+        );
+    }
+    control(
+        hwnd,
+        "BUTTON",
+        "Record shortcut",
+        P_RECORD,
+        310,
+        150,
+        180,
+        30,
+        WS_TABSTOP,
+    );
+    label(
+        hwnd,
+        "Or type Ctrl+Q, F8, Mouse3, Mouse4, Mouse5…",
+        310,
+        185,
+        470,
+    );
+    label(hwnd, "Activation", 310, 222, 130);
+    control(
+        hwnd,
+        "COMBOBOX",
+        "",
+        P_MODE,
+        445,
+        216,
+        325,
+        180,
+        WS_TABSTOP | CBS_DROPDOWNLIST as u32,
+    );
+    for name in ["Click — press to open", "Hold — release to select"] {
+        send(hwnd, P_MODE, CB_ADDSTRING, 0, wide(name).as_ptr() as isize);
+    }
+    control(
+        hwnd,
+        "BUTTON",
+        "Open Constellations on hover",
+        P_HOVER,
+        310,
+        265,
+        460,
+        28,
+        WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+    );
+    control(
+        hwnd,
+        "BUTTON",
+        "Restore cursor after closing",
+        P_RESTORE,
+        310,
+        305,
+        460,
+        28,
+        WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+    );
+    control(
+        hwnd,
+        "BUTTON",
+        "Apply profile",
+        P_APPLY,
+        310,
+        350,
+        170,
+        32,
+        WS_TABSTOP,
+    );
+    control(
+        hwnd,
+        "STATIC",
+        "Apply before switching profiles. Done keeps changes in the main editor; Save writes them to disk.",
+        P_STATUS,
+        310,
+        395,
+        470,
+        48,
+        0,
+    );
+    control(
+        hwnd,
+        "BUTTON",
+        "Done",
+        P_DONE,
+        570,
+        460,
+        95,
+        32,
+        WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+    );
+    control(
+        hwnd, "BUTTON", "Cancel", P_CANCEL, 675, 460, 95, 32, WS_TABSTOP,
+    );
+    e.profiles.as_mut().unwrap().refresh();
+    EnableWindow(e.hwnd, 0);
+    if !e.json.is_null() {
+        EnableWindow(e.json, 0);
+    }
+    ShowWindow(hwnd, SW_SHOW);
+    SetForegroundWindow(hwnd);
+}
+unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if EDITOR.is_null() {
+        return DefWindowProcW(hwnd, msg, w, l);
+    }
+    let Some(_guard) = super::DispatchGuard::enter() else {
+        return DefWindowProcW(hwnd, msg, w, l);
+    };
+    let e = &mut *EDITOR;
+    let Some(p) = e.profiles.as_mut() else {
+        return DefWindowProcW(hwnd, msg, w, l);
+    };
+    if p.recording {
+        match msg {
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                let vk = w as u16;
+                if vk == 0x1b {
+                    p.stop_recording();
+                    set(hwnd, P_STATUS, "Recording cancelled.");
+                } else if vk == 0x5b || vk == 0x5c || GetKeyState(0x5b) < 0 || GetKeyState(0x5c) < 0
+                {
+                    set(
+                        hwnd,
+                        P_STATUS,
+                        "Windows-key shortcuts are not supported in this preview.",
+                    );
+                } else if !matches!(vk,0x10..=0x12 | 0xa0..=0xa5) {
+                    let trigger = match vk {
+                        0x30..=0x39 | 0x41..=0x5a => char::from_u32(vk as u32).unwrap().to_string(),
+                        0x70..=0x87 => format!("F{}", vk - 0x70 + 1),
+                        0x20 => "Space".into(),
+                        _ => {
+                            set(
+                                hwnd,
+                                P_STATUS,
+                                "Use a letter, number, Space, function key, or middle/side mouse button.",
+                            );
+                            return 0;
+                        }
+                    };
+                    p.capture(&trigger, true);
+                }
+                return 0;
+            }
+            WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
+                let button = if msg == WM_MBUTTONDOWN {
+                    3
+                } else if w >> 16 == 1 {
+                    4
+                } else {
+                    5
+                };
+                if GetKeyState(0x11) < 0 || GetKeyState(0x10) < 0 || GetKeyState(0x12) < 0 {
+                    set(
+                        hwnd,
+                        P_STATUS,
+                        "Mouse shortcuts currently require an unmodified button.",
+                    );
+                } else {
+                    p.capture(&format!("Mouse{button}"), false);
+                }
+                return 1;
+            }
+            WM_KILLFOCUS | WM_CANCELMODE => {
+                p.stop_recording();
+                set(
+                    hwnd,
+                    P_STATUS,
+                    "Recording cancelled. Focus left the recorder.",
+                );
+            }
+            _ => {}
+        }
+    }
+    match msg {
+        WM_COMMAND => {
+            let id = (w & 0xffff) as i32;
+            if id == P_LIST && w >> 16 == LBN_SELCHANGE as usize {
+                p.selected = usize::try_from(send(hwnd, P_LIST, LB_GETCURSEL, 0, 0)).ok();
+                p.fields();
+                return 0;
+            }
+            if w >> 16 != BN_CLICKED as usize {
+                return 0;
+            }
+            let result = match id {
+                P_RECORD => {
+                    p.recording = true;
+                    set(hwnd, P_RECORD, "Listening… Esc cancels");
+                    set(
+                        hwnd,
+                        P_STATUS,
+                        "Press your shortcut. For mouse buttons, click inside this window.",
+                    );
+                    SetFocus(hwnd);
+                    SetCapture(hwnd);
+                    Ok(())
+                }
+                P_APPLY => p.apply(),
+                P_ADD => (|| {
+                    p.apply()?;
+                    let binding = (1..=24)
+                        .filter(|n| *n != 12)
+                        .map(|n| format!("F{n}"))
+                        .find(|b| {
+                            p.draft
+                                .iter()
+                                .all(|p| Binding::parse(&p.binding).ok() != Binding::parse(b).ok())
+                        })
+                        .ok_or(
+                            "No unused function key available. Edit an existing profile first.",
+                        )?;
+                    p.draft.push(Profile {
+                        name: "New shortcut".into(),
+                        binding,
+                        mode: Mode::Click,
+                        hover: true,
+                        restore_cursor: true,
+                    });
+                    p.selected = Some(p.draft.len() - 1);
+                    p.refresh();
+                    Ok(())
+                })(),
+                P_REMOVE => {
+                    if let Some(i) = p.selected {
+                        p.draft.remove(i);
+                    }
+                    p.selected = if p.draft.is_empty() { None } else { Some(0) };
+                    p.refresh();
+                    Ok(())
+                }
+                P_DONE => {
+                    (|| {
+                        p.apply()?;
+                        let mut candidate = e.c.clone();
+                        candidate.profiles = p.draft.clone();
+                        candidate.validate()?;
+                        e.c = candidate;
+                        e.dirty = true;
+                        e.status = "Shortcut profiles updated. Save to apply them to the resident launcher.".into();
+                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                        Ok(())
+                    })()
+                }
+                P_CANCEL | 2 => {
+                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    Ok(())
+                }
+                _ => Ok(()),
+            };
+            if let Err(err) = result {
+                set(hwnd, P_STATUS, &err);
+            } else if id == P_APPLY {
+                set(
+                    hwnd,
+                    P_STATUS,
+                    "Profile applied to this draft. Done keeps it; Save persists it.",
+                );
+            }
+            0
+        }
+        WM_CLOSE => {
+            p.stop_recording();
+            EnableWindow(e.hwnd, 1);
+            if !e.json.is_null() {
+                EnableWindow(e.json, 1);
+            }
+            DestroyWindow(hwnd);
+            e.profiles = None;
+            SetForegroundWindow(e.hwnd);
+            InvalidateRect(e.hwnd, null(), 1);
             0
         }
         _ => DefWindowProcW(hwnd, msg, w, l),

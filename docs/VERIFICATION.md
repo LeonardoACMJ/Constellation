@@ -7,7 +7,7 @@
 - Shared Rust configuration model, validation, radial geometry/hit testing, navigation state, and portable storage.
 - Native Windows tray, global keyboard/mouse bindings, input consumption, centered overlay/cursor, restoration, and fullscreen suspension.
 - Continuous subdivision with saved geometry; dots, parent/child lines, and generated pentatonic bell feedback.
-- A separate native configuration process: item editing/reparenting/order, four spacing controls, monitor preview with full fan-out and advisory warnings, sound controls, and advanced JSON profile editing.
+- A separate native configuration process: item editing/reparenting/order, four spacing controls, monitor preview with full fan-out and advisory warnings, sound controls, graphical shortcut profiles with keyboard/mouse recording, and advanced JSON.
 - Local save/backup/recovery and a portable ZIP packaging command. New configuration is signaled to the resident process; changes are deferred during an active radial gesture.
 
 ## Automated evidence
@@ -15,8 +15,8 @@
 | Check | Evidence / scope |
 |---|---|
 | Rust core | 15 integration tests: subdivision, stable ancestor geometry, immediate hover, gaps, click/hold, profile isolation, validation, local saving, backup recovery, relocation, and failed-write behavior. |
-| Windows desktop | `tests/native_smoke.py` creates an isolated portable copy and its own foreground probe window. It verifies Ctrl+Q consumption, ignored profiles, Space launching, Hold cancellation, modifier release, live reload, single-key and Mouse4 Hold, relative script launch, nested fan rendering, fullscreen input pass-through, cursor restoration, warning-only saving, and process exit. |
-| Visual inspection | Program-owned screenshots of the radial, nested connection, full fan-out editor, and overflow warning were inspected. Screenshot backgrounds outside the radial are black in PrintWindow capture; the actual overlay uses color-key transparency. |
+| Windows desktop | `tests/native_smoke.py` creates an isolated portable copy and its own foreground probe window. It verifies Ctrl+Q consumption, ignored profiles, Space launching, Hold cancellation, modifier release, live reload, single-key and Mouse4 Hold, relative script launch, nested fan rendering, fullscreen input pass-through, cursor restoration, warning-only saving, and process exit. Profile checks cover recording an existing Ctrl+Q without invoking the resident, duplicate validation, keyboard/mouse capture, Escape cancellation, per-profile options, live F9 Hold reload, and cancelling removals. |
+| Visual inspection | Program-owned screenshots of the radial, nested connection, full fan-out editor, graphical profiles, and overflow warning were inspected. Screenshot backgrounds outside the radial are black in PrintWindow capture; the actual overlay uses color-key transparency. |
 | Idle sample | One 60-second tray-only sample of the static-CRT build: **8.33 MiB working set**, **1.62 MiB private bytes**, **0.0000 additional CPU seconds** at the API's reporting resolution. Release x64, default sample tree, editor/radial closed; target processes excluded. This is one sample, not a worst-case guarantee. |
 | Portable executable | PE imports inspected after enabling static CRT: Windows system libraries only; no VCRUNTIME140.dll / Visual C++ redistributable dependency. Packaging explicitly excludes runtime configuration and checks for dynamic MSVC runtime imports. |
 
@@ -33,7 +33,6 @@ Local generated evidence is under `.local/native-smoke` and `.local/idle-check`,
 
 ## Current limits
 
-- Profiles are editable via the Advanced JSON window; there is no graphical binding recorder yet.
 - Supported bindings are documented in the user guide. Modifier+mouse combinations and primary-button invocation are not included.
 - The configuration window uses plain native controls. Very small/high-DPI desktops and keyboard accessibility need further UI review.
 - Script runners must already be installed. Batch metacharacters are rejected to avoid unintended shell interpretation; a shortcut wrapper can handle advanced cases.

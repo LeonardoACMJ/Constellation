@@ -198,11 +198,66 @@ try:
     U.SetWindowLongPtrW(probe,-16,0x10CF0000);U.SetWindowPos(probe,None,80,80,440,260,0x20);pause(.2)
     # Stop resident through its tray Quit command path, with no process killing.
     # This process is an isolated test instance; WM_DESTROY is the native exit path.
-    U.PostMessageW(overlay,0x2,0,0);resident.wait(timeout=5)
-    mark("resident exits and releases its hooks")
     editor=subprocess.Popen([str(EXE),"--configure"]);processes.append(editor)
     wait(lambda:U.FindWindowW("Constellation.Config",None));window=U.FindWindowW("Constellation.Config",None);pause(.3)
     screenshot(window,"configuration.png")
+    # Graphical profiles edit a draft, capture configured keys without invoking
+    # the resident, validate duplicate bindings, and propagate via normal Save.
+    def text_at(parent, child):
+        buffer=C.create_unicode_buffer(2048)
+        U.SendMessageW(U.GetDlgItem(parent,child),0x000D,len(buffer),C.addressof(buffer))
+        return buffer.value
+    def set_text(parent, child, value):
+        buffer=C.create_unicode_buffer(value)
+        U.SendMessageW(U.GetDlgItem(parent,child),0x000C,0,C.addressof(buffer))
+    def click(parent, child):
+        control=U.GetDlgItem(parent,child)
+        assert control, f"Missing button {child}"
+        U.SendMessageW(control,0xF5,0,0);pause()
+    click(window,404)
+    wait(lambda:U.FindWindowW("Constellation.Profiles",None))
+    profiles=U.FindWindowW("Constellation.Profiles",None)
+    U.SetForegroundWindow(profiles);pause(.25)
+    click(profiles,611);invoke();pause()
+    assert text_at(profiles,603)=="Ctrl+Q",text_at(profiles,603)
+    assert "Recorded" in text_at(profiles,612),text_at(profiles,612)
+    assert not visible(overlay)
+    mark("profile recorder receives existing Ctrl+Q without invoking the resident")
+    click(profiles,607)  # creates a new profile with an unused function key
+    set_text(profiles,602,"Recorded hold")
+    set_text(profiles,603,"Ctrl+E");click(profiles,609)
+    assert "already used" in text_at(profiles,612)
+    assert len(json.loads(config_path.read_text())["profiles"])==4
+    mark("duplicate profile bindings show an inline error without saving")
+    click(profiles,611);mouse_side(True);mouse_side(False);pause()
+    assert text_at(profiles,603)=="Mouse4",text_at(profiles,603)
+    click(profiles,611);keys((0x1b,False),(0x1b,True));pause()
+    assert text_at(profiles,603)=="Mouse4" and "cancelled" in text_at(profiles,612)
+    click(profiles,611);keys((0x78,False),(0x78,True));pause()
+    assert text_at(profiles,603)=="F9",text_at(profiles,603)
+    U.SendMessageW(U.GetDlgItem(profiles,604),0x14E,1,0)
+    for child in [605,606]: U.SendMessageW(U.GetDlgItem(profiles,child),0xF1,0,0)
+    outer=W.RECT();button=W.RECT()
+    U.GetWindowRect(profiles,C.byref(outer));U.GetWindowRect(U.GetDlgItem(profiles,610),C.byref(button))
+    assert button.bottom < outer.bottom, "Profile actions must fit inside the window"
+    screenshot(profiles,"shortcut-profiles.png")
+    click(profiles,610);wait(lambda:not U.FindWindowW("Constellation.Profiles",None))
+    click(window,401)
+    saved=json.loads(config_path.read_text())["profiles"]
+    assert saved[-1]=={"name":"Recorded hold","binding":"F9","mode":"hold","hover":False,"restore_cursor":False},saved[-1]
+    mark("keyboard/mouse recording and per-profile options persist through Done and Save")
+    U.SetForegroundWindow(probe);U.SetFocus(probe);pause(.25)
+    U.SetCursorPos(320,260);keys((0x78,False));wait(lambda:visible(overlay));center=point()
+    keys((0x78,True));wait(lambda:not visible(overlay));assert point()==center
+    mark("graphically added F9 Hold profile reloads live with cursor restoration disabled")
+    U.SetForegroundWindow(window);pause();click(window,404)
+    profiles=U.FindWindowW("Constellation.Profiles",None)
+    click(profiles,608);click(profiles,613)
+    wait(lambda:not U.FindWindowW("Constellation.Profiles",None));click(window,401)
+    assert json.loads(config_path.read_text())["profiles"]==saved
+    mark("cancelling profile removals preserves the saved profiles")
+    U.PostMessageW(overlay,0x2,0,0);resident.wait(timeout=5)
+    mark("resident exits and releases its hooks")
     assert U.GetDlgItem(window,100) and U.GetDlgItem(window,501)
     new_radius=C.create_unicode_buffer("4000")
     U.SendMessageW(U.GetDlgItem(window,501),0x000C,0,C.addressof(new_radius))
