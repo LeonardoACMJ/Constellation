@@ -4,11 +4,34 @@ import hashlib
 import shutil
 import subprocess
 import json
+import struct
 import zipfile
 
 root=Path(__file__).resolve().parents[1]
 exe=root/"target/release/constellation.exe"
 if not exe.is_file(): raise SystemExit("Build first: cargo build --release --locked")
+binary=exe.read_bytes()
+# Inspect PE imports without requiring dumpbin or another installed tool.
+pe=struct.unpack_from("<I",binary,0x3C)[0]
+if binary[pe:pe+4]!=b"PE\0\0" or struct.unpack_from("<H",binary,pe+4)[0]!=0x8664:
+    raise SystemExit("Expected a Windows x64 executable")
+sections=struct.unpack_from("<H",binary,pe+6)[0]
+optional=pe+24
+section_table=optional+struct.unpack_from("<H",binary,pe+20)[0]
+def offset(rva):
+    for i in range(sections):
+        size,address,raw_size,raw=struct.unpack_from("<IIII",binary,section_table+i*40+8)
+        if address<=rva<address+max(size,raw_size):return raw+rva-address
+    raise ValueError(f"Unmapped PE RVA {rva:x}")
+imports_rva=struct.unpack_from("<I",binary,optional+112+8)[0]
+position=offset(imports_rva)
+imports=[]
+while any(binary[position:position+20]):
+    name=offset(struct.unpack_from("<I",binary,position+12)[0])
+    imports.append(binary[name:binary.index(b"\0",name)].decode("ascii"))
+    position+=20
+if any(name.lower().startswith(("vcruntime","msvcp")) for name in imports):
+    raise SystemExit("Portable packaging requires static CRT; rebuild using .cargo/config.toml")
 folder=root/"portable/Constellation"
 folder.mkdir(parents=True,exist_ok=True)
 shutil.copy2(exe,folder/"constellation.exe")
@@ -34,3 +57,4 @@ digest=hashlib.sha256(archive.read_bytes()).hexdigest()
 archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n",encoding="ascii")
 print(archive)
 print("SHA-256:",digest)
+print("PE imports:",", ".join(imports))

@@ -1,0 +1,3 @@
+[target.x86_64-pc-windows-msvc]
+# Portable distribution: do not require a Visual C++ redistributable installer.
+rustflags = ["-C", "target-feature=+crt-static"]
