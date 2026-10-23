@@ -1,0 +1,65 @@
+#![allow(unsafe_op_in_unsafe_fn)]
+mod audio;
+mod editor;
+mod render;
+mod runtime;
+mod target;
+
+use std::cell::Cell;
+use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr::null_mut};
+thread_local! { static DISPATCHING: Cell<bool> = const { Cell::new(false) }; }
+// Win32 synchronously reenters window procedures during window/control changes.
+// Prevent overlapping mutable borrows of the thread-owned native state.
+pub(super) struct DispatchGuard;
+impl DispatchGuard {
+    pub fn enter() -> Option<Self> {
+        DISPATCHING.with(|v| if v.replace(true) { None } else { Some(Self) })
+    }
+}
+impl Drop for DispatchGuard {
+    fn drop(&mut self) {
+        DISPATCHING.with(|v| v.set(false));
+    }
+}
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+pub fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
+    s.as_ref().encode_wide().chain(Some(0)).collect()
+}
+pub fn error(s: &str) {
+    unsafe {
+        MessageBoxW(
+            null_mut(),
+            wide(s).as_ptr(),
+            wide("Constellation").as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+pub fn run() -> Result<(), String> {
+    use windows_sys::Win32::UI::HiDpi::*;
+    unsafe {
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    let root = crate::storage::root().map_err(|e| e.to_string())?;
+    let args: Vec<_> = std::env::args().collect();
+    if args.iter().any(|a| a == "--check-config") {
+        let c = if root.join("data/config.json").exists() {
+            crate::storage::read(&root)?
+        } else {
+            crate::storage::load_or_create(&root)?
+        };
+        c.validate()?;
+        std::fs::write(
+            root.join("data/config-check.txt"),
+            "Configuration is valid.\r\n",
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--configure") {
+        editor::run(root)
+    } else {
+        runtime::run(root, args.iter().any(|a| a == "--smoke-test"))
+    }
+}

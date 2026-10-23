@@ -1,0 +1,33 @@
+name: Build and test
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+      - run: cargo fmt --all --check
+      - name: Build Windows portable binary
+        if: runner.os == 'Windows'
+        run: cargo build --release --locked
+      - name: Package portable folder
+        if: runner.os == 'Windows'
+        run: python scripts/package.py
+      - name: Save portable archive
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Constellation-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256

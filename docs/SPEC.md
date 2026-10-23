@@ -1,6 +1,6 @@
 # Constellation — product & behavior spec
 
-**Draft 0.1 · 2026-10-23 · Review before native implementation**
+**Draft 0.1 · 2026-10-23 · Native preview available for review**
 
 A lightweight, globally invoked Windows system-tray radial launcher: invoke a shortcut while using another app, navigate nested **Constellations**, and launch a **Star**. The resident app should use as little memory and processing time as practical; configuration may live in a separate process.
 
@@ -240,6 +240,8 @@ These describe intended verification, not tests already performed on a native ap
 | A-14 | FX-01–05 | Hover through nested Constellations and sibling Stars: dots and lines follow the active parent/child path, with one chime per highlight transition and none on stationary redraws. Verify mute/volume, bounded rapid-note playback, and selection with no feedback-induced delay. |
 
 ## 8. Evidence & prototype boundary
+
+A first Windows native preview now implements the main interaction, tray, configuration, and feedback features. See the [user guide](USER-GUIDE.md) for controls/limits and [verification record](VERIFICATION.md) for measured evidence and checks still requiring hands-on review. Proposed details implemented as initial defaults remain subject to product review.
 
 The product decisions in this draft come from this chat. The [shortcut research](shortcut-research.md) records documented conflicts. The [prototype notes](../prototype/README.md), [interaction implementation](../prototype/app.js), and [geometry](../prototype/geometry.mjs) document experiments; copied values are explicitly proposed above.
 
