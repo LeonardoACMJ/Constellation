@@ -5,3 +5,5 @@ pub mod storage;
 
 #[cfg(windows)]
 pub mod windows;
+
+pub mod editing;

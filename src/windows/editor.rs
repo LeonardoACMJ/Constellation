@@ -1,7 +1,12 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use super::{error, render, wide};
+use super::{
+    error,
+    pickers::{self, Pick},
+    render, wide,
+};
 use crate::{
     config::{Binding, Config, Mode, Node, Profile, Target},
+    editing::{self, History},
     geometry::{self, Point},
     storage,
 };
@@ -13,11 +18,19 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::LibraryLoader::GetModuleHandleW,
-    UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
+    System::{Com::*, LibraryLoader::GetModuleHandleW},
+    UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
 };
 
 const TREE: i32 = 100;
+const BROWSE_TARGET: i32 = 211;
+const BROWSE_RUNNER: i32 = 212;
+const BROWSE_CWD: i32 = 213;
+const ADVICE: i32 = 214;
+const UNDO: i32 = 405;
+const REDO: i32 = 406;
+const IMPORT: i32 = 407;
+const EXPORT: i32 = 408;
 const NAME: i32 = 201;
 const KIND: i32 = 202;
 const TARGET: i32 = 203;
@@ -64,6 +77,12 @@ struct Editor {
     dirty: bool,
     scroll_x: i32,
     scroll_y: i32,
+    saved: Config,
+    history: History,
+    settings_before: Option<Config>,
+    item_dirty: bool,
+    settings_invalid: bool,
+    measure_preview: bool,
 }
 static mut EDITOR: *mut Editor = null_mut();
 
@@ -133,6 +152,9 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         if InitCommonControlsEx(&controls) == 0 {
             return Err("Cannot initialize layout sliders".into());
         }
+        if CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) < 0 {
+            return Err("Cannot initialize folder picker".into());
+        }
         let c = storage::load_or_create(&root)?;
         let module = GetModuleHandleW(null());
         let class = wide("Constellation.Config");
@@ -173,6 +195,12 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         EDITOR = Box::into_raw(Box::new(Editor {
             hwnd,
             root,
+            saved: c.clone(),
+            history: History::default(),
+            settings_before: None,
+            item_dirty: false,
+            settings_invalid: false,
+            measure_preview: std::env::args().any(|s| s == "--measure-preview"),
             c,
             rows: vec![],
             parents: vec![],
@@ -219,7 +247,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             (NAME, "Name", 45),
             (KIND, "Kind", 108),
             (TARGET, "Target path / URL", 171),
-            (ARGS, "Arguments (JSON array)", 234),
+            (ARGS, "Arguments (quote values containing spaces)", 234),
             (RUNNER, "Script runner (blank = extension default)", 297),
             (CWD, "Working directory (blank = portable folder)", 360),
             (PARENT, "Parent constellation", 423),
@@ -233,7 +261,11 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                 id,
                 305,
                 y + 21,
-                360,
+                if matches!(id, TARGET | RUNNER | CWD) {
+                    280
+                } else {
+                    360
+                },
                 if combo { 250 } else { 28 },
                 WS_BORDER
                     | WS_TABSTOP
@@ -247,26 +279,49 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         for title in [
             "Constellation",
             "Program",
-            "Windows shortcut",
+            "Windows shortcut / file",
             "URL",
             "Filesystem folder",
             "Script",
         ] {
             send(hwnd, KIND, CB_ADDSTRING, 0, wide(title).as_ptr() as isize);
         }
+        for (id, y) in [
+            (BROWSE_TARGET, 194),
+            (BROWSE_RUNNER, 318),
+            (BROWSE_CWD, 381),
+        ] {
+            control(hwnd, "BUTTON", "Browse…", id, 592, y, 73, 28, 0);
+        }
+        control(hwnd, "STATIC", "", ADVICE, 305, 528, 370, 40, 0);
+        control(hwnd, "BUTTON", "Undo", UNDO, 20, 610, 120, 32, 0);
+        control(hwnd, "BUTTON", "Redo", REDO, 150, 610, 130, 32, 0);
+        control(hwnd, "BUTTON", "Import…", IMPORT, 20, 652, 120, 32, 0);
+        control(hwnd, "BUTTON", "Export…", EXPORT, 150, 652, 130, 32, 0);
+        control(
+            hwnd,
+            "STATIC",
+            "Drop files or folders here to add Stars. Imports stay in the draft until Save.",
+            0,
+            20,
+            702,
+            260,
+            55,
+            0,
+        );
         control(hwnd, "BUTTON", "Apply item", APPLY, 305, 490, 150, 32, 0);
         label(
             hwnd,
             "LAYOUT (numeric values; no forced fitting)",
             305,
-            548,
+            575,
             370,
         );
         for (id, title, x, y) in [
-            (RADIUS, "Radius", 305, 575),
-            (DISTANCE, "Distance × radius", 490, 575),
-            (SPREAD, "Spread °", 305, 635),
-            (GAP, "Gap", 490, 635),
+            (RADIUS, "Radius", 305, 605),
+            (DISTANCE, "Distance × radius", 490, 605),
+            (SPREAD, "Spread °", 305, 665),
+            (GAP, "Gap", 490, 665),
         ] {
             label(hwnd, title, x, y, 175);
             control(
@@ -306,19 +361,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Chimes",
             SOUND,
             305,
-            700,
+            735,
             110,
             28,
             BS_AUTOCHECKBOX as u32,
         );
-        label(hwnd, "Volume (0–1)", 430, 700, 110);
+        label(hwnd, "Volume (0–1)", 430, 735, 110);
         control(
             hwnd,
             "EDIT",
             "",
             VOLUME,
             550,
-            697,
+            732,
             110,
             28,
             WS_BORDER | ES_AUTOHSCROLL as u32,
@@ -358,19 +413,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Save",
             SAVE,
             20,
-            745,
+            805,
             100,
             35,
             BS_DEFPUSHBUTTON as u32,
         );
-        control(hwnd, "BUTTON", "Reload", RELOAD, 130, 745, 100, 35, 0);
+        control(hwnd, "BUTTON", "Reload", RELOAD, 130, 805, 100, 35, 0);
         control(
             hwnd,
             "BUTTON",
             "Shortcut profiles…",
             PROFILES,
             240,
-            745,
+            805,
             250,
             35,
             0,
@@ -381,7 +436,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Advanced JSON…",
             ADVANCED,
             500,
-            745,
+            805,
             170,
             35,
             WS_TABSTOP,
@@ -390,6 +445,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         e.settings_to_controls();
         e.dirty = false;
         e.resize_view();
+        DragAcceptFiles(hwnd, 1);
         drop(startup_guard);
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
@@ -406,6 +462,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         }
         drop(Box::from_raw(EDITOR));
         EDITOR = null_mut();
+        CoUninitialize();
         Ok(())
     }
 }
@@ -428,6 +485,155 @@ unsafe extern "system" fn monitor_callback(
 }
 
 impl Editor {
+    fn checkpoint_settings(&mut self) {
+        if let Some(before) = self.settings_before.take() {
+            self.history.record(&before, &self.c);
+        }
+    }
+    fn commit(&mut self, c: Config) {
+        self.checkpoint_settings();
+        self.history.record(&self.c, &c);
+        self.c = c;
+        self.dirty = self.c != self.saved;
+    }
+    unsafe fn advice(&self) {
+        let warning = self
+            .c
+            .find(self.selected)
+            .and_then(|n| n.target.as_ref())
+            .map(|t| editing::target_advice(&self.root, t).join(" "))
+            .unwrap_or_default();
+        set(self.hwnd, ADVICE, &warning);
+    }
+    unsafe fn enable_fields(&self) {
+        let kind = send(self.hwnd, KIND, CB_GETCURSEL, 0, 0);
+        for (id, on) in [
+            (TARGET, kind != 0),
+            (ARGS, matches!(kind, 1 | 5)),
+            (RUNNER, kind == 5),
+            (CWD, matches!(kind, 1 | 5)),
+            (BROWSE_TARGET, matches!(kind, 1 | 2 | 4 | 5)),
+            (BROWSE_RUNNER, kind == 5),
+            (BROWSE_CWD, matches!(kind, 1 | 5)),
+        ] {
+            EnableWindow(GetDlgItem(self.hwnd, id), on as i32);
+        }
+    }
+    unsafe fn browse(&mut self, id: i32) -> Result<(), String> {
+        let kind = send(self.hwnd, KIND, CB_GETCURSEL, 0, 0);
+        let pick = if id == BROWSE_CWD || id == BROWSE_TARGET && kind == 4 {
+            Pick::Folder
+        } else if id == BROWSE_RUNNER {
+            Pick::Runner
+        } else {
+            Pick::Target
+        };
+        if let Some(path) = pickers::choose(self.hwnd, &self.root, pick)? {
+            let field = match id {
+                BROWSE_CWD => CWD,
+                BROWSE_RUNNER => RUNNER,
+                _ => TARGET,
+            };
+            set(self.hwnd, field, &editing::portable_path(&self.root, &path));
+            self.item_dirty = true;
+            self.status = "Path selected. Apply or Save to keep it.".into();
+        }
+        Ok(())
+    }
+    unsafe fn dropped(&mut self, paths: Vec<PathBuf>) -> Result<(), String> {
+        self.apply()?;
+        let parent = if self
+            .c
+            .find(self.selected)
+            .is_some_and(|n| n.children.is_some())
+        {
+            self.selected
+        } else {
+            find_parent(&self.c.root, self.selected).unwrap_or(self.c.root.id)
+        };
+        let mut candidate = self.c.clone();
+        let mut id = candidate.root.max_id();
+        let mut added = vec![];
+        for path in paths {
+            id = id.checked_add(1).ok_or("Item ID space exhausted")?;
+            added.push(editing::star_from_path(&self.root, &path, id)?);
+        }
+        if added.is_empty() {
+            return Ok(());
+        }
+        let count = added.len();
+        candidate
+            .root
+            .find_mut(parent)
+            .and_then(|n| n.children.as_mut())
+            .ok_or("Choose a parent")?
+            .extend(added);
+        candidate.validate()?;
+        self.commit(candidate);
+        self.selected = id;
+        self.refresh();
+        self.status = format!("Added {count} Stars. Save to persist them.");
+        Ok(())
+    }
+    unsafe fn travel(&mut self, redo: bool) -> Result<(), String> {
+        if self.settings_invalid {
+            self.settings_to_controls();
+            self.status = "Discarded invalid layout fields.".into();
+            return Ok(());
+        }
+        self.checkpoint_settings();
+        if self.item_dirty && self.apply().is_err() {
+            self.selection_to_controls();
+            self.status = "Discarded invalid unapplied item fields.".into();
+            return Ok(());
+        }
+        let c = if redo {
+            self.history.redo(&self.c)
+        } else {
+            self.history.undo(&self.c)
+        };
+        if let Some(c) = c {
+            self.c = c;
+            self.dirty = self.c != self.saved;
+            self.refresh();
+            self.settings_to_controls();
+            self.status = if redo { "Redone." } else { "Undone." }.into();
+        }
+        Ok(())
+    }
+    unsafe fn transfer(&mut self, export: bool) -> Result<(), String> {
+        self.apply()?;
+        self.controls_to_settings()?;
+        self.checkpoint_settings();
+        let pick = if export { Pick::Export } else { Pick::Import };
+        if let Some(path) = pickers::choose(self.hwnd, &self.root, pick)? {
+            if export {
+                let live = self.root.join("data");
+                if path.parent().and_then(|p| p.canonicalize().ok()) == live.canonicalize().ok()
+                    && path.file_name().and_then(|s| s.to_str()).is_some_and(|s| {
+                        s.eq_ignore_ascii_case("config.json")
+                            || s.eq_ignore_ascii_case("config.backup.json")
+                    })
+                {
+                    return Err(
+                        "Use Save for the live configuration; choose a different export file."
+                            .into(),
+                    );
+                }
+                editing::export(&path, &self.c)?;
+                self.status =
+                    "Exported configuration. Launch targets and assets are not copied.".into();
+            } else {
+                let c = editing::read_import(&path)?;
+                self.commit(c);
+                self.selected = self.c.root.id;
+                self.refresh();
+                self.settings_to_controls();
+                self.status="Imported into the draft. Undo restores the previous tree; Save applies the import.".into();
+            }
+        }
+        Ok(())
+    }
     unsafe fn scroll_to(&mut self, x: i32, y: i32) {
         let (dx, dy) = (self.scroll_x - x, self.scroll_y - y);
         self.scroll_x = x;
@@ -473,7 +679,7 @@ impl Editor {
                 1,
                 SB_VERT,
                 client.bottom,
-                client.bottom.max(835),
+                client.bottom.max(895),
                 self.scroll_y,
             ),
         ] {
@@ -584,7 +790,7 @@ impl Editor {
         self.selection_to_controls();
         InvalidateRect(self.hwnd, null(), 1);
     }
-    unsafe fn selection_to_controls(&self) {
+    unsafe fn selection_to_controls(&mut self) {
         let Some(n) = self.c.find(self.selected) else {
             return;
         };
@@ -631,7 +837,7 @@ impl Editor {
         }
         send(self.hwnd, KIND, CB_SETCURSEL, kind, 0);
         set(self.hwnd, TARGET, &path);
-        set(self.hwnd, ARGS, &serde_json::to_string(&args).unwrap());
+        set(self.hwnd, ARGS, &editing::format_arguments(&args));
         set(self.hwnd, RUNNER, &runner);
         set(self.hwnd, CWD, &cwd);
         let parent = find_parent(&self.c.root, self.selected).unwrap_or(self.c.root.id);
@@ -641,6 +847,9 @@ impl Editor {
             .position(|id| *id == parent)
             .unwrap_or(0);
         send(self.hwnd, PARENT, CB_SETCURSEL, idx, 0);
+        self.item_dirty = false;
+        self.enable_fields();
+        self.advice();
     }
     unsafe fn sync_sliders(&self) {
         for (id, value) in [
@@ -658,7 +867,8 @@ impl Editor {
             );
         }
     }
-    unsafe fn settings_to_controls(&self) {
+    unsafe fn settings_to_controls(&mut self) {
+        self.settings_invalid = false;
         self.sync_sliders();
         let l = self.c.layout;
         for (id, value) in [
@@ -693,10 +903,20 @@ impl Editor {
         candidate.sound.volume = number(VOLUME)?;
         candidate.sound.enabled = send(self.hwnd, SOUND, BM_GETCHECK, 0, 0) == 1;
         candidate.validate()?;
-        self.c = candidate;
+        if candidate != self.c {
+            if self.settings_before.is_none() {
+                self.settings_before = Some(self.c.clone());
+            }
+            self.c = candidate;
+            self.dirty = self.c != self.saved;
+        }
+        self.settings_invalid = false;
         Ok(())
     }
     unsafe fn apply(&mut self) -> Result<(), String> {
+        if !self.item_dirty {
+            return Ok(());
+        }
         let mut candidate = self.c.clone();
         let old = candidate
             .find(self.selected)
@@ -704,8 +924,11 @@ impl Editor {
             .clone();
         let kind = send(self.hwnd, KIND, CB_GETCURSEL, 0, 0);
         let path = get(self.hwnd, TARGET);
-        let args: Vec<String> = serde_json::from_str(&get(self.hwnd, ARGS))
-            .map_err(|_| "Arguments must be a JSON string array, e.g. [\"--flag\"]")?;
+        let args = if matches!(kind, 1 | 5) {
+            editing::parse_arguments(&get(self.hwnd, ARGS))?
+        } else {
+            vec![]
+        };
         let option = |s: String| if s.trim().is_empty() { None } else { Some(s) };
         let cwd = option(get(self.hwnd, CWD));
         let runner = option(get(self.hwnd, RUNNER));
@@ -759,12 +982,14 @@ impl Editor {
             }
         }
         candidate.validate()?;
-        self.c = candidate;
-        self.dirty = true;
+        self.commit(candidate);
+        self.item_dirty = false;
         self.refresh();
         Ok(())
     }
-    unsafe fn add(&mut self, folder: bool) {
+    unsafe fn add(&mut self, folder: bool) -> Result<(), String> {
+        self.apply()?;
+        let before = self.c.clone();
         let parent = if self
             .c
             .find(self.selected)
@@ -774,7 +999,12 @@ impl Editor {
         } else {
             find_parent(&self.c.root, self.selected).unwrap_or(self.c.root.id)
         };
-        let id = self.c.root.max_id() + 1;
+        let id = self
+            .c
+            .root
+            .max_id()
+            .checked_add(1)
+            .ok_or("Item ID space exhausted")?;
         let n = Node {
             id,
             name: if folder {
@@ -802,11 +1032,15 @@ impl Editor {
             .as_mut()
             .unwrap()
             .push(n);
+        self.history.record(&before, &self.c);
         self.selected = id;
-        self.dirty = true;
+        self.dirty = self.c != self.saved;
         self.refresh();
+        Ok(())
     }
-    unsafe fn reorder(&mut self, down: bool) {
+    unsafe fn reorder(&mut self, down: bool) -> Result<(), String> {
+        self.apply()?;
+        let before = self.c.clone();
         if let Some(parent) = find_parent(&self.c.root, self.selected) {
             let cs = self
                 .c
@@ -823,9 +1057,11 @@ impl Editor {
                 i.saturating_sub(1)
             };
             cs.swap(i, j);
-            self.dirty = true;
+            self.history.record(&before, &self.c);
+            self.dirty = self.c != self.saved;
             self.refresh();
         }
+        Ok(())
     }
 }
 fn find_parent(root: &Node, id: u64) -> Option<u64> {
@@ -875,6 +1111,7 @@ unsafe fn advanced(e: &mut Editor) {
         null(),
     );
     e.json = hwnd;
+    EnableWindow(e.hwnd, 0);
     label(
         hwnd,
         "Edit the complete configuration. Save validates and writes only inside the portable folder.",
@@ -943,12 +1180,11 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         }
         WM_COMMAND if w & 0xffff == JSON_SAVE as usize => {
             let result = (|| -> Result<(), String> {
-                let mut c: Config =
-                    serde_json::from_str(&get(hwnd, JSON_TEXT)).map_err(|x| x.to_string())?;
-                c.assign_profile_ids()?;
+                let c = storage::parse_config(get(hwnd, JSON_TEXT).as_bytes())?;
                 storage::save(&e.root, &c)?;
                 notify_resident();
-                e.c = c;
+                e.commit(c.clone());
+                e.saved = c;
                 e.dirty = false;
                 e.refresh();
                 e.settings_to_controls();
@@ -963,8 +1199,10 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             0
         }
         WM_CLOSE => {
+            EnableWindow(e.hwnd, 1);
             DestroyWindow(hwnd);
             e.json = null_mut();
+            super::focus_window(e.hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, msg, w, l),
@@ -980,16 +1218,38 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
-        if matches!(msg, WM_SIZE | WM_HSCROLL | WM_VSCROLL) {
+        if matches!(msg, WM_SIZE | WM_HSCROLL | WM_VSCROLL | WM_DROPFILES) {
             PostMessageW(hwnd, msg, w, l);
         }
-        if msg == WM_COMMAND && (w >> 16) as u32 == BN_CLICKED && (w & 0xffff) >= APPLY as usize {
+        if msg == WM_COMMAND
+            && (w >> 16) as u32 == BN_CLICKED
+            && (w & 0xffff) >= BROWSE_TARGET as usize
+        {
             PostMessageW(hwnd, msg, w, l);
         }
         return DefWindowProcW(hwnd, msg, w, l);
     };
     let e = &mut *EDITOR;
     match msg {
+        WM_DROPFILES => {
+            let drop = w as _;
+            let count = DragQueryFileW(drop, u32::MAX, null_mut(), 0);
+            let mut paths = vec![];
+            for i in 0..count {
+                let len = DragQueryFileW(drop, i, null_mut(), 0);
+                let mut buffer = vec![0u16; len as usize + 1];
+                DragQueryFileW(drop, i, buffer.as_mut_ptr(), buffer.len() as u32);
+                paths.push(PathBuf::from(String::from_utf16_lossy(
+                    &buffer[..len as usize],
+                )));
+            }
+            DragFinish(drop);
+            if let Err(message) = e.dropped(paths) {
+                e.status = message;
+            }
+            InvalidateRect(hwnd, null(), 1);
+            0
+        }
         WM_HSCROLL | WM_VSCROLL if l == 0 => {
             e.scroll(msg == WM_VSCROLL, (w & 0xffff) as i32);
             0
@@ -1022,12 +1282,37 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_COMMAND => {
             let id = (w & 0xffff) as i32;
             let notify = (w >> 16) as u32;
+            if matches!(id, NAME | TARGET | ARGS | RUNNER | CWD) && notify == EN_CHANGE {
+                e.item_dirty = true;
+                InvalidateRect(hwnd, null(), 1);
+                return 0;
+            }
+            if matches!(id, KIND | PARENT) && notify == CBN_SELCHANGE as u32 {
+                e.item_dirty = true;
+                e.enable_fields();
+                return 0;
+            }
             if id == TREE && notify == LBN_SELCHANGE as u32 {
-                let i = send(hwnd, TREE, LB_GETCURSEL, 0, 0);
-                if let Some(id) = e.rows.get(i as usize) {
-                    e.selected = *id;
-                    e.selection_to_controls();
+                let next = e
+                    .rows
+                    .get(send(hwnd, TREE, LB_GETCURSEL, 0, 0) as usize)
+                    .copied();
+                e.checkpoint_settings();
+                if let Some(next) = next {
+                    match e.apply() {
+                        Ok(()) => {
+                            e.selected = next;
+                            e.selection_to_controls();
+                        }
+                        Err(message) => {
+                            e.status = message;
+                            set(hwnd, ADVICE, &e.status);
+                            let index = e.rows.iter().position(|id| *id == e.selected).unwrap_or(0);
+                            send(hwnd, TREE, LB_SETCURSEL, index, 0);
+                        }
+                    }
                 }
+                InvalidateRect(hwnd, null(), 1);
                 return 0;
             }
             if id == MONITOR && notify == CBN_SELCHANGE as u32 {
@@ -1036,67 +1321,91 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 return 0;
             }
             if matches!(id, RADIUS | DISTANCE | SPREAD | GAP | VOLUME) && notify == EN_CHANGE {
-                if e.controls_to_settings().is_ok() {
+                let result = e.controls_to_settings();
+                e.settings_invalid = result.is_err();
+                if result.is_ok() {
                     e.dirty = true;
                     e.sync_sliders();
                     InvalidateRect(hwnd, null(), 1);
                 }
                 return 0;
             }
+            if matches!(id, RADIUS | DISTANCE | SPREAD | GAP | VOLUME) && notify == EN_KILLFOCUS {
+                e.checkpoint_settings();
+                return 0;
+            }
             if notify != BN_CLICKED {
                 return 0;
             }
+            e.checkpoint_settings();
             let result = match id {
+                BROWSE_TARGET | BROWSE_RUNNER | BROWSE_CWD => e.browse(id),
+                UNDO => e.travel(false),
+                REDO => e.travel(true),
+                IMPORT => e.transfer(false),
+                EXPORT => e.transfer(true),
                 APPLY => e.apply(),
-                ADD_STAR => {
-                    e.add(false);
-                    Ok(())
-                }
-                ADD_FOLDER => {
-                    e.add(true);
-                    Ok(())
-                }
-                DELETE => {
+                ADD_STAR => e.add(false),
+                ADD_FOLDER => e.add(true),
+                DELETE => (|| {
+                    e.apply()?;
                     if e.selected == e.c.root.id {
-                        Err("The root constellation cannot be deleted".into())
-                    } else {
-                        if MessageBoxW(hwnd,wide("Delete this item and all its children? Changes are not persisted until Save.").as_ptr(),wide("Delete item").as_ptr(),MB_YESNO|MB_ICONQUESTION)==IDYES{remove(&mut e.c.root,e.selected);e.selected=e.c.root.id;e.dirty=true;e.refresh();}
-                        Ok(())
+                        return Err("The root constellation cannot be deleted".into());
                     }
-                }
-                UP => {
-                    e.reorder(false);
+                    let mut c = e.c.clone();
+                    remove(&mut c.root, e.selected);
+                    e.commit(c);
+                    e.selected = e.c.root.id;
+                    e.refresh();
+                    e.status =
+                        "Deleted from draft. Undo restores the item and its children.".into();
                     Ok(())
-                }
-                DOWN => {
-                    e.reorder(true);
-                    Ok(())
-                }
+                })(),
+                UP => e.reorder(false),
+                DOWN => e.reorder(true),
                 SAVE | 1 => (|| {
                     e.apply()?;
                     e.controls_to_settings()?;
+                    e.checkpoint_settings();
                     storage::save(&e.root, &e.c)?;
                     notify_resident();
+                    e.saved = e.c.clone();
                     e.dirty = false;
                     e.status = "Saved. New settings apply on the next radial invocation.".into();
                     Ok(())
                 })(),
-                RELOAD => match storage::read(&e.root) {
-                    Ok(c) => {
-                        e.c = c;
-                        e.dirty = false;
-                        e.refresh();
-                        e.settings_to_controls();
-                        e.status = "Reloaded portable configuration.".into();
-                        Ok(())
+                RELOAD => (|| {
+                    if (e.dirty || e.item_dirty || e.settings_invalid)
+                        && MessageBoxW(
+                            hwnd,
+                            wide("Discard unsaved edits and reload from disk?").as_ptr(),
+                            wide("Reload configuration").as_ptr(),
+                            MB_YESNO | MB_ICONQUESTION,
+                        ) != IDYES
+                    {
+                        return Ok(());
                     }
-                    Err(s) => Err(s),
-                },
+                    let c = storage::read(&e.root)?;
+                    e.commit(c.clone());
+                    e.saved = c;
+                    e.dirty = false;
+                    e.refresh();
+                    e.settings_to_controls();
+                    e.status =
+                        "Reloaded portable configuration. Undo restores the previous draft.".into();
+                    Ok(())
+                })(),
                 PROFILES => {
                     profiles(e);
                     Ok(())
                 }
                 ADVANCED => {
+                    if let Err(message) = e.apply().and_then(|_| e.controls_to_settings()) {
+                        e.status = message;
+                        InvalidateRect(hwnd, null(), 1);
+                        return 0;
+                    }
+                    e.checkpoint_settings();
                     advanced(e);
                     Ok(())
                 }
@@ -1109,7 +1418,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             };
             if let Err(s) = result {
                 let _ = std::fs::write(e.root.join("data/editor-error.txt"), &s);
-                error(&s);
+                e.status = s.clone();
+                set(hwnd, ADVICE, &s);
+            } else {
+                e.advice();
             }
             InvalidateRect(hwnd, null(), 1);
             0
@@ -1119,6 +1431,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_PAINT => {
+            let measured = std::time::Instant::now();
             let mut ps = zeroed();
             let dc = BeginPaint(hwnd, &mut ps);
             SetViewportOrgEx(dc, -e.scroll_x, -e.scroll_y, null_mut());
@@ -1201,20 +1514,33 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 dc,
                 &format!(
                     "{}{}",
-                    if e.dirty { "Unsaved changes · " } else { "" },
+                    if e.dirty || e.item_dirty || e.settings_invalid {
+                        "Unsaved changes · "
+                    } else {
+                        ""
+                    },
                     e.status
                 ),
                 15,
-                cr.bottom.max(835) - 32,
+                cr.bottom.max(895) - 32,
                 cr.right - 30,
                 render::rgb(85, 90, 105),
                 12,
             );
             EndPaint(hwnd, &ps);
+            if e.measure_preview {
+                e.measure_preview = false;
+                let report = serde_json::json!({"sectors":all.len(),"paint_ms":measured.elapsed().as_secs_f64()*1000.,
+                    "conditions":"Native full-preview paint including layout, GDI drawing and warnings; excludes startup, user input and display scanout"});
+                let _ = std::fs::write(
+                    e.root.join("data/preview-measurement.json"),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                );
+            }
             0
         }
         WM_CLOSE => {
-            if e.dirty
+            if (e.dirty || e.item_dirty || e.settings_invalid)
                 && MessageBoxW(
                     hwnd,
                     wide("Discard unsaved changes and close configuration?").as_ptr(),
@@ -1338,6 +1664,7 @@ impl Profiles {
     }
     unsafe fn stop_recording(&mut self) {
         self.recording = false;
+        super::recorder::stop();
         ReleaseCapture();
         set(self.hwnd, P_RECORD, "Record shortcut");
     }
@@ -1523,7 +1850,7 @@ unsafe fn profiles(e: &mut Editor) {
     control(
         hwnd,
         "STATIC",
-        "Apply before switching profiles. Done keeps changes in the main editor; Save writes them to disk.",
+        "Edits follow you when switching profiles. Done keeps changes in the main editor; Save writes them to disk.",
         P_STATUS,
         310,
         395,
@@ -1558,12 +1885,32 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if msg == super::recorder::CAPTURE {
+            PostMessageW(hwnd, msg, w, l);
+        }
         return DefWindowProcW(hwnd, msg, w, l);
     };
     let e = &mut *EDITOR;
     let Some(p) = e.profiles.as_mut() else {
         return DefWindowProcW(hwnd, msg, w, l);
     };
+    if msg == super::recorder::CAPTURE {
+        if p.recording {
+            if GetAsyncKeyState(0x11) < 0
+                || GetAsyncKeyState(0x10) < 0
+                || GetAsyncKeyState(0x12) < 0
+            {
+                set(
+                    hwnd,
+                    P_STATUS,
+                    "Mouse shortcuts currently require an unmodified button.",
+                );
+            } else {
+                p.capture(&format!("Mouse{w}"), false);
+            }
+        }
+        return 0;
+    }
     if p.recording {
         match msg {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
@@ -1630,15 +1977,30 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         WM_COMMAND => {
             let id = (w & 0xffff) as i32;
             if id == P_LIST && w >> 16 == LBN_SELCHANGE as usize {
-                p.selected = usize::try_from(send(hwnd, P_LIST, LB_GETCURSEL, 0, 0)).ok();
-                p.fields();
+                let next = usize::try_from(send(hwnd, P_LIST, LB_GETCURSEL, 0, 0)).ok();
+                match p.apply() {
+                    Ok(()) => {
+                        p.selected = next;
+                        if let Some(i) = next {
+                            send(hwnd, P_LIST, LB_SETCURSEL, i, 0);
+                        }
+                        p.fields();
+                    }
+                    Err(message) => {
+                        if let Some(i) = p.selected {
+                            send(hwnd, P_LIST, LB_SETCURSEL, i, 0);
+                        }
+                        set(hwnd, P_STATUS, &message);
+                    }
+                }
                 return 0;
             }
             if w >> 16 != BN_CLICKED as usize {
                 return 0;
             }
             let result = match id {
-                P_RECORD => {
+                P_RECORD => (|| {
+                    super::recorder::start(hwnd)?;
                     p.recording = true;
                     set(hwnd, P_RECORD, "Listening… Esc cancels");
                     set(
@@ -1649,7 +2011,7 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
                     SetFocus(hwnd);
                     SetCapture(hwnd);
                     Ok(())
-                }
+                })(),
                 P_APPLY => p.apply(),
                 P_ADD => (|| {
                     p.apply()?;
@@ -1692,14 +2054,15 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
                     p.refresh();
                     Ok(())
                 }
-                P_DONE => {
+                P_DONE | 1 => {
                     (|| {
                         p.apply()?;
                         let mut candidate = e.c.clone();
                         candidate.profiles = p.draft.clone();
                         candidate.validate()?;
+                        e.history.record(&e.c, &candidate);
                         e.c = candidate;
-                        e.dirty = true;
+                        e.dirty = e.c != e.saved;
                         e.status = "Shortcut profiles updated. Save to apply them to the resident launcher.".into();
                         PostMessageW(hwnd, WM_CLOSE, 0, 0);
                         Ok(())

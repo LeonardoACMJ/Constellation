@@ -93,31 +93,41 @@ pub unsafe fn draw(
         x: origin.x + p.x * scale,
         y: origin.y + p.y * scale,
     };
+    fn index<'a>(
+        node: &'a crate::config::Node,
+        nodes: &mut std::collections::HashMap<u64, &'a crate::config::Node>,
+        parents: &mut std::collections::HashMap<u64, u64>,
+    ) {
+        nodes.insert(node.id, node);
+        if let Some(children) = &node.children {
+            for child in children {
+                parents.insert(child.id, node.id);
+                index(child, nodes, parents);
+            }
+        }
+    }
+    let mut nodes = std::collections::HashMap::new();
+    let mut parents = std::collections::HashMap::new();
+    index(&c.root, &mut nodes, &mut parents);
+    let brushes = [
+        rgb(28, 43, 59),
+        rgb(43, 38, 67),
+        rgb(40, 100, 102),
+        rgb(89, 69, 131),
+    ]
+    .map(|v| CreateSolidBrush(v));
+    let pens = [
+        CreatePen(PS_SOLID, 1, rgb(77, 89, 117)),
+        CreatePen(PS_SOLID, 1, rgb(203, 184, 255)),
+    ];
     for s in sectors {
-        let Some(node) = c.find(s.id) else { continue };
+        let Some(node) = nodes.get(&s.id) else {
+            continue;
+        };
         let active = hover == Some(s.id) || path.contains(&s.id);
         let folder = node.children.is_some();
-        let color = if active {
-            if folder {
-                rgb(89, 69, 131)
-            } else {
-                rgb(40, 100, 102)
-            }
-        } else if folder {
-            rgb(43, 38, 67)
-        } else {
-            rgb(28, 43, 59)
-        };
-        let brush = CreateSolidBrush(color);
-        let pen = CreatePen(
-            PS_SOLID,
-            1,
-            if active {
-                rgb(203, 184, 255)
-            } else {
-                rgb(77, 89, 117)
-            },
-        );
+        let brush = brushes[usize::from(folder) + 2 * usize::from(active)];
+        let pen = pens[usize::from(active)];
         let ob = SelectObject(dc, brush);
         let op = SelectObject(dc, pen);
         let polygon: Vec<POINT> = s
@@ -136,8 +146,10 @@ pub unsafe fn draw(
         }
         SelectObject(dc, ob);
         SelectObject(dc, op);
-        DeleteObject(brush);
-        DeleteObject(pen);
+        let arc = (s.inner + s.outer) * 0.5 * s.sweep * scale;
+        if arc < 18. || (s.outer - s.inner) * scale < 18. {
+            continue;
+        }
         let p = map(s.dot);
         let w = (((s.inner + s.outer) * 0.5 * s.sweep * scale) as i32).clamp(12, 125);
         let size = (12. * scale).round().max(7.) as i32;
@@ -164,20 +176,22 @@ pub unsafe fn draw(
             size,
         );
     }
+    for handle in brushes {
+        DeleteObject(handle);
+    }
+    for handle in pens {
+        DeleteObject(handle);
+    }
     let lit: Vec<_> = sectors
         .iter()
         .filter(|s| preview || path.contains(&s.id) || hover == Some(s.id))
         .collect();
+    let lit_by_id: std::collections::HashMap<_, _> = lit.iter().map(|s| (s.id, *s)).collect();
     for child in &lit {
         if child.depth == 0 {
             continue;
         }
-        let parent = lit.iter().find(|parent| {
-            parent.depth + 1 == child.depth
-                && c.find(parent.id)
-                    .and_then(|n| n.children.as_ref())
-                    .is_some_and(|cs| cs.iter().any(|n| n.id == child.id))
-        });
+        let parent = parents.get(&child.id).and_then(|id| lit_by_id.get(id));
         if let Some(parent) = parent {
             line(
                 dc,

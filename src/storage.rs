@@ -22,12 +22,46 @@ pub fn resolve(root: &Path, path: &str) -> PathBuf {
 pub fn read(root: &Path) -> Result<Config, String> {
     let bytes = fs::read(root.join("data/config.json"))
         .map_err(|e| format!("Cannot read portable config: {e}"))?;
-    let mut c: Config =
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid config JSON: {e}"))?;
+    parse_config(&bytes)
+}
+/// A 64-level node tree also contains children arrays, exceeding Serde JSON's
+/// default 128-container limit. Bound lexical nesting before using its deeper
+/// deserializer, then enforce the stricter semantic node-depth limit.
+pub fn parse_config(bytes: &[u8]) -> Result<Config, String> {
+    use serde::Deserialize;
+    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    for &b in bytes {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                quoted = false;
+            }
+        } else if b == b'"' {
+            quoted = true;
+        } else if matches!(b, b'{' | b'[') {
+            depth += 1;
+            if depth > 256 {
+                return Err("JSON nesting exceeds parser safety limit (256 containers)".into());
+            }
+        } else if matches!(b, b'}' | b']') {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    decoder.disable_recursion_limit();
+    let mut c =
+        Config::deserialize(&mut decoder).map_err(|e| format!("Invalid config JSON: {e}"))?;
+    decoder
+        .end()
+        .map_err(|e| format!("Invalid config JSON: {e}"))?;
     c.assign_profile_ids()?;
     c.validate()?;
     Ok(c)
 }
+
 pub fn load_or_create(root: &Path) -> Result<Config, String> {
     let file = root.join("data/config.json");
     if file
@@ -39,10 +73,7 @@ pub fn load_or_create(root: &Path) -> Result<Config, String> {
             Err(original) => {
                 let backup =
                     fs::read(root.join("data/config.backup.json")).map_err(|_| original.clone())?;
-                let mut c: Config =
-                    serde_json::from_slice(&backup).map_err(|_| original.clone())?;
-                c.assign_profile_ids().map_err(|_| original.clone())?;
-                c.validate().map_err(|_| original.clone())?;
+                let c = parse_config(&backup).map_err(|_| original.clone())?;
                 // Preserve the broken original for repair; never write a recovered
                 // backup over it without an explicit Save from configuration.
                 let _ = fs::write(
@@ -97,11 +128,11 @@ pub fn save(root: &Path, c: &Config) -> Result<(), String> {
     result.map_err(|e| format!("Could not save inside portable folder; no external fallback: {e}"))
 }
 #[cfg(not(windows))]
-fn replace(from: &Path, to: &Path) -> io::Result<()> {
+pub(crate) fn replace(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
 }
 #[cfg(windows)]
-fn replace(from: &Path, to: &Path) -> io::Result<()> {
+pub(crate) fn replace(from: &Path, to: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,

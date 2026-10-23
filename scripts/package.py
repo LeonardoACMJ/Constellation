@@ -36,6 +36,7 @@ folder=root/"portable/Constellation"
 folder.mkdir(parents=True,exist_ok=True)
 shutil.copy2(exe,folder/"constellation.exe")
 shutil.copy2(root/"docs/USER-GUIDE.md",folder/"README.md")
+shutil.copy2(root/"docs/PERSONALIZATION-STUDY.md",folder/"PERSONALIZATION-STUDY.md")
 metadata=json.loads(subprocess.check_output(["cargo","metadata","--format-version","1","--locked","--offline"],cwd=root,text=True))
 notices=["THIRD-PARTY NOTICES\n\nDependencies included in the build are listed below with their available license texts.\n"]
 for package in sorted(metadata["packages"],key=lambda p:p["name"]):
@@ -51,7 +52,7 @@ dist=root/"dist";dist.mkdir(exist_ok=True)
 archive=dist/"Constellation-0.1.0-windows-x64.zip"
 with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED) as z:
     # Explicit list excludes data/config.json, even when packaging over an older folder.
-    for name in ["constellation.exe","README.md","THIRD-PARTY-NOTICES.txt"]:
+    for name in ["constellation.exe","README.md","PERSONALIZATION-STUDY.md","THIRD-PARTY-NOTICES.txt"]:
         z.write(folder/name,f"Constellation/{name}")
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
 archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n",encoding="ascii")

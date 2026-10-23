@@ -132,13 +132,11 @@ pub fn full(config: &Config) -> Vec<Sector> {
         let start = out.len();
         fan(node, depth, center, direction, l, out);
         let added = out[start..].to_vec();
-        for s in added {
-            if let Some(child) = node
-                .children
-                .as_ref()
-                .and_then(|cs| cs.iter().find(|n| n.id == s.id))
-                .filter(|n| n.children.is_some())
-            {
+        for (s, child) in added
+            .iter()
+            .zip(node.children.as_deref().unwrap_or_default())
+        {
+            if child.children.is_some() {
                 walk(
                     child,
                     depth + 1,
@@ -231,27 +229,34 @@ fn preview_overlap(config: &Config, sectors: &[Sector]) -> bool {
             (p, bounds)
         })
         .collect();
-    for (i, a) in sectors.iter().enumerate().filter(|(_, s)| s.sweep > 0.) {
-        for (j, b) in sectors
-            .iter()
-            .enumerate()
-            .take(i)
-            .filter(|(_, s)| s.sweep > 0.)
-        {
-            if links.get(&a.id) == links.get(&b.id) || ancestor(a.id, b.id) || ancestor(b.id, a.id)
-            {
-                continue;
-            }
-            let (pa, ra) = &shapes[i];
-            let (pb, rb) = &shapes[j];
-            if ra.0 >= rb.2 || rb.0 >= ra.2 || ra.1 >= rb.3 || rb.1 >= ra.3 {
-                continue;
-            }
-            if a.contains(b.dot) || b.contains(a.dot) || polygons_intersect(pa, pb) {
-                return true;
+    // Sectors in one fan cannot overlap one another. Group first so a flat
+    // 10,000-item fan never pays for 50 million pointless pair comparisons.
+    let mut groups = std::collections::BTreeMap::<u64, Vec<usize>>::new();
+    for (i, s) in sectors.iter().enumerate().filter(|(_, s)| s.sweep > 0.) {
+        groups.entry(links[&s.id]).or_default().push(i);
+    }
+    let groups: Vec<_> = groups.into_values().collect();
+    for (gi, group) in groups.iter().enumerate() {
+        for other in &groups[..gi] {
+            for &i in group {
+                for &j in other {
+                    let (a, b) = (&sectors[i], &sectors[j]);
+                    if ancestor(a.id, b.id) || ancestor(b.id, a.id) {
+                        continue;
+                    }
+                    let (pa, ra) = &shapes[i];
+                    let (pb, rb) = &shapes[j];
+                    if ra.0 >= rb.2 || rb.0 >= ra.2 || ra.1 >= rb.3 || rb.1 >= ra.3 {
+                        continue;
+                    }
+                    if a.contains(b.dot) || b.contains(a.dot) || polygons_intersect(pa, pb) {
+                        return true;
+                    }
+                }
             }
         }
     }
+
     false
 }
 fn polygons_intersect(a: &[Point], b: &[Point]) -> bool {

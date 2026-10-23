@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import sys
 import time
 
@@ -48,6 +49,8 @@ for name, args, restype in [
     ("SetForegroundWindow", [HWND], W.BOOL),
     ("SetFocus", [HWND], HWND),
     ("IsWindowVisible", [HWND], W.BOOL),
+    ("IsWindow", [HWND], W.BOOL),
+    ("GetMessageW", [C.POINTER(W.MSG), HWND, UINT, UINT], C.c_int),
     ("GetForegroundWindow", [], HWND),
     ("GetDlgItem", [HWND,C.c_int], HWND),
     ("GetWindowRect", [HWND,C.POINTER(W.RECT)], W.BOOL),
@@ -79,7 +82,19 @@ def probe_proc(hwnd,msg,w,l):
     return U.DefWindowProcW(hwnd,msg,w,l)
 wc=WC(); wc.proc=probe_proc; wc.instance=K.GetModuleHandleW(None); wc.name="Constellation.NativeTest.Probe"
 U.RegisterClassW(C.byref(wc))
-probe=U.CreateWindowExW(0,wc.name,"Constellation input probe",0x10CF0000,80,80,440,260,None,None,wc.instance,None)
+# Keep the independent foreground application responsive while the driver waits
+# on modal dialogs, disk flushes and cross-process SendMessage calls.
+probe=None
+probe_ready=threading.Event()
+def probe_loop():
+    global probe
+    probe=U.CreateWindowExW(0,wc.name,"Constellation input probe",0x10CF0000,80,80,440,260,None,None,wc.instance,None)
+    probe_ready.set()
+    msg=W.MSG()
+    while U.IsWindow(probe) and U.GetMessageW(C.byref(msg),None,0,0)>0:
+        U.TranslateMessage(C.byref(msg));U.DispatchMessageW(C.byref(msg))
+probe_thread=threading.Thread(target=probe_loop,daemon=True)
+probe_thread.start();assert probe_ready.wait(5) and probe
 
 def pump():
     msg=W.MSG()
@@ -269,8 +284,142 @@ try:
         U.SendMessageW(U.GetDlgItem(parent,child),0x000C,0,C.addressof(buffer))
     def click(parent, child):
         control=U.GetDlgItem(parent,child)
-        assert control, f"Missing button {child}"
+        assert control, f"Missing button {child}; editor exit={editor.poll()}"
         U.SendMessageW(control,0xF5,0,0);pause()
+    # Picker, draft safety, undo/redo, import/export and real HDROP handling.
+    U.GetWindow.argtypes=[HWND,UINT];U.GetWindow.restype=HWND
+    U.GetDlgCtrlID.argtypes=[HWND];U.GetDlgCtrlID.restype=C.c_int
+    ENUM=C.WINFUNCTYPE(W.BOOL,HWND,LP)
+    U.EnumWindows.argtypes=[ENUM,LP]
+    U.EnumChildWindows.argtypes=[HWND,ENUM,LP]
+    U.GetWindowThreadProcessId.argtypes=[HWND,C.POINTER(W.DWORD)]
+    U.GetClassNameW.argtypes=[HWND,W.LPWSTR,C.c_int]
+    def owned_dialog():
+        found=[]
+        @ENUM
+        def collect(candidate,_):
+            pid=W.DWORD();U.GetWindowThreadProcessId(candidate,C.byref(pid))
+            if pid.value==editor.pid and U.IsWindowVisible(candidate):
+                name=C.create_unicode_buffer(128);U.GetClassNameW(candidate,name,len(name))
+                if name.value=="#32770":found.append(candidate)
+            return True
+        U.EnumWindows(collect,0)
+        return found[0] if found else None
+    def choose_file(button,path,folder=False):
+        U.PostMessageW(window,0x111,button,0);wait(owned_dialog)
+        dialog=owned_dialog();pause(.15)
+        value=C.create_unicode_buffer(str(path))
+        if folder:
+            fields=[]
+            @ENUM
+            def find_edit(child,_):
+                name=C.create_unicode_buffer(128);U.GetClassNameW(child,name,len(name))
+                if name.value=="Edit":fields.append(child)
+                return True
+            U.EnumChildWindows(dialog,find_edit,0);assert fields,"Folder picker needs a path field"
+            # WM_SETTEXT is marshalled across processes; BFFM_SETSELECTIONW's
+            # WM_USER pointer payload is not and must never be sent this way.
+            U.SendMessageW(fields[0],0x000C,0,C.addressof(value))
+            # Programmatic text replacement must notify the shell dialog just
+            # like typing, otherwise OK may use the old tree selection.
+            U.SendMessageW(dialog,0x111,U.GetDlgCtrlID(fields[0])|(0x300<<16),fields[0])
+            pause(.2)
+        else:
+            def filename_control():
+                entry=U.GetDlgItem(dialog,1148) or U.GetDlgItem(dialog,1152)
+                if entry:
+                    edit=U.SendMessageW(entry,0x407,0,0)
+                    return edit or entry
+                fields=[]
+                @ENUM
+                def collect_edit(child,_):
+                    name=C.create_unicode_buffer(128);U.GetClassNameW(child,name,len(name))
+                    if name.value=="Edit" and U.GetDlgCtrlID(child) in [1001,1152]:fields.append(child)
+                    return True
+                U.EnumChildWindows(dialog,collect_edit,0)
+                return fields[0] if fields else None
+            try:wait(filename_control)
+            except AssertionError:
+                screenshot(dialog,"picker-failure.png");raise
+            U.SendMessageW(filename_control(),0x000C,0,C.addressof(value))
+        U.PostMessageW(dialog,0x111,1,0)
+        wait(lambda:not owned_dialog());pause(.15)
+    def select_item(index):
+        U.SendMessageW(U.GetDlgItem(window,100),0x186,index,0)
+        U.SendMessageW(window,0x111,100|(1<<16),0);pause()
+    fixture=OUT/"picked script.py";fixture.write_text("# picker fixture; never launched\n")
+    working=OUT/"working folder";working.mkdir(exist_ok=True)
+    click(window,401)  # persist migrated profile IDs before comparing snapshots
+    baseline=json.loads(config_path.read_text())
+    select_item(1)
+    choose_file(211,fixture)
+    choose_file(212,pythonw)
+    choose_file(213,working,folder=True)
+    set_text(window,201,"Picked script")
+    set_text(window,204,'--profile "Work profile" ""')
+    select_item(2)  # pending edits must be applied before switching
+    click(window,401)
+    selected=json.loads(config_path.read_text())["root"]["children"][0]
+    assert selected["name"]=="Picked script" and selected["target"]["path"]=="picked script.py",selected
+    assert selected["target"]["cwd"]=="working folder" and selected["target"]["args"]==["--profile","Work profile",""]
+    mark("file/runner/folder pickers and quoted arguments survive switching items")
+    click(window,405);click(window,401)
+    assert json.loads(config_path.read_text())==baseline
+    click(window,406);click(window,401)
+    assert json.loads(config_path.read_text())["root"]["children"][0]["name"]=="Picked script"
+    click(window,405);click(window,401)
+    assert json.loads(config_path.read_text())==baseline
+    mark("Undo and Redo restore complete item definitions even after Save")
+    select_item(1);set_text(window,201,"");select_item(2)
+    assert text_at(window,201)=="" and U.SendMessageW(U.GetDlgItem(window,100),0x188,0,0)==1
+    assert json.loads(config_path.read_text())==baseline
+    click(window,405)
+    assert text_at(window,201)==baseline["root"]["children"][0]["name"]
+    mark("invalid item edits stay visible and prevent destructive selection changes")
+    set_text(window,203,"missing-script.py");click(window,301)
+    assert "Not found" in text_at(window,214),text_at(window,214)
+    click(window,401)
+    assert json.loads(config_path.read_text())["root"]["children"][0]["target"]["path"]=="missing-script.py"
+    click(window,405);click(window,401)
+    assert json.loads(config_path.read_text())==baseline
+    mark("missing-target advice stays nonblocking and can be undone")
+    # Windows owns and releases the HDROP block after WM_DROPFILES delivery.
+    import struct
+    K.GlobalAlloc.argtypes=[UINT,C.c_size_t];K.GlobalAlloc.restype=W.HGLOBAL
+    K.GlobalLock.argtypes=[W.HGLOBAL];K.GlobalLock.restype=C.c_void_p
+    K.GlobalUnlock.argtypes=[W.HGLOBAL]
+    dropped=[OUT/"dropped.exe",OUT/"dropped.lnk",OUT/"dropped.py",working]
+    for path in dropped[:3]:path.write_text("controlled drop fixture")
+    names=("\0".join(str(p) for p in dropped)+"\0\0").encode("utf-16-le")
+    payload=struct.pack("<IiiII",20,0,0,0,1)+names
+    memory=K.GlobalAlloc(0x42,len(payload));assert memory
+    pointer=K.GlobalLock(memory);C.memmove(pointer,payload,len(payload));K.GlobalUnlock(memory)
+    select_item(0);U.PostMessageW(window,0x233,memory,0);pause(.2);click(window,401)
+    added=json.loads(config_path.read_text())["root"]["children"][-4:]
+    assert [n["target"]["type"] for n in added]==["program","shortcut","script","folder"],added
+    click(window,405);click(window,401)
+    assert json.loads(config_path.read_text())==baseline
+    mark("real file-drop payload adds typed portable Stars as one undoable batch")
+    exported=OUT/"editor-export.json";exported.unlink(missing_ok=True)
+    choose_file(408,exported);wait(exported.exists)
+    assert json.loads(exported.read_text())==baseline
+    imported=json.loads(exported.read_text());imported["root"]["name"]="Imported tree"
+    import_path=OUT/"editor-import.json";import_path.write_text(json.dumps(imported))
+    choose_file(407,import_path);wait(lambda:text_at(window,201)=="Imported tree")
+    assert text_at(window,201)=="Imported tree" and json.loads(config_path.read_text())==baseline
+    click(window,405);assert text_at(window,201)==baseline["root"]["name"]
+    click(window,406);click(window,401);assert json.loads(config_path.read_text())==imported
+    click(window,405);click(window,401);assert json.loads(config_path.read_text())==baseline
+    bad=OUT/"bad-import.json";bad.write_text("{broken")
+    choose_file(407,bad);wait(lambda:"Invalid import" in text_at(window,214));assert json.loads(config_path.read_text())==baseline
+    screenshot(window,"friendly-editor.png")
+    mark("GUI export/import validates first, stays in the draft, and supports Undo/Redo")
+    select_item(0);set_text(window,201,"Unsaved pending name")
+    U.PostMessageW(window,0x111,402,0);wait(owned_dialog)
+    U.PostMessageW(owned_dialog(),0x111,7,0);wait(lambda:not owned_dialog());pause()
+    assert text_at(window,201)=="Unsaved pending name"
+    click(window,405);click(window,401);assert json.loads(config_path.read_text())==baseline
+    mark("Reload asks before discarding unapplied text and cancelling preserves it")
     click(window,404)
     wait(lambda:U.FindWindowW("Constellation.Profiles",None))
     profiles=U.FindWindowW("Constellation.Profiles",None)
@@ -385,6 +534,6 @@ try:
 finally:
     for proc in processes:
         if proc.poll() is None: proc.terminate();proc.wait(timeout=5)
-    if probe: U.DestroyWindow(probe)
+    if probe: U.PostMessageW(probe,0x10,0,0);probe_thread.join(timeout=5)
     U.SetCursorPos(old_cursor.x,old_cursor.y)
     if old_foreground: U.SetForegroundWindow(old_foreground)

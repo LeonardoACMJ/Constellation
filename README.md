@@ -24,3 +24,7 @@ The native application uses Rust, Serde, and direct Windows APIs for tray, input
 On a Windows desktop, run `python tests/native_smoke.py` after building to exercise input consumption, launch/cancellation, fullscreen pass-through, cursor restoration, and configuration saving in an isolated `.local` folder. It temporarily creates its own foreground test window and restores the cursor afterward. Pillow is optional for screenshots; no test opens a browser.
 
 Runtime configuration and other app-managed files belong beside the distributed executable. Build output and local runtime data are ignored by Git.
+
+The editor supports native file/folder pickers, dropped files, quoted argument fields, bounded undo/redo, and validated configuration import/export. Missing targets and layout overflow remain advisory.
+
+For repeatable large-tree measurements, run `cargo run --release --example stress` and `python tests/large_editor_smoke.py`. The first measures the portable core; the second measures a real native full-preview paint. The [personalization study](docs/PERSONALIZATION-STUDY.md) examines themes, custom colors/icons, and future application actions; these are proposals, not implemented settings.

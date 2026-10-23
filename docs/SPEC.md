@@ -177,6 +177,11 @@ The prototype switches to Previous/More sectors above its capacity thresholds; t
 | RUN-01 | Launch dispatch | Dispatch at most once per selection, including repeated input and later Hold release. Never dispatch a Constellation. |
 | RUN-02 | Missing or failed target | Report the failure without an automatic retry or elevated relaunch. Preserve configuration so the target can be fixed. |
 | DATA-05 | Editor separation | The configuration panel may run in a separate process. Closing it must leave shortcuts and launching usable. |
+| DATA-06 | Target selection | **Agreed capability:** provide file/folder pickers and drag-and-drop for creating Stars. **Initial implementation:** infer names/types; store in-folder paths relatively and external paths explicitly. |
+| DATA-07 | Friendly argument editing | **Agreed capability:** ordinary argument entry and clear validation. **Initial implementation:** double-quoted argument text maps to a string vector; unfinished quotes retain the edit and show an inline error. No shell expansion is implied. |
+| DATA-08 | Draft safety | **Agreed capability:** undo/redo and protection of unsaved edits when switching items. **Initial implementation:** apply valid fields before switching, retain invalid fields, and keep bounded session-only snapshot history. Save remains the persistence step. |
+| DATA-09 | Configuration transfer | **Agreed capability:** import/export. **Initial implementation:** validate before replacing the draft; imports are undoable and require Save. Exports contain configuration, not bundled targets/assets. Explicitly chosen export documents may be written to the user's selected destination; no background storage fallback is introduced. |
+| DATA-10 | Target advice | **Agreed capability:** warn about missing targets without preventing configuration. Availability can change after editing; dispatch errors remain governed by RUN-02. |
 
 ### 5.1 Portable folder
 
@@ -238,6 +243,7 @@ These describe acceptance criteria; the [verification record](VERIFICATION.md) s
 | A-12 | LAY-10–12, LAY-14 | Open Visualize mode with sibling and nested Constellations; verify all four spacing controls update the full fan-out preview. Deliberately overflow the work area and create narrow targets: a subdued inline warning appears, saving remains available, and no auto-fit or blocking prompt occurs. Preview must not dispatch a target launch. |
 | A-13 | FS-01–02, BIND-03 | With a fullscreen app foreground, invoke a configured binding and verify no overlay, cursor movement, focus takeover, delayed launch, or input suppression. After leaving fullscreen, invocation works normally. Enter fullscreen while the radial is open: it cancels without launch or cursor/focus takeover. |
 | A-14 | FX-01–05 | Hover through nested Constellations and sibling Stars: dots and lines follow the active parent/child path, with one chime per highlight transition and none on stationary redraws. Verify mute/volume, bounded rapid-note playback, and selection with no feedback-induced delay. |
+| A-15 | DATA-06–10 | Pick target/runner/folder paths; drop multiple kinds; preserve quoted and empty arguments. Switch with valid and invalid edits. Undo/redo changes after Save, delete a branch, and import valid/malformed files without losing the previous valid draft. Export a readable snapshot without silently bundling programs. |
 
 ## 8. Evidence & prototype boundary
 
@@ -246,3 +252,5 @@ A first Windows native preview now implements the main interaction, tray, config
 The product decisions in this draft come from this chat. The [shortcut research](shortcut-research.md) records documented conflicts. The [prototype notes](../prototype/README.md), [interaction implementation](../prototype/app.js), and [geometry](../prototype/geometry.mjs) document experiments; copied values are explicitly proposed above.
 
 The browser demonstrates overlapping navigation, selection modes, density paging, and centered menu opening. It simulates launches, receives input only while focused, and cannot center or restore the system cursor. Passing its checks does not validate native hotkeys, launching, cursor control, or performance.
+
+Customization research is kept separately in [PERSONALIZATION-STUDY.md](PERSONALIZATION-STUDY.md). Its proposed themes, icons/images, and compatible-program actions are not committed release requirements or implemented controls.

@@ -1,7 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use super::{audio::Chimes, editor, render, target, wide};
+use super::{audio::Chimes, editor, input::Worker, render, target, wide};
 use crate::{
-    config::{Binding, Config, Input, Mode},
+    config::{Binding, Config, Mode},
     engine::{Action, Engine},
     geometry::Point,
     storage,
@@ -15,23 +15,21 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
     System::{LibraryLoader::GetModuleHandleW, RemoteDesktop::*, Threading::*},
-    UI::{
-        Accessibility::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*,
-    },
+    UI::{HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
 };
 
 const TRAY: u32 = WM_APP + 1;
-const INVOKE: u32 = WM_APP + 2;
-const RELEASE: u32 = WM_APP + 3;
-const KEY_ACTION: u32 = WM_APP + 4;
-const FOREGROUND: u32 = WM_APP + 5;
-const POINTER_MOVE: u32 = WM_APP + 6;
-const CLICK: u32 = WM_APP + 7;
+pub(super) const INVOKE: u32 = WM_APP + 2;
+pub(super) const RELEASE: u32 = WM_APP + 3;
+pub(super) const KEY_ACTION: u32 = WM_APP + 4;
+pub(super) const FOREGROUND: u32 = WM_APP + 5;
+pub(super) const POINTER_MOVE: u32 = WM_APP + 6;
+pub(super) const CLICK: u32 = WM_APP + 7;
 pub(super) const RELOAD_CONFIG: u32 = WM_APP + 8;
 const TRAY_CONFIG: usize = 1;
 const TRAY_PAUSE: usize = 2;
 const TRAY_QUIT: usize = 3;
-fn pack_point(p: POINT) -> LPARAM {
+pub(super) fn pack_point(p: POINT) -> LPARAM {
     ((p.x as u32 as u64) | ((p.y as u32 as u64) << 32)) as LPARAM
 }
 fn unpack_point(l: LPARAM) -> POINT {
@@ -40,7 +38,7 @@ fn unpack_point(l: LPARAM) -> POINT {
         y: ((l as u64) >> 32) as u32 as i32,
     }
 }
-unsafe fn pointer_packet() -> LPARAM {
+pub(super) unsafe fn pointer_packet() -> LPARAM {
     let mut p: POINT = zeroed();
     GetCursorPos(&mut p);
     pack_point(p)
@@ -51,7 +49,6 @@ struct Runtime {
     root: PathBuf,
     config: Config,
     bindings: Vec<Binding>,
-    registered: Vec<bool>,
     engine: Engine,
     paused: bool,
     session_blocked: bool,
@@ -61,12 +58,8 @@ struct Runtime {
     origin: Point,
     scale: f64,
     saved: POINT,
-    keyboard: HHOOK,
-    mouse: HHOOK,
-    foreground_hook: HWINEVENTHOOK,
-    location_hook: HWINEVENTHOOK,
+    input: Option<Worker>,
     chimes: Chimes,
-    foreground_pending: bool,
     smoke: bool,
     smoke_phase: usize,
     smoke_opened: bool,
@@ -74,31 +67,6 @@ struct Runtime {
     reload_requested: bool,
 }
 static mut APP: *mut Runtime = null_mut();
-static mut RESIDENT_WINDOW: HWND = null_mut();
-struct HookState {
-    hwnd: HWND,
-    bindings: Vec<Binding>,
-    modes: Vec<Mode>,
-    registered: Vec<bool>,
-    keys: [bool; 256],
-    eaten: [bool; 256],
-    mouse_eaten: [bool; 6],
-    active: Option<usize>,
-    enabled: bool,
-}
-static mut HOOKS: *mut HookState = null_mut();
-thread_local! { static IN_HOOK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
-struct HookGuard;
-impl HookGuard {
-    fn enter() -> Option<Self> {
-        IN_HOOK.with(|v| if v.replace(true) { None } else { Some(Self) })
-    }
-}
-impl Drop for HookGuard {
-    fn drop(&mut self) {
-        IN_HOOK.with(|v| v.set(false));
-    }
-}
 
 pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
     unsafe {
@@ -160,7 +128,6 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             root,
             config,
             bindings,
-            registered: vec![],
             engine: Engine::default(),
             paused: false,
             session_blocked: false,
@@ -170,12 +137,8 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             origin: Point::default(),
             scale: 1.,
             saved: zeroed(),
-            keyboard: null_mut(),
-            mouse: null_mut(),
-            foreground_hook: null_mut(),
-            location_hook: null_mut(),
+            input: None,
             chimes: Chimes::default(),
-            foreground_pending: false,
             smoke,
             smoke_phase: 0,
             smoke_opened: false,
@@ -183,48 +146,19 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             reload_requested: false,
         });
         APP = Box::into_raw(app);
-        RESIDENT_WINDOW = hwnd;
         let startup_guard = super::DispatchGuard::enter().expect("resident startup dispatch");
         let a = &mut *APP;
-        let mut keys = [false; 256];
-        for (vk, key) in keys.iter_mut().enumerate() {
-            *key = GetAsyncKeyState(vk as i32) < 0;
-        }
-        HOOKS = Box::into_raw(Box::new(HookState {
+        match Worker::start(
             hwnd,
-            bindings: a.bindings.clone(),
-            modes: a.config.profiles.iter().map(|p| p.mode).collect(),
-            registered: vec![],
-            keys,
-            eaten: [false; 256],
-            mouse_eaten: [false; 6],
-            active: None,
-            enabled: false,
-        }));
-        a.keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0);
-        a.mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0);
-        if a.keyboard.is_null() || a.mouse.is_null() {
-            cleanup();
-            return Err("Windows input hooks could not be installed".into());
+            a.bindings.clone(),
+            a.config.profiles.iter().map(|p| p.mode).collect(),
+        ) {
+            Ok(input) => a.input = Some(input),
+            Err(e) => {
+                cleanup();
+                return Err(e);
+            }
         }
-        a.foreground_hook = SetWinEventHook(
-            EVENT_SYSTEM_FOREGROUND,
-            EVENT_SYSTEM_FOREGROUND,
-            null_mut(),
-            Some(foreground_event),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-        );
-        a.location_hook = SetWinEventHook(
-            EVENT_OBJECT_LOCATIONCHANGE,
-            EVENT_OBJECT_LOCATIONCHANGE,
-            null_mut(),
-            Some(foreground_event),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-        );
         if !add_tray(hwnd) {
             cleanup();
             return Err("Could not add Constellation to the notification area".into());
@@ -275,36 +209,17 @@ unsafe fn cleanup() {
     let mut a = Box::from_raw(APP);
     APP = null_mut();
     a.dismiss(true);
-    for i in 0..a.registered.len() {
-        UnregisterHotKey(a.hwnd, i as i32 + 100);
-    }
-    if !a.keyboard.is_null() {
-        UnhookWindowsHookEx(a.keyboard);
-    }
-    if !a.mouse.is_null() {
-        UnhookWindowsHookEx(a.mouse);
-    }
-    if !HOOKS.is_null() {
-        drop(Box::from_raw(HOOKS));
-        HOOKS = null_mut();
-    }
-    if !a.foreground_hook.is_null() {
-        UnhookWinEvent(a.foreground_hook);
-    }
-    if !a.location_hook.is_null() {
-        UnhookWinEvent(a.location_hook);
-    }
+    drop(a.input.take());
     if a.session_notifications {
         WTSUnRegisterSessionNotification(a.hwnd);
     }
     DestroyWindow(a.hwnd);
     ReleaseMutex(a.instance);
     CloseHandle(a.instance);
-    RESIDENT_WINDOW = null_mut();
 }
 
 /// Yield input to fullscreen applications and the shortcut-profile editor.
-unsafe fn foreground_blocks_launcher(overlay: HWND) -> bool {
+pub(super) unsafe fn foreground_blocks_launcher(overlay: HWND) -> bool {
     let hwnd = GetForegroundWindow();
     if hwnd.is_null() || hwnd == overlay || IsIconic(hwnd) != 0 {
         return false;
@@ -337,55 +252,13 @@ unsafe fn foreground_blocks_launcher(overlay: HWND) -> bool {
 }
 
 impl Runtime {
-    unsafe fn sync_hooks(&self, enabled: bool) {
-        if HOOKS.is_null() {
-            return;
-        }
-        let h = &mut *HOOKS;
-        h.bindings = self.bindings.clone();
-        h.modes = self.config.profiles.iter().map(|p| p.mode).collect();
-        h.registered = self.registered.clone();
-        h.enabled = enabled;
-    }
     unsafe fn refresh_registration(&mut self) {
-        if !HOOKS.is_null() {
-            (*HOOKS).enabled = false;
-        }
-        for i in 0..self.registered.len() {
-            if self.registered[i] {
-                UnregisterHotKey(self.hwnd, i as i32 + 100);
-            }
-        }
-        self.registered = vec![false; self.bindings.len()];
-        if self.paused
-            || self.session_blocked
-            || self.sleeping
-            || foreground_blocks_launcher(self.hwnd)
-        {
-            return;
-        }
-        let mut failures = vec![];
-        for (i, b) in self.bindings.iter().enumerate() {
-            if let Input::Key(vk) = b.key {
-                let modifiers = (if b.ctrl { MOD_CONTROL } else { 0 })
-                    | (if b.shift { MOD_SHIFT } else { 0 })
-                    | (if b.alt { MOD_ALT } else { 0 })
-                    | MOD_NOREPEAT;
-                if RegisterHotKey(self.hwnd, i as i32 + 100, modifiers, vk as u32) != 0 {
-                    self.registered[i] = true
-                } else {
-                    failures.push(self.config.profiles[i].binding.clone());
-                }
-            } else {
-                self.registered[i] = true;
-            }
-        }
-        self.sync_hooks(true);
-        if !failures.is_empty() {
-            self.notice(&format!(
-                "Unavailable global bindings: {}. Other profiles remain usable.",
-                failures.join(", ")
-            ));
+        if let Some(input) = &self.input {
+            input.configure(
+                self.bindings.clone(),
+                self.config.profiles.iter().map(|p| p.mode).collect(),
+                !self.paused && !self.session_blocked && !self.sleeping,
+            );
         }
     }
     unsafe fn notice(&self, s: &str) {
@@ -413,6 +286,7 @@ impl Runtime {
                     .map(|p| Binding::parse(&p.binding).expect("validated binding"))
                     .collect();
                 self.config = c;
+                self.resync_input();
                 self.refresh_registration();
                 self.reload_requested = false;
             }
@@ -421,8 +295,8 @@ impl Runtime {
     }
     unsafe fn open(&mut self, i: usize) {
         self.open_inner(i);
-        if !HOOKS.is_null() {
-            (*HOOKS).active = self.engine.profile;
+        if let Some(input) = &self.input {
+            input.active(self.engine.profile);
         }
     }
     unsafe fn open_inner(&mut self, mut i: usize) {
@@ -538,14 +412,13 @@ impl Runtime {
         }
     }
     unsafe fn cancel_packets(&mut self) {
-        if !HOOKS.is_null() {
-            (*HOOKS).active = None;
+        if let Some(input) = &self.input {
+            input.active(None);
         }
         // Drop queued invocation/selection packets from the cancelled gesture.
         // In particular, a late Hold release must never select from a later menu.
         let mut stale: MSG = zeroed();
         while PeekMessageW(&mut stale, self.hwnd, INVOKE, CLICK, PM_REMOVE) != 0 {}
-        self.foreground_pending = false;
     }
     unsafe fn pointer_at(&mut self, mut p: POINT) {
         if self.engine.profile.is_none() {
@@ -603,17 +476,8 @@ impl Runtime {
         true
     }
     unsafe fn resync_input(&mut self) {
-        let mut keys = [false; 256];
-        for (vk, key) in keys.iter_mut().enumerate() {
-            *key = GetAsyncKeyState(vk as i32) < 0;
-        }
-        let h = &mut *HOOKS;
-        h.keys = keys;
-        for (vk, key) in keys.iter().enumerate() {
-            h.eaten[vk] &= *key;
-        }
-        for (button, vk) in [(1, 1), (2, 2), (3, 4), (4, 5), (5, 6)] {
-            h.mouse_eaten[button] &= keys[vk];
+        if let Some(input) = &self.input {
+            input.resync();
         }
     }
     unsafe fn configure(&mut self) {
@@ -621,195 +485,6 @@ impl Runtime {
         if let Err(e) = editor::spawn() {
             self.notice(&e);
         }
-    }
-}
-
-unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code < 0 || HOOKS.is_null() {
-        return CallNextHookEx(null_mut(), code, w, l);
-    }
-    let Some(_guard) = HookGuard::enter() else {
-        return CallNextHookEx(null_mut(), code, w, l);
-    };
-    let a = &mut *HOOKS;
-    let e = &*(l as *const KBDLLHOOKSTRUCT);
-    let vk = e.vkCode as usize;
-    if vk >= 256 {
-        return CallNextHookEx(null_mut(), code, w, l);
-    }
-    let down = matches!(w as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
-    let up = matches!(w as u32, WM_KEYUP | WM_SYSKEYUP);
-    if !down && !up {
-        return CallNextHookEx(null_mut(), code, w, l);
-    }
-    let repeat = down && a.keys[vk];
-    a.keys[vk] = down;
-    if matches!(vk, 0xa2 | 0xa3) {
-        a.keys[0x11] = a.keys[0xa2] || a.keys[0xa3];
-    }
-    if matches!(vk, 0xa0 | 0xa1) {
-        a.keys[0x10] = a.keys[0xa0] || a.keys[0xa1];
-    }
-    if matches!(vk, 0xa4 | 0xa5) {
-        a.keys[0x12] = a.keys[0xa4] || a.keys[0xa5];
-    }
-    let active = a.active;
-    if up {
-        if let Some(i) = active {
-            if a.modes.get(i) == Some(&Mode::Hold) && a.bindings[i].requires(Input::Key(vk as u16))
-            {
-                PostMessageW(a.hwnd, RELEASE, i, pointer_packet());
-            }
-        }
-        let consumed = a.eaten[vk];
-        a.eaten[vk] = false;
-        return if consumed {
-            1
-        } else {
-            CallNextHookEx(null_mut(), code, w, l)
-        };
-    }
-    if a.eaten[vk] {
-        return 1;
-    }
-    let ctrl = a.keys[0x11];
-    let shift = a.keys[0x10];
-    let alt = a.keys[0x12];
-    let profile = a
-        .bindings
-        .iter()
-        .enumerate()
-        .find(|(i, b)| {
-            a.registered.get(*i) == Some(&true)
-                && b.key == Input::Key(vk as u16)
-                && b.ctrl == ctrl
-                && b.shift == shift
-                && b.alt == alt
-                && !a.keys[0x5b]
-                && !a.keys[0x5c]
-        })
-        .map(|(i, _)| i);
-    if let Some(i) = profile {
-        if !a.enabled || foreground_blocks_launcher(a.hwnd) {
-            PostMessageW(a.hwnd, FOREGROUND, 0, 0);
-            return CallNextHookEx(null_mut(), code, w, l);
-        }
-        a.eaten[vk] = true;
-        if !repeat {
-            if active.is_none() {
-                a.active = Some(i);
-                PostMessageW(a.hwnd, INVOKE, i, 0);
-            } else if active == Some(i) && a.modes[i] == Mode::Click {
-                PostMessageW(a.hwnd, INVOKE, i, 0);
-            }
-        }
-        return 1;
-    }
-    if active.is_some() && !repeat && matches!(vk, 0x1b | 0x20 | 0x08) {
-        a.eaten[vk] = true;
-        PostMessageW(a.hwnd, KEY_ACTION, vk, pointer_packet());
-        return 1;
-    }
-    CallNextHookEx(null_mut(), code, w, l)
-}
-
-unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code < 0 || HOOKS.is_null() {
-        return CallNextHookEx(null_mut(), code, w, l);
-    }
-    let Some(_guard) = HookGuard::enter() else {
-        return CallNextHookEx(null_mut(), code, w, l);
-    };
-    let a = &mut *HOOKS;
-    let e = &*(l as *const MSLLHOOKSTRUCT);
-    let msg = w as u32;
-    if msg == WM_MOUSEMOVE {
-        if a.active.is_some() {
-            PostMessageW(a.hwnd, POINTER_MOVE, 0, pack_point(e.pt));
-        }
-        return CallNextHookEx(null_mut(), code, w, l);
-    }
-    let (button, down) = match msg {
-        WM_LBUTTONDOWN => (1, true),
-        WM_LBUTTONUP => (1, false),
-        WM_RBUTTONDOWN => (2, true),
-        WM_RBUTTONUP => (2, false),
-        WM_MBUTTONDOWN => (3, true),
-        WM_MBUTTONUP => (3, false),
-        WM_XBUTTONDOWN | WM_XBUTTONUP => (
-            (if e.mouseData >> 16 == 1 { 4 } else { 5 }),
-            msg == WM_XBUTTONDOWN,
-        ),
-        _ => return CallNextHookEx(null_mut(), code, w, l),
-    };
-    let active = a.active;
-    if !down {
-        if let Some(i) = active {
-            if a.modes[i] == Mode::Hold && a.bindings[i].key == Input::Mouse(button) {
-                PostMessageW(a.hwnd, RELEASE, i, pack_point(e.pt));
-            }
-        }
-        let consumed = a.mouse_eaten[button as usize];
-        a.mouse_eaten[button as usize] = false;
-        return if consumed {
-            1
-        } else {
-            CallNextHookEx(null_mut(), code, w, l)
-        };
-    }
-    if !a.enabled || foreground_blocks_launcher(a.hwnd) {
-        if active.is_some() {
-            PostMessageW(a.hwnd, FOREGROUND, 0, 0);
-        }
-        return CallNextHookEx(null_mut(), code, w, l);
-    }
-    if let Some(i) = a
-        .bindings
-        .iter()
-        .enumerate()
-        .find(|(_, b)| b.key == Input::Mouse(button))
-        .map(|(i, _)| i)
-    {
-        a.mouse_eaten[button as usize] = true;
-        if active.is_none() {
-            a.active = Some(i);
-            PostMessageW(a.hwnd, INVOKE, i, 0);
-        } else if active == Some(i) && a.modes[i] == Mode::Click {
-            PostMessageW(a.hwnd, INVOKE, i, 0);
-        }
-        return 1;
-    }
-    if active.is_some() && matches!(button, 1 | 2) {
-        a.mouse_eaten[button as usize] = true;
-        PostMessageW(a.hwnd, CLICK, button as usize, pack_point(e.pt));
-        return 1;
-    }
-    CallNextHookEx(null_mut(), code, w, l)
-}
-
-unsafe extern "system" fn foreground_event(
-    _: HWINEVENTHOOK,
-    event: u32,
-    hwnd: HWND,
-    object: i32,
-    _: i32,
-    _: u32,
-    _: u32,
-) {
-    if APP.is_null() {
-        return;
-    }
-    let Some(_guard) = super::DispatchGuard::enter() else {
-        PostMessageW(RESIDENT_WINDOW, FOREGROUND, 0, 0);
-        return;
-    };
-    let a = &mut *APP;
-    if event == EVENT_OBJECT_LOCATIONCHANGE && (hwnd != GetForegroundWindow() || object != 0) {
-        return;
-    }
-    if !a.foreground_pending {
-        a.foreground_pending = true;
-        PostMessageW(a.hwnd, FOREGROUND, 0, 0);
     }
 }
 
@@ -833,6 +508,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 | KEY_ACTION
                 | CLICK
                 | POINTER_MOVE
+                | super::input::ERROR
         ) {
             // Native interruption payloads are not retained; input packets are
             // owned integer coordinates. Never queue an OS-owned RECT pointer.
@@ -855,6 +531,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         return 0;
     }
     match msg {
+        super::input::ERROR => {
+            let message = Box::from_raw(l as *mut String);
+            a.notice(&message);
+            0
+        }
         RELOAD_CONFIG => {
             if a.engine.profile.is_some() {
                 a.reload_requested = true;
@@ -967,13 +648,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         FOREGROUND => {
-            a.foreground_pending = false;
             let full = foreground_blocks_launcher(hwnd);
             if a.engine.profile.is_some() && (full || GetForegroundWindow() != hwnd) {
                 a.dismiss(!full);
-            }
-            if a.engine.profile.is_none() {
-                a.refresh_registration();
             }
             0
         }
@@ -1114,8 +791,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                         "overlay_opened={}\ncursor_restored={}\nkeyboard_hook={}\nmouse_hook={}\n",
                         a.smoke_opened,
                         cursor.x == a.saved.x && cursor.y == a.saved.y,
-                        !a.keyboard.is_null(),
-                        !a.mouse.is_null()
+                        a.input.is_some(),
+                        a.input.is_some()
                     );
                     let _ = std::fs::write(a.root.join("data/smoke-test.txt"), report);
                     PostQuitMessage(0);
