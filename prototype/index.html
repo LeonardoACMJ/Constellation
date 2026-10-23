@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Constellation · Interaction lab</title>
+<link rel="stylesheet" href="style.css">
+<body>
+<header><a class="brand" href="#">✧ <span>CONSTELLATION</span></a><span class="pill">INTERACTION LAB / 01</span><span class="local">● LOCAL PROTOTYPE</span></header>
+<main>
+<aside>
+ <div class="eyebrow">A LITTLE UNIVERSE, WITHIN REACH</div><h1>Follow<br>your stars<span>.</span></h1><p class="intro">One gesture to open. A constellation of paths to explore.</p>
+ <section><div class="section-title">01 / INVOCATION</div><div id="profiles"></div><button id="addProfile" class="quiet">+ Add shortcut</button><p class="hint">Shortcuts work inside this focused page. Click a binding to record keys or a mouse button.</p></section>
+ <section><div class="section-title">02 / SHAPE & FEEL</div><label class="range-label">Radial size <output id="sizeValue">144 px</output></label><input id="radius" type="range" min="100" max="190" value="144"><label class="range-label">Hover delay <output id="delayValue">60 ms</output></label><input id="delay" type="range" min="0" max="400" step="20" value="60"><label class="check"><input id="edges" type="checkbox" checked> Keep branches inside the canvas</label></section>
+ <details><summary>03 / ADD TO YOUR UNIVERSE</summary><form id="addItem"><label>Name<input id="itemName" maxlength="28" required placeholder="My new star"></label><label>Kind<select id="kind"><option value="star">Star · launch target</option><option value="folder">Constellation · folder</option></select></label><label>Inside<select id="parent"></select></label><button class="quiet" type="submit">+ Add item</button></form><button id="stress" class="quiet">Add 12 stars to the root</button></details>
+ <button id="reset" class="text-button">Reset this experiment</button>
+</aside>
+<article>
+ <div class="canvas-heading"><div><span class="eyebrow">THE PLAYGROUND</span><h2>Point. Explore. Launch.</h2></div><button id="open" class="primary">✧ Open radial</button></div>
+ <div id="stage" tabindex="0" aria-label="Radial interaction playground">
+  <div class="grid"></div><div id="empty"><span class="orbit">✧</span><h3>Your universe starts here.</h3><p>Press a shortcut to open at the center.<br>Or use “Open radial” to explore.</p><div class="keys">ESC to dismiss <span>·</span> SPACE to launch a hovered star</div></div>
+  <svg id="radial" role="group" aria-label="Launcher radial"></svg><div id="crumb">ROOT CONSTELLATION</div><div id="status" role="status" aria-live="polite">Ready to explore</div>
+ </div>
+ <footer><span><i class="dot folder"></i> Constellation <i class="dot star"></i> Star</span><span id="metrics">6 items · 3 levels to explore</span></footer>
+ <div class="notes"><div><b>Overlapping branches</b><p>Child fans begin halfway along their parent. Retrace your path to switch branches.</p></div><div><b>Centered opening</b><p>The radial opens in the middle of this canvas. Cursor centering and restoration require the native app; browser launches are simulated.</p></div></div>
+</article>
+</main>
+<script type="module" src="app.js"></script>
+</body></html>

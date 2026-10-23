@@ -1,0 +1,8 @@
+/target/
+/portable/
+/dist/
+/.local/
+/data/
+*.log
+*.tmp
+*.bak
