@@ -152,6 +152,7 @@ mod render_tests {
                     |p| GdipDeleteStringFormat(p),
                 )
                 .unwrap();
+                status(GdipSetStringFormatFlags(format.pointer, 0)).unwrap();
                 let area = RectF {
                     X: 0.,
                     Y: 0.,
