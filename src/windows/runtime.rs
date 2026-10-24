@@ -444,8 +444,7 @@ impl Runtime {
         }
         // Drop queued invocation/selection packets from the cancelled gesture.
         // In particular, a late Hold release must never select from a later menu.
-        let mut stale: MSG = zeroed();
-        while PeekMessageW(&mut stale, self.hwnd, INVOKE, CLICK, PM_REMOVE) != 0 {}
+        discard_gesture_packets(self.hwnd);
     }
     unsafe fn pointer_at(&mut self, mut p: POINT) {
         if self.engine.profile.is_none() {
@@ -837,5 +836,68 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         _ => DefWindowProcW(hwnd, msg, w, l),
+    }
+}
+
+// PeekMessage returns WM_QUIT even when it falls outside the requested filter.
+// Foreground/cancel notifications queued by the tray menu may reach this drain
+// before GetMessage sees Quit. Preserve it for the outer loop instead of eating it.
+unsafe fn discard_gesture_packets(hwnd: HWND) {
+    let mut stale: MSG = zeroed();
+    while PeekMessageW(&mut stale, hwnd, INVOKE, CLICK, PM_REMOVE) != 0 {
+        if stale.message == WM_QUIT {
+            PostQuitMessage(stale.wParam as i32);
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Each test owns a fresh thread queue. No windows, hooks, input or audio.
+    #[test]
+    fn gesture_drain_preserves_quit_and_exit_code() {
+        std::thread::spawn(|| unsafe {
+            let mut message: MSG = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            assert_ne!(PostThreadMessageW(GetCurrentThreadId(), INVOKE, 0, 0), 0);
+            PostQuitMessage(37);
+            discard_gesture_packets(null_mut());
+            // Check before blocking so a regression fails instead of hanging.
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE), 0);
+            assert_eq!(message.message, WM_QUIT);
+            assert_eq!(GetMessageW(&mut message, null_mut(), 0, 0), 0);
+            assert_eq!(message.message, WM_QUIT);
+            assert_eq!(message.wParam, 37);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn gesture_drain_removes_packets_but_keeps_other_notifications() {
+        std::thread::spawn(|| unsafe {
+            let mut message: MSG = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            for kind in [
+                INVOKE,
+                RELEASE,
+                KEY_ACTION,
+                FOREGROUND,
+                POINTER_MOVE,
+                CLICK,
+                RELOAD_CONFIG,
+            ] {
+                assert_ne!(PostThreadMessageW(GetCurrentThreadId(), kind, 0, 0), 0);
+            }
+            discard_gesture_packets(null_mut());
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            assert_eq!(message.message, RELOAD_CONFIG);
+            assert_eq!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+        })
+        .join()
+        .unwrap();
     }
 }

@@ -4,6 +4,8 @@
 
 ## Current revision and manual review
 
+Version **0.1.2** preserves `WM_QUIT` while discarding stale gesture packets. Windows returns this message even outside the requested filter; a cancellation/foreground notification after the tray menu could previously discard it. Two isolated-thread Windows message-queue regression tests pass: Quit/exit-code preservation and packet removal without losing unrelated notifications. These checks create no windows, hooks, input or sound. Actual tray-menu interaction and restart remain manual checks.
+
 Version **0.1.1** addresses the reported scrolling artifacts and crunchy audio. The final buffer copy now restores its drawing origin; controls and panels use one absolute responsive layout; unused scrollbars are removed. Audio uses 48 kHz PCM, four reusable 10 ms buffers, a short idle-device grace period, and linear mixing until the near-clip safety knee instead of compressing every sample.
 
 **Current checks:** release compilation and eight headless regression checks passed (three layout checks and five feedback checks). They cover scrollbar thresholds/interdependence, larger preview/list sizing, stable control geometry/dropdown heights, linear overlapping tails, output chunk continuity, voice saturation, profile migration and extended targeting. No windows, cursor/input injection or sound playback occurred in these checks. Native playback quality, driver scheduling, visible scrolling and maximized presentation still need the [manual checklist](MANUAL-CHECKS.md).
