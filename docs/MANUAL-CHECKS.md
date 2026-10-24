@@ -1,15 +1,16 @@
-# Constellation 0.1.8 — manual checks
+# Constellation 0.1.9 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.8**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.9**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
 | Check | Steps | Expected |
 |---|---|---|
+| Tray menu responsiveness | Open the tray menu with right-click, dismiss with Escape and with an outside click, then reopen. Try Pause/resume, Configure and Quit. | No prolonged input blackout; the menu dismisses normally, Pause/resume works, opening Configure restores shortcut availability after dismissal, and Quit exits. Ctrl+Q while the menu is open must not open a second overlay or steal its focus. |
 | Tray Quit | Close Configure, right-click the tray icon → Quit. Check Task Manager, then start the same executable again and try Ctrl+Q. Repeat Quit after using the radial. | Resident exits, tray icon disappears, shortcut stops intercepting input; restarting succeeds without an already-running warning. |
 | Editor scrolling | Make the editor short enough to scroll. Wheel up/down slowly, then quickly; drag the vertical/horizontal scrollbars. | No whole-form flash, overlapping/duplicated fields or preview-header jumps; the painted panel outlines move with their contents. Resize small → maximize → restore and repeat. |
 | Isolate first-restore click pause | Start a fresh Configure session. Quit the tray process while leaving Configure open, then maximize → restore once. Compare against a fresh session with the tray active. | Report whether the pause needs the tray process. Pointer smoothness alone does not distinguish slow input delivery from mouse capture. |

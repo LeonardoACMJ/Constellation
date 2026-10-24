@@ -17,9 +17,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked
       - run: cargo fmt --all --check
-      - name: Hidden native dialog close regression
+      - name: Native menu and dialog regressions
         if: runner.os == 'Windows'
-        run: cargo test --lib lifecycle_tests --locked -- --ignored
+        timeout-minutes: 2
+        run: |
+          cargo test --lib lifecycle_tests --locked -- --ignored
+          cargo test --lib native_modal_tests --locked -- --ignored
       - name: Build Windows portable binary
         if: runner.os == 'Windows'
         run: cargo build --release --locked

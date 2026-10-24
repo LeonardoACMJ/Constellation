@@ -9,9 +9,61 @@ mod render;
 mod runtime;
 mod target;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr::null_mut};
-thread_local! { static DISPATCHING: Cell<bool> = const { Cell::new(false) }; }
+#[derive(Clone, Copy)]
+struct DeferredMessage {
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    w: usize,
+    l: isize,
+}
+thread_local! {
+    static DISPATCHING: Cell<bool> = const { Cell::new(false) };
+    static DEFERRED: RefCell<Vec<DeferredMessage>> = const { RefCell::new(Vec::new()) };
+}
+/// Retain reentrant work until the owner releases its mutable state. Posting it
+/// immediately lets a native modal loop retrieve and re-post it indefinitely.
+pub(super) unsafe fn defer_message(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    w: usize,
+    l: isize,
+) {
+    let message = DeferredMessage { hwnd, msg, w, l };
+    if DISPATCHING.with(Cell::get) {
+        DEFERRED.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            // Only coalesce replaceable state notifications, never commands,
+            // selection packets or messages owning heap/native payloads.
+            if matches!(msg, WM_SIZE | runtime::POINTER_MOVE | runtime::FOREGROUND) {
+                if let Some(last) = pending.last_mut() {
+                    if last.hwnd == hwnd && last.msg == msg {
+                        *last = message;
+                        return;
+                    }
+                }
+            }
+            pending.push(message);
+        });
+    } else {
+        unsafe {
+            publish_deferred(message);
+        }
+    }
+}
+unsafe fn publish_deferred(message: DeferredMessage) {
+    unsafe {
+        if PostMessageW(message.hwnd, message.msg, message.w, message.l) == 0 {
+            // The window can disappear while its owner is inside a dialog.
+            if message.msg == input::ERROR && message.l != 0 {
+                drop(Box::from_raw(message.l as *mut String));
+            } else if message.msg == WM_DROPFILES && message.w != 0 {
+                windows_sys::Win32::UI::Shell::DragFinish(message.w as _);
+            }
+        }
+    }
+}
 // Win32 synchronously reenters window procedures during window/control changes.
 // Prevent overlapping mutable borrows of the thread-owned native state.
 pub(super) struct DispatchGuard;
@@ -23,6 +75,12 @@ impl DispatchGuard {
 impl Drop for DispatchGuard {
     fn drop(&mut self) {
         DISPATCHING.with(|v| v.set(false));
+        let pending = DEFERRED.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+        for message in pending {
+            unsafe {
+                publish_deferred(message);
+            }
+        }
     }
 }
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -39,34 +97,21 @@ pub(super) unsafe fn defer_nested_close(
         return false;
     }
     unsafe {
-        PostMessageW(hwnd, WM_CLOSE, w, l);
+        defer_message(hwnd, WM_CLOSE, w, l);
     }
     true
 }
 
-// Used only when the user explicitly invokes the launcher or opens an owned
-// configuration window. Never retain an attachment to another input queue.
+// Request focus using normal Windows rules. Never attach input queues to
+// another application: a blocked foreground thread must not couple our input.
 pub unsafe fn focus_window(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
-    use windows_sys::Win32::{
-        System::Threading::{AttachThreadInput, GetCurrentThreadId},
-        UI::Input::KeyboardAndMouse::SetFocus,
-    };
     unsafe {
         SetForegroundWindow(hwnd);
         if GetForegroundWindow() != hwnd {
-            let foreground_thread =
-                GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
-            let ours = GetCurrentThreadId();
-            if foreground_thread != 0
-                && foreground_thread != ours
-                && AttachThreadInput(ours, foreground_thread, 1) != 0
-            {
-                SetForegroundWindow(hwnd);
-                SetFocus(hwnd);
-                AttachThreadInput(ours, foreground_thread, 0);
-            }
+            return false;
         }
-        GetForegroundWindow() == hwnd
+        windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(hwnd);
+        true
     }
 }
 
@@ -108,5 +153,87 @@ pub fn run() -> Result<(), String> {
         editor::run(root)
     } else {
         runtime::run(root, args.iter().any(|a| a == "--smoke-test"))
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+    use std::mem::zeroed;
+    #[test]
+    fn modal_reentry_does_not_feed_its_own_message_queue() {
+        std::thread::spawn(|| unsafe {
+            let mut message = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            let outer = DispatchGuard::enter().unwrap();
+            assert!(DispatchGuard::enter().is_none());
+            defer_message(null_mut(), WM_APP + 100, 7, 9);
+            // A nested native loop must have nothing to retrieve/re-defer.
+            for _ in 0..100 {
+                assert_eq!(
+                    PeekMessageW(
+                        &mut message,
+                        null_mut(),
+                        WM_APP + 100,
+                        WM_APP + 100,
+                        PM_REMOVE
+                    ),
+                    0
+                );
+            }
+            drop(outer);
+            assert_ne!(
+                PeekMessageW(
+                    &mut message,
+                    null_mut(),
+                    WM_APP + 100,
+                    WM_APP + 100,
+                    PM_REMOVE
+                ),
+                0
+            );
+            assert_eq!((message.wParam, message.lParam), (7, 9));
+            assert_eq!(
+                PeekMessageW(
+                    &mut message,
+                    null_mut(),
+                    WM_APP + 100,
+                    WM_APP + 100,
+                    PM_REMOVE
+                ),
+                0
+            );
+        })
+        .join()
+        .unwrap();
+    }
+    #[test]
+    fn deferred_state_bursts_are_coalesced_without_losing_commands() {
+        std::thread::spawn(|| unsafe {
+            let mut message = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            let outer = DispatchGuard::enter().unwrap();
+            for value in 0..1000 {
+                defer_message(null_mut(), WM_SIZE, 0, value);
+            }
+            defer_message(null_mut(), WM_COMMAND, 401, 1);
+            defer_message(null_mut(), WM_COMMAND, 401, 2);
+            assert_eq!(DEFERRED.with(|pending| pending.borrow().len()), 3);
+            drop(outer);
+            let mut observed = vec![];
+            while PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                observed.push((message.message, message.wParam, message.lParam));
+            }
+            assert_eq!(
+                observed,
+                vec![
+                    (WM_SIZE, 0, 999),
+                    (WM_COMMAND, 401, 1),
+                    (WM_COMMAND, 401, 2)
+                ]
+            );
+        })
+        .join()
+        .unwrap();
     }
 }

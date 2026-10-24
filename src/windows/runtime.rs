@@ -26,6 +26,9 @@ pub(super) const FOREGROUND: u32 = WM_APP + 5;
 pub(super) const POINTER_MOVE: u32 = WM_APP + 6;
 pub(super) const CLICK: u32 = WM_APP + 7;
 pub(super) const RELOAD_CONFIG: u32 = WM_APP + 8;
+const TRAY_MENU_DONE: u32 = WM_APP + 9;
+const DEFERRED_DPI_CHANGE: u32 = WM_APP + 10;
+const DEFERRED_POWER_CHANGE: u32 = WM_APP + 11;
 const TRAY_CONFIG: usize = 1;
 const TRAY_PAUSE: usize = 2;
 const TRAY_QUIT: usize = 3;
@@ -51,6 +54,7 @@ struct Runtime {
     bindings: Vec<Binding>,
     engine: Engine,
     paused: bool,
+    menu_open: bool,
     session_blocked: bool,
     sleeping: bool,
     session_notifications: bool,
@@ -131,6 +135,7 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             bindings,
             engine: Engine::default(),
             paused: false,
+            menu_open: false,
             session_blocked: false,
             sleeping: false,
             session_notifications: false,
@@ -259,7 +264,7 @@ impl Runtime {
             input.configure(
                 self.bindings.clone(),
                 self.config.profiles.iter().map(|p| p.mode).collect(),
-                !self.paused && !self.session_blocked && !self.sleeping,
+                !self.paused && !self.session_blocked && !self.sleeping && !self.menu_open,
             );
         }
     }
@@ -303,6 +308,7 @@ impl Runtime {
     }
     unsafe fn open_inner(&mut self, mut i: usize) {
         if self.paused
+            || self.menu_open
             || self.session_blocked
             || self.sleeping
             || foreground_blocks_launcher(self.hwnd)
@@ -514,45 +520,122 @@ impl Runtime {
     }
 }
 
+unsafe fn show_tray_menu(hwnd: HWND, w: WPARAM, l: LPARAM) -> LRESULT {
+    let Some(guard) = super::DispatchGuard::enter() else {
+        super::defer_message(hwnd, TRAY, w, l);
+        return 0;
+    };
+    if APP.is_null() || (*APP).menu_open {
+        return 0;
+    }
+    let paused = {
+        let a = &mut *APP;
+        a.menu_open = true;
+        a.dismiss(true);
+        a.refresh_registration();
+        a.paused
+    };
+    // Consumes/releases the guard before opening the native modal menu.
+    let command = track_tray_menu(hwnd, paused, guard);
+    PostMessageW(hwnd, TRAY_MENU_DONE, command, 0);
+    0
+}
+unsafe fn track_tray_menu(hwnd: HWND, paused: bool, guard: super::DispatchGuard) -> usize {
+    drop(guard);
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return 0;
+    }
+    AppendMenuW(
+        menu,
+        MF_STRING,
+        TRAY_CONFIG,
+        wide("Configure / Visualize…").as_ptr(),
+    );
+    AppendMenuW(
+        menu,
+        MF_STRING | if paused { MF_CHECKED } else { 0 },
+        TRAY_PAUSE,
+        wide("Pause shortcuts").as_ptr(),
+    );
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(menu, MF_STRING, TRAY_QUIT, wide("Quit").as_ptr());
+    let mut point: POINT = zeroed();
+    GetCursorPos(&mut point);
+    SetForegroundWindow(hwnd);
+    let command = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        point.x,
+        point.y,
+        0,
+        hwnd,
+        null(),
+    );
+    DestroyMenu(menu);
+    // Standard tray-menu dismissal handshake; no input-queue attachment.
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+    command as usize
+}
+
+unsafe fn defer_runtime_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESULT> {
+    if super::defer_nested_close(hwnd, msg, w, l) {
+        return Some(0);
+    }
+    if matches!(
+        msg,
+        WM_WTSSESSION_CHANGE
+            | WM_POWERBROADCAST
+            | WM_DISPLAYCHANGE
+            | WM_DPICHANGED
+            | DEFERRED_DPI_CHANGE
+            | DEFERRED_POWER_CHANGE
+            | WM_CANCELMODE
+            | WM_CAPTURECHANGED
+            | RELOAD_CONFIG
+            | TRAY_MENU_DONE
+            | FOREGROUND
+            | INVOKE
+            | RELEASE
+            | KEY_ACTION
+            | CLICK
+            | POINTER_MOVE
+            | super::input::ERROR
+    ) {
+        // Native interruption payloads are not retained; input packets are
+        // owned integer coordinates. Never queue an OS-owned RECT pointer.
+        let payload = if matches!(msg, WM_DPICHANGED | WM_POWERBROADCAST) {
+            0
+        } else {
+            l
+        };
+        // Pointer-bearing system notifications cannot be reposted safely.
+        // Use private, pointer-free wakeups for their deferred application work.
+        let deferred = match msg {
+            WM_DPICHANGED => DEFERRED_DPI_CHANGE,
+            WM_POWERBROADCAST => DEFERRED_POWER_CHANGE,
+            _ => msg,
+        };
+        super::defer_message(hwnd, deferred, w, payload);
+        return Some(if msg == WM_POWERBROADCAST { 1 } else { 0 });
+    }
+    if msg == WM_QUERYENDSESSION {
+        super::defer_message(hwnd, WM_CANCELMODE, 0, 0);
+        return Some(1);
+    }
+    None
+}
+
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     if APP.is_null() {
         return DefWindowProcW(hwnd, msg, w, l);
     }
+    if msg == TRAY && matches!(l as u32, WM_RBUTTONUP | WM_CONTEXTMENU) {
+        return show_tray_menu(hwnd, w, l);
+    }
     let Some(_guard) = super::DispatchGuard::enter() else {
-        if super::defer_nested_close(hwnd, msg, w, l) {
-            return 0;
-        }
-        if matches!(
-            msg,
-            WM_WTSSESSION_CHANGE
-                | WM_POWERBROADCAST
-                | WM_DISPLAYCHANGE
-                | WM_DPICHANGED
-                | WM_CANCELMODE
-                | WM_CAPTURECHANGED
-                | RELOAD_CONFIG
-                | FOREGROUND
-                | INVOKE
-                | RELEASE
-                | KEY_ACTION
-                | CLICK
-                | POINTER_MOVE
-                | super::input::ERROR
-        ) {
-            // Native interruption payloads are not retained; input packets are
-            // owned integer coordinates. Never queue an OS-owned RECT pointer.
-            let payload = if matches!(msg, WM_DPICHANGED | WM_POWERBROADCAST) {
-                0
-            } else {
-                l
-            };
-            PostMessageW(hwnd, msg, w, payload);
-        }
-        if msg == WM_QUERYENDSESSION {
-            PostMessageW(hwnd, WM_CANCELMODE, 0, 0);
-            return 1;
-        }
-        return DefWindowProcW(hwnd, msg, w, l);
+        return defer_runtime_message(hwnd, msg, w, l)
+            .unwrap_or_else(|| DefWindowProcW(hwnd, msg, w, l));
     };
     let a = &mut *APP;
     if msg == a.taskbar_created && msg != 0 {
@@ -708,7 +791,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             a.refresh_registration();
             0
         }
-        WM_POWERBROADCAST => {
+        WM_POWERBROADCAST | DEFERRED_POWER_CHANGE => {
             match w as u32 {
                 PBT_APMSUSPEND => {
                     a.sleeping = true;
@@ -740,55 +823,31 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             a.refresh_registration();
             0
         }
-        WM_DPICHANGED => {
+        WM_DPICHANGED | DEFERRED_DPI_CHANGE => {
             a.dismiss(!foreground_blocks_launcher(hwnd));
             0
         }
         TRAY => {
-            match l as u32 {
-                WM_LBUTTONDBLCLK => a.configure(),
-                WM_RBUTTONUP | WM_CONTEXTMENU => {
-                    let menu = CreatePopupMenu();
-                    AppendMenuW(
-                        menu,
-                        MF_STRING,
-                        TRAY_CONFIG,
-                        wide("Configure / Visualize…").as_ptr(),
-                    );
-                    AppendMenuW(
-                        menu,
-                        MF_STRING | if a.paused { MF_CHECKED } else { 0 },
-                        TRAY_PAUSE,
-                        wide("Pause shortcuts").as_ptr(),
-                    );
-                    AppendMenuW(menu, MF_SEPARATOR, 0, null());
-                    AppendMenuW(menu, MF_STRING, TRAY_QUIT, wide("Quit").as_ptr());
-                    let mut p: POINT = zeroed();
-                    GetCursorPos(&mut p);
-                    SetForegroundWindow(hwnd);
-                    let command = TrackPopupMenu(
-                        menu,
-                        TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                        p.x,
-                        p.y,
-                        0,
-                        hwnd,
-                        null(),
-                    );
-                    DestroyMenu(menu);
-                    match command as usize {
-                        TRAY_CONFIG => a.configure(),
-                        TRAY_PAUSE => {
-                            a.paused = !a.paused;
-                            a.dismiss(true);
-                            a.refresh_registration();
-                        }
-                        TRAY_QUIT => PostQuitMessage(0),
-                        _ => {}
-                    }
+            if l as u32 == WM_LBUTTONDBLCLK && !a.menu_open {
+                a.configure();
+            }
+            0
+        }
+        TRAY_MENU_DONE => {
+            a.menu_open = false;
+            match w {
+                TRAY_CONFIG => a.configure(),
+                TRAY_PAUSE => {
+                    a.paused = !a.paused;
+                    a.dismiss(true);
+                }
+                TRAY_QUIT => {
+                    PostQuitMessage(0);
+                    return 0;
                 }
                 _ => {}
             }
+            a.refresh_registration();
             0
         }
         WM_TIMER if a.smoke => {
@@ -867,6 +926,41 @@ mod tests {
 
     // Each test owns a fresh thread queue. No windows, hooks, input or audio.
     #[test]
+    fn reentrant_runtime_notifications_wait_for_outer_dispatch_and_own_no_os_pointer() {
+        std::thread::spawn(|| unsafe {
+            let mut message: MSG = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            let outer = super::super::DispatchGuard::enter().unwrap();
+            assert_eq!(defer_runtime_message(null_mut(), FOREGROUND, 0, 0), Some(0));
+            assert_eq!(
+                defer_runtime_message(null_mut(), WM_CAPTURECHANGED, 0, 0),
+                Some(0)
+            );
+            assert_eq!(
+                defer_runtime_message(null_mut(), WM_DPICHANGED, 0, 123),
+                Some(0)
+            );
+            // These are the actual resident reentry routes that a native tray
+            // menu used to retrieve and re-post while the outer borrow stayed held.
+            assert_eq!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            drop(outer);
+            let mut observed = vec![];
+            while PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                observed.push((message.message, message.lParam));
+            }
+            assert_eq!(
+                observed,
+                vec![
+                    (FOREGROUND, 0),
+                    (WM_CAPTURECHANGED, 0),
+                    (DEFERRED_DPI_CHANGE, 0)
+                ]
+            );
+        })
+        .join()
+        .unwrap();
+    }
+    #[test]
     fn gesture_drain_preserves_quit_and_exit_code() {
         std::thread::spawn(|| unsafe {
             let mut message: MSG = zeroed();
@@ -905,6 +999,76 @@ mod tests {
             assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
             assert_eq!(message.message, RELOAD_CONFIG);
             assert_eq!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod native_modal_tests {
+    use super::*;
+    use std::cell::Cell;
+    thread_local! { static PROBE: Cell<u32> = const { Cell::new(0) }; }
+    unsafe extern "system" fn probe(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        match msg {
+            WM_ENTERMENULOOP => {
+                PROBE.with(|value| value.set(value.get() | 1));
+                if let Some(guard) = super::super::DispatchGuard::enter() {
+                    PROBE.with(|value| value.set(value.get() | 2));
+                    drop(guard);
+                }
+                0
+            }
+            WM_TIMER => {
+                EndMenu();
+                0
+            }
+            _ => DefWindowProcW(hwnd, msg, w, l),
+        }
+    }
+    #[test]
+    #[ignore = "native popup menu; run on remote Windows CI only"]
+    fn tray_popup_keeps_dispatch_available_during_the_native_modal_loop() {
+        std::thread::spawn(|| unsafe {
+            let module = GetModuleHandleW(null());
+            let class_name = wide("Constellation.Test.TrayModal");
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(probe),
+                hInstance: module,
+                lpszClassName: class_name.as_ptr(),
+                ..zeroed()
+            };
+            assert_ne!(RegisterClassW(&class), 0);
+            let owner = CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                wide("test").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                300,
+                200,
+                null_mut(),
+                null_mut(),
+                module,
+                null(),
+            );
+            assert!(!owner.is_null());
+            assert_ne!(SetTimer(owner, 1, 50, None), 0);
+            // Uses production menu code. The timer ends the popup without
+            // synthesizing any keyboard/mouse input or installing hooks.
+            let guard = super::super::DispatchGuard::enter().unwrap();
+            let command = track_tray_menu(owner, false, guard);
+            KillTimer(owner, 1);
+            DestroyWindow(owner);
+            UnregisterClassW(class_name.as_ptr(), module);
+            assert_eq!(command, 0);
+            assert_eq!(
+                PROBE.with(Cell::get),
+                3,
+                "native menu must run while application dispatch is available"
+            );
         })
         .join()
         .unwrap();

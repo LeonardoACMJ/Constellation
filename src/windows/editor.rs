@@ -1439,7 +1439,8 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             return 0;
         }
         if msg == WM_COMMAND && w & 0xffff == JSON_SAVE as usize {
-            PostMessageW(hwnd, msg, w, l);
+            super::defer_message(hwnd, msg, w, l);
+            return 0;
         }
         return DefWindowProcW(hwnd, msg, w, l);
     };
@@ -1532,13 +1533,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         if matches!(msg, WM_HSCROLL | WM_VSCROLL | WM_DROPFILES)
             || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
         {
-            PostMessageW(hwnd, msg, w, l);
+            super::defer_message(hwnd, msg, w, l);
+            return 0;
         }
         if msg == WM_COMMAND
             && (w >> 16) as u32 == BN_CLICKED
             && (w & 0xffff) >= BROWSE_TARGET as usize
         {
-            PostMessageW(hwnd, msg, w, l);
+            super::defer_message(hwnd, msg, w, l);
+            return 0;
         }
         return DefWindowProcW(hwnd, msg, w, l);
     };
@@ -2222,7 +2225,8 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
             return 0;
         }
         if msg == super::recorder::CAPTURE {
-            PostMessageW(hwnd, msg, w, l);
+            super::defer_message(hwnd, msg, w, l);
+            return 0;
         }
         return DefWindowProcW(hwnd, msg, w, l);
     };
