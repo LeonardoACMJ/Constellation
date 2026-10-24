@@ -26,6 +26,23 @@ impl Drop for DispatchGuard {
     }
 }
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
+// DefWindowProc(WM_SYSCOMMAND/SC_CLOSE) synchronously sends WM_CLOSE.
+// A guarded nested dispatch must not pass that close back to DefWindowProc:
+// it would destroy the window without running the owner's close/cleanup path.
+pub(super) unsafe fn defer_nested_close(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    w: usize,
+    l: isize,
+) -> bool {
+    if msg != WM_CLOSE {
+        return false;
+    }
+    unsafe {
+        PostMessageW(hwnd, WM_CLOSE, w, l);
+    }
+    true
+}
 
 // Used only when the user explicitly invokes the launcher or opens an owned
 // configuration window. Never retain an attachment to another input queue.

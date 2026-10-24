@@ -519,6 +519,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if super::defer_nested_close(hwnd, msg, w, l) {
+            return 0;
+        }
         if matches!(
             msg,
             WM_WTSSESSION_CHANGE

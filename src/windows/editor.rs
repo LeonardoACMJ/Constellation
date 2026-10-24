@@ -302,40 +302,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             Some(monitor_callback),
             &mut displays as *mut Vec<Display> as isize,
         );
-        let selected = c.root.id;
-        EDITOR = Box::into_raw(Box::new(Editor {
-            hwnd,
-            root,
-            saved: c.clone(),
-            history: History::default(),
-            settings_before: None,
-            item_dirty: false,
-            settings_invalid: false,
-            measure_preview: std::env::args().any(|s| s == "--measure-preview"),
-            preview_cache: None,
-            layout_applied: false,
-            wheel_delta: 0,
-            form: FormLayout::new(1380, 870, 17, 17),
-            controls: vec![],
-            c,
-            rows: vec![],
-            parents: vec![],
-            selected,
-            displays,
-            monitor: 0,
-            json: null_mut(),
-            profiles: None,
-            status: "Edit items, tune spacing or shortcut profiles, then Save.".into(),
-            preview: RECT {
-                left: 700,
-                top: 85,
-                right: 1335,
-                bottom: 690,
-            },
-            dirty: false,
-            scroll_x: 0,
-            scroll_y: 0,
-        }));
+        EDITOR = Box::into_raw(Box::new(Editor::new(hwnd, root, c, displays)));
         let startup_guard = super::DispatchGuard::enter().expect("editor startup dispatch");
         label(hwnd, "STARS & CONSTELLATIONS", 20, 18, 270);
         control(
@@ -606,6 +573,42 @@ unsafe extern "system" fn monitor_callback(
 }
 
 impl Editor {
+    fn new(hwnd: HWND, root: PathBuf, c: Config, displays: Vec<Display>) -> Self {
+        let selected = c.root.id;
+        Self {
+            hwnd,
+            root,
+            saved: c.clone(),
+            history: History::default(),
+            settings_before: None,
+            item_dirty: false,
+            settings_invalid: false,
+            measure_preview: std::env::args().any(|s| s == "--measure-preview"),
+            preview_cache: None,
+            layout_applied: false,
+            wheel_delta: 0,
+            form: FormLayout::new(1380, 870, 17, 17),
+            controls: vec![],
+            c,
+            rows: vec![],
+            parents: vec![],
+            selected,
+            displays,
+            monitor: 0,
+            json: null_mut(),
+            profiles: None,
+            status: "Edit items, tune spacing or shortcut profiles, then Save.".into(),
+            preview: RECT {
+                left: 700,
+                top: 85,
+                right: 1335,
+                bottom: 690,
+            },
+            dirty: false,
+            scroll_x: 0,
+            scroll_y: 0,
+        }
+    }
     unsafe fn paint_preview(&self, dc: HDC) -> usize {
         let e = self;
         render::fill(dc, &e.preview, render::rgb(15, 22, 36));
@@ -1432,6 +1435,9 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if super::defer_nested_close(hwnd, msg, w, l) {
+            return 0;
+        }
         if msg == WM_COMMAND && w & 0xffff == JSON_SAVE as usize {
             PostMessageW(hwnd, msg, w, l);
         }
@@ -1507,6 +1513,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if super::defer_nested_close(hwnd, msg, w, l) {
+            return 0;
+        }
         if msg == WM_SIZE {
             trace(if RESIZING.with(Cell::get) {
                 "resize.nested.ignored"
@@ -2197,6 +2206,9 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if super::defer_nested_close(hwnd, msg, w, l) {
+            return 0;
+        }
         if msg == super::recorder::CAPTURE {
             PostMessageW(hwnd, msg, w, l);
         }
@@ -2406,10 +2418,115 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
             }
             DestroyWindow(hwnd);
             e.profiles = None;
-            SetForegroundWindow(e.hwnd);
+            if IsWindowVisible(e.hwnd) != 0 {
+                SetForegroundWindow(e.hwnd);
+            }
             InvalidateRect(e.hwnd, null(), 1);
             0
         }
         _ => DefWindowProcW(hwnd, msg, w, l),
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    // Run on the remote Windows CI runner only. No visible windows, hooks,
+    // mouse/keyboard synthesis or user configuration are involved.
+    #[test]
+    #[ignore = "hidden native window lifecycle; run on Windows CI"]
+    fn titlebar_close_reenables_owner_and_discards_only_the_profile_draft() {
+        std::thread::spawn(|| unsafe {
+            let module = GetModuleHandleW(null());
+            let owner_class = wide("Constellation.Test.OwnerClose");
+            let profile_class = wide("Constellation.Test.ProfileClose");
+            for (name, procedure) in [
+                (
+                    owner_class.as_ptr(),
+                    Some(proc as unsafe extern "system" fn(_, _, _, _) -> _),
+                ),
+                (
+                    profile_class.as_ptr(),
+                    Some(profiles_proc as unsafe extern "system" fn(_, _, _, _) -> _),
+                ),
+            ] {
+                let class = WNDCLASSW {
+                    lpfnWndProc: procedure,
+                    hInstance: module,
+                    lpszClassName: name,
+                    ..zeroed()
+                };
+                assert_ne!(RegisterClassW(&class), 0);
+            }
+            let owner = CreateWindowExW(
+                0,
+                owner_class.as_ptr(),
+                wide("owner").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                600,
+                400,
+                null_mut(),
+                null_mut(),
+                module,
+                null(),
+            );
+            assert!(!owner.is_null());
+            let original = Config::default();
+            EDITOR = Box::into_raw(Box::new(Editor::new(
+                owner,
+                PathBuf::new(),
+                original.clone(),
+                vec![],
+            )));
+            let child = CreateWindowExW(
+                0,
+                profile_class.as_ptr(),
+                wide("profiles").as_ptr(),
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                0,
+                0,
+                300,
+                200,
+                owner,
+                null_mut(),
+                module,
+                null(),
+            );
+            assert!(!child.is_null());
+            (*EDITOR).profiles = Some(Profiles {
+                hwnd: child,
+                draft: original.profiles.clone(),
+                selected: None,
+                recording: false,
+            });
+            EnableWindow(owner, 0);
+            // This is the real titlebar X / Alt+F4 path, including Windows'
+            // synchronous reentry through DefWindowProc into WM_CLOSE.
+            SendMessageW(child, WM_SYSCOMMAND, SC_CLOSE as usize, 0);
+            let mut message: MSG = zeroed();
+            for _ in 0..100 {
+                if PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) == 0 {
+                    break;
+                }
+                if message.message != WM_QUIT {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            assert_eq!(IsWindow(child), 0);
+            assert_ne!(IsWindowEnabled(owner), 0);
+            assert!((*EDITOR).profiles.is_none());
+            assert_eq!((*EDITOR).c, original);
+            assert!(!(*EDITOR).dirty);
+            DestroyWindow(owner);
+            drop(Box::from_raw(EDITOR));
+            EDITOR = null_mut();
+            UnregisterClassW(profile_class.as_ptr(), module);
+            UnregisterClassW(owner_class.as_ptr(), module);
+        })
+        .join()
+        .unwrap();
     }
 }

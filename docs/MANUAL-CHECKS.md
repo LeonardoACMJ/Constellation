@@ -1,10 +1,10 @@
-# Constellation 0.1.6 — manual checks
+# Constellation 0.1.7 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.6**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.7**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -24,6 +24,8 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 | Reopening | Hover Everyday → Calculator, launch it, then Ctrl+Q again. Repeat after closing an expanded branch with Escape. | The newly opened menu starts at the root with no flash of the previous expanded branch. |
 | Outside targeting | Enable **Select by direction beyond the outer edge** for a profile. Move beyond a Star's outer edge in its direction; click or press Space. Repeat in a nested fan and, if configured, with Hold release. | The matching visible item stays highlighted and launches once. Painted sectors take precedence; gaps and the root hub stay neutral. |
 | Exact targeting option | Disable that option, Save, then repeat outside the circle. | Outside positions stop targeting Stars; the drawn outer edge is the selection boundary. |
+| Close owned dialogs | Open Shortcut profiles, then close using X; reopen and try Alt+F4, Cancel and Done. Open Advanced JSON and close using X. | Main editor responds afterward and dialogs can be reopened. X/Cancel discard profile-only draft edits; Done keeps them for main Save. Closing the main editor with unsaved changes still asks before discarding them. |
+| Save mouse binding | Record a middle/side mouse button; Apply profile → Done → Save. Reopen profiles and test its Click/Hold behavior. | Recorded identity (Mouse3/4/5) persists, buttons remain usable, and saving does not strand a disabled owner. |
 | Closing configuration | Close the configuration panel. | The editor process exits and releases its fonts, drawing buffers and preview cache. The separate tray process remains available. |
 
 To create a branch: select **Your universe** → **+ Constellation**, name it → **Apply item**. With it selected, add a **+ Star**, choose its target kind and Browse to a program; Apply. Select the Constellation again to add a nested Constellation. **Parent constellation** moves existing items. **Save** before testing Ctrl+Q.
