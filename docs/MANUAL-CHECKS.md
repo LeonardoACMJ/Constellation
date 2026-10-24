@@ -1,10 +1,10 @@
-# Constellation 0.1.13 — manual checks
+# Constellation 0.1.14 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.13**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.14**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -23,6 +23,7 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 | Editor appearance | Inspect the main editor, Shortcut profiles and Advanced JSON. Tab between controls and open dropdowns. | Related navy/teal/lavender styling, readable text, visible focus, usable fields/buttons and no clipped bottom actions. Some system-owned dialogs/chrome retain Windows styling. |
 | Slider drawing | Drag each spacing slider rapidly; use arrows and Tab too. | No white flashing; dark background, readable thumb and visible keyboard focus. |
 | Preview updates | Change each spacing slider, then type a value. Switch the monitor preview, resize the window and scroll. | Layout/warnings update when values change; scrolling alone reuses the same preview. Save remains available with advisory overflow warnings. |
+| Intermittent chime crackle | At comfortable low volume, try an isolated selection after several seconds of silence, quick sweeps through nested branches, and another burst after a short pause. Repeat while ordinary apps are busy. | Notes/tails remain clean without isolated pops or a lagging-stream sound. Report whether a problem affects the first note after silence, a rapid sequence, or other apps' audio too. This remains a subjective device check; automated PCM tests cannot certify it. |
 | Chime overlap | Enable Chimes, set a comfortable low volume, Save, then sweep across several Stars quickly. Stop moving; test mute afterward. | Single notes and overlapping tails sound clean, without the reported crunch/crackle, clipping or obvious volume pumping. A new note does not cut off the preceding note; staying on one item does not repeatedly chime. |
 | Cursor end | In Shortcut profiles, try each **Cursor on close** choice: Restore original, Return to menu center, Leave at selection. Test launch and Escape; optionally repeat with Hold. | Original position, invocation monitor's usable center, or selection position respectively. Cursor does not recenter during branch navigation. |
 | Opening without focus takeover | Focus an ordinary app and invoke Ctrl+Q. Hover a Star, then cancel with Esc; repeat with click/Space and any configured Hold profile. Open again, then switch to another app before selecting. | Radial opens without the focus-denied notification; the original app keeps focus; selection/cancel inputs do not activate its controls. Switching apps closes the radial and a late Hold release cannot launch. Fullscreen still blocks invocation. |

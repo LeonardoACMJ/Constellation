@@ -77,6 +77,9 @@ impl Drop for Chimes {
 }
 const FRAMES: usize = 480; // 10 ms at the native 48 kHz stream rate.
 const BUFFERS: usize = 4; // Scheduling headroom; the previous stream had only 23 ms.
+// WAVEHDR is packed in the Windows bindings. Keep every header (including
+// later array entries) aligned for pointer-sized fields and volatile flags.
+#[repr(C, align(8))]
 struct Buffer {
     header: WAVEHDR,
     samples: [i16; FRAMES],
@@ -86,18 +89,75 @@ struct Buffer {
 struct Device {
     handle: HWAVEOUT,
     buffers: Box<[Buffer; BUFFERS]>,
+    running: bool,
+    // Multimedia scheduling is scoped to an open stream, not the idle tray.
+    _scheduling: AudioScheduling,
+}
+struct AudioScheduling(HANDLE);
+impl AudioScheduling {
+    unsafe fn register() -> Self {
+        let mut index = 0;
+        Self(AvSetMmThreadCharacteristicsW(
+            super::wide("Audio").as_ptr(),
+            &mut index,
+        ))
+    }
+}
+impl Drop for AudioScheduling {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                AvRevertMmThreadCharacteristics(self.0);
+            }
+        }
+    }
+}
+
+trait Stream {
+    unsafe fn pause(&mut self) -> Result<(), ()>;
+    unsafe fn submit(&mut self, buffer: &mut Buffer) -> Result<(), ()>;
+    unsafe fn restart(&mut self) -> Result<(), ()>;
+}
+struct WaveStream(HWAVEOUT);
+impl Stream for WaveStream {
+    unsafe fn pause(&mut self) -> Result<(), ()> {
+        if waveOutPause(self.0) == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    unsafe fn submit(&mut self, buffer: &mut Buffer) -> Result<(), ()> {
+        if waveOutWrite(self.0, &mut buffer.header, size_of::<WAVEHDR>() as u32) == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    unsafe fn restart(&mut self) -> Result<(), ()> {
+        if waveOutRestart(self.0) == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
 }
 impl Device {
-    unsafe fn open(wake: &Wake) -> Option<Self> {
-        let mut device = Self {
+    fn empty() -> Self {
+        Self {
             handle: null_mut(),
             buffers: Box::new(std::array::from_fn(|_| Buffer {
-                header: zeroed(),
+                header: unsafe { zeroed() },
                 samples: [0; FRAMES],
                 queued: false,
                 prepared: false,
             })),
-        };
+            running: false,
+            _scheduling: AudioScheduling(null_mut()),
+        }
+    }
+    unsafe fn open(wake: &Wake) -> Option<Self> {
+        let mut device = Self::empty();
         let format = WAVEFORMATEX {
             wFormatTag: 1,
             nChannels: 1,
@@ -120,6 +180,13 @@ impl Device {
         {
             return None;
         }
+        // waveOut otherwise starts immediately on the FIRST write. Hold it
+        // paused until the complete initial queue is ready, including after
+        // an idle gap. Never reset/interrupt the tails of playing notes.
+        if waveOutPause(device.handle) != 0 {
+            return None;
+        }
+        device._scheduling = AudioScheduling::register();
         for b in device.buffers.iter_mut() {
             b.header.lpData = b.samples.as_mut_ptr().cast();
             b.header.dwBufferLength = (FRAMES * 2) as u32;
@@ -134,24 +201,39 @@ impl Device {
         Some(device)
     }
     unsafe fn fill(&mut self, mixer: &mut Mixer) -> Result<bool, ()> {
+        self.fill_using(mixer, &mut WaveStream(self.handle))
+    }
+    unsafe fn fill_using(
+        &mut self,
+        mixer: &mut Mixer,
+        stream: &mut impl Stream,
+    ) -> Result<bool, ()> {
         // Prepared headers and sample addresses stay stable for the whole
         // stream. Reuse only completed buffers; render and submit in the same
         // order so the PCM timeline stays continuous when completions coalesce.
         for b in self.buffers.iter_mut() {
-            if b.queued && b.header.dwFlags & WHDR_DONE != 0 {
+            // The driver owns these flags while the header is queued.
+            if b.queued && std::ptr::read_volatile(&raw const b.header.dwFlags) & WHDR_DONE != 0 {
                 b.queued = false;
             }
+        }
+        if self.running && !self.buffers.iter().any(|b| b.queued) {
+            stream.pause()?;
+            self.running = false;
+        }
+        for b in self.buffers.iter_mut() {
             if !b.queued && mixer.active() > 0 {
                 mixer.mix(&mut b.samples);
-                if unsafe { waveOutWrite(self.handle, &mut b.header, size_of::<WAVEHDR>() as u32) }
-                    != 0
-                {
-                    return Err(());
-                }
+                stream.submit(b)?;
                 b.queued = true;
             }
         }
-        Ok(self.buffers.iter().any(|b| b.queued))
+        let queued = self.buffers.iter().any(|b| b.queued);
+        if queued && !self.running {
+            stream.restart()?;
+            self.running = true;
+        }
+        Ok(queued)
     }
 }
 impl Drop for Device {
@@ -233,5 +315,133 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
             // period, release the device and wait indefinitely with no polling.
             WaitForSingleObject(wake.0, wait);
         }
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingStream {
+        operations: String,
+        samples: Vec<i16>,
+    }
+    impl Stream for RecordingStream {
+        unsafe fn pause(&mut self) -> Result<(), ()> {
+            self.operations.push('P');
+            Ok(())
+        }
+        unsafe fn submit(&mut self, b: &mut Buffer) -> Result<(), ()> {
+            self.operations.push('W');
+            self.samples.extend_from_slice(&b.samples);
+            b.header.dwFlags &= !WHDR_DONE;
+            Ok(())
+        }
+        unsafe fn restart(&mut self) -> Result<(), ()> {
+            self.operations.push('R');
+            Ok(())
+        }
+    }
+
+    // A null-handle fixture uses only the recording backend: no device is
+    // opened, no scheduling priority is changed, and no sound is played.
+    #[test]
+    fn startup_and_exhausted_queue_are_primed_before_playback() {
+        let mut device = Device::empty();
+        let (mut mixer, mut reference) = (Mixer::default(), Mixer::default());
+        mixer.start(3, 0.18);
+        reference.start(3, 0.18);
+        let mut stream = RecordingStream::default();
+        unsafe {
+            device.fill_using(&mut mixer, &mut stream).unwrap();
+        }
+        assert_eq!(stream.operations, "WWWWR");
+        for b in &mut *device.buffers {
+            b.header.dwFlags |= WHDR_DONE;
+        }
+        stream.operations.clear();
+        unsafe {
+            device.fill_using(&mut mixer, &mut stream).unwrap();
+        }
+        assert_eq!(stream.operations, "PWWWWR");
+        let mut expected = vec![0; 8 * FRAMES];
+        reference.mix(&mut expected);
+        assert_eq!(
+            stream.samples, expected,
+            "Repriming cannot skip or duplicate PCM"
+        );
+    }
+
+    #[test]
+    fn partial_completions_do_not_pause_or_touch_pending_buffers() {
+        let mut device = Device::empty();
+        let (mut mixer, mut reference) = (Mixer::default(), Mixer::default());
+        mixer.start(1, 0.18);
+        reference.start(1, 0.18);
+        let mut stream = RecordingStream::default();
+        unsafe {
+            device.fill_using(&mut mixer, &mut stream).unwrap();
+        }
+        // Rotate the FIFO until 3/0 can finish together across the physical
+        // array boundary while 1/2 still belong to the driver.
+        device.buffers[0].header.dwFlags |= WHDR_DONE;
+        unsafe {
+            device.fill_using(&mut mixer, &mut stream).unwrap();
+        }
+        device.buffers[1].header.dwFlags |= WHDR_DONE;
+        device.buffers[2].header.dwFlags |= WHDR_DONE;
+        unsafe {
+            device.fill_using(&mut mixer, &mut stream).unwrap();
+        }
+        let pending = [device.buffers[1].samples, device.buffers[2].samples];
+        device.buffers[0].header.dwFlags |= WHDR_DONE;
+        device.buffers[3].header.dwFlags |= WHDR_DONE;
+        stream.operations.clear();
+        unsafe {
+            device.fill_using(&mut mixer, &mut stream).unwrap();
+        }
+        assert_eq!(stream.operations, "WW");
+        assert_eq!(
+            pending,
+            [device.buffers[1].samples, device.buffers[2].samples]
+        );
+        let mut expected = vec![0; 9 * FRAMES];
+        reference.mix(&mut expected);
+        assert_eq!(stream.samples, expected);
+    }
+
+    #[test]
+    fn natural_tail_finishes_then_next_burst_restarts_from_a_primed_queue() {
+        let mut device = Device::empty();
+        let mut mixer = Mixer::default();
+        mixer.start(0, 0.18);
+        let mut stream = RecordingStream::default();
+        let mut finished = false;
+        for _ in 0..10 {
+            let queued = unsafe { device.fill_using(&mut mixer, &mut stream).unwrap() };
+            if !queued {
+                finished = true;
+                break;
+            }
+            for b in &mut *device.buffers {
+                b.header.dwFlags |= WHDR_DONE;
+            }
+        }
+        assert!(finished && mixer.active() == 0 && !device.running);
+        assert_eq!(stream.samples.last(), Some(&0));
+        stream.operations.clear();
+        unsafe {
+            assert!(!device.fill_using(&mut mixer, &mut stream).unwrap());
+        }
+        assert!(
+            stream.operations.is_empty(),
+            "No driver activity while silent"
+        );
+        mixer.start(4, 0.18);
+        unsafe {
+            device.fill_using(&mut mixer, &mut stream).unwrap();
+        }
+        assert_eq!(stream.operations, "WWWWR");
     }
 }
