@@ -1489,6 +1489,13 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    match msg {
+        WM_ENTERSIZEMOVE => trace("native.move_or_resize.begin"),
+        WM_EXITSIZEMOVE => trace("native.move_or_resize.end"),
+        WM_CAPTURECHANGED => trace("mouse.capture.changed"),
+        WM_CANCELMODE => trace("native.cancel_mode"),
+        _ => {}
+    }
     if let Some(result) = theme::message(msg, w, l) {
         return result;
     }

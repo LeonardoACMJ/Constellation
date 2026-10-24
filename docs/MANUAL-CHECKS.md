@@ -1,10 +1,10 @@
-# Constellation 0.1.5 — manual checks
+# Constellation 0.1.6 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.5**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.6**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -12,6 +12,8 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 |---|---|---|
 | Tray Quit | Close Configure, right-click the tray icon → Quit. Check Task Manager, then start the same executable again and try Ctrl+Q. Repeat Quit after using the radial. | Resident exits, tray icon disappears, shortcut stops intercepting input; restarting succeeds without an already-running warning. |
 | Editor scrolling | Make the editor short enough to scroll. Wheel up/down slowly, then quickly; drag the vertical/horizontal scrollbars. | No whole-form flash, overlapping/duplicated fields or preview-header jumps; the painted panel outlines move with their contents. Resize small → maximize → restore and repeat. |
+| Isolate first-restore click pause | Start a fresh Configure session. Quit the tray process while leaving Configure open, then maximize → restore once. Compare against a fresh session with the tray active. | Report whether the pause needs the tray process. Pointer smoothness alone does not distinguish slow input delivery from mouse capture. |
+| Fullscreen after input change | With the tray active and a fullscreen program focused, press Ctrl+Q. Exit fullscreen and retry. | Fullscreen gets the input; the radial stays closed. Afterward Ctrl+Q opens normally and selection works. |
 | Maximize/restore responsiveness | Repeatedly maximize → restore, including after scrolling. Then click a field, type, scroll and close Configure. | The restored window responds immediately; no persistent stall. |
 | Maximized layout | Maximize the editor after scrolling a small window. Restore it, then maximize again. | Unneeded scrollbars disappear, scroll offsets reset to zero, and the tree, item column and preview use the available width/height. |
 | Editor appearance | Inspect the main editor, Shortcut profiles and Advanced JSON. Tab between controls and open dropdowns. | Related navy/teal/lavender styling, readable text, visible focus, usable fields/buttons and no clipped bottom actions. Some system-owned dialogs/chrome retain Windows styling. |

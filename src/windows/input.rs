@@ -7,7 +7,7 @@ use super::runtime::{
 };
 use crate::config::{Binding, Input, Mode};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     mem::zeroed,
     ptr::{null, null_mut},
     sync::{Arc, Mutex},
@@ -22,6 +22,7 @@ const UPDATE: u32 = WM_APP + 40;
 const RESET: u32 = WM_APP + 41;
 const STOP: u32 = WM_APP + 42;
 pub const ERROR: u32 = WM_APP + 43;
+const OBSERVED: u32 = WM_APP + 44;
 struct HookState {
     hwnd: HWND,
     bindings: Vec<Binding>,
@@ -36,12 +37,17 @@ struct HookState {
     reserved: usize,
     failures: Vec<String>,
     foreground: HWND,
+    observed_foreground: HWND,
+    observed_blocked: bool,
 }
 // HWNDs here are opaque cross-thread notification/comparison handles. Their
 // owner creates and destroys the window only after this worker has stopped.
 unsafe impl Send for HookState {}
 type Shared = Arc<Mutex<HookState>>;
-thread_local! {static CONTEXT:RefCell<Option<Shared>>=const {RefCell::new(None)};}
+thread_local! {
+    static CONTEXT: RefCell<Option<Shared>> = const { RefCell::new(None) };
+    static INPUT_THREAD: Cell<u32> = const { Cell::new(0) };
+}
 fn context() -> Option<Shared> {
     CONTEXT.with(|v| v.borrow().clone())
 }
@@ -70,6 +76,8 @@ impl Worker {
             reserved: 0,
             failures: vec![],
             foreground: null_mut(),
+            observed_foreground: null_mut(),
+            observed_blocked: true,
         }));
         let state = shared.clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -81,31 +89,12 @@ impl Worker {
                 PeekMessageW(&mut msg, null_mut(), 0, 0, PM_NOREMOVE);
                 CONTEXT.with(|v| *v.borrow_mut() = Some(state.clone()));
                 reset(&state);
+                // Start observation before installing synchronous input hooks.
+                let observer = Observer::start(state.clone(), GetCurrentThreadId());
                 let module = GetModuleHandleW(null());
                 let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0);
                 let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0);
-                let foreground = SetWinEventHook(
-                    EVENT_SYSTEM_FOREGROUND,
-                    EVENT_SYSTEM_FOREGROUND,
-                    null_mut(),
-                    Some(foreground_event),
-                    0,
-                    0,
-                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-                );
-                let location = SetWinEventHook(
-                    EVENT_OBJECT_LOCATIONCHANGE,
-                    EVENT_OBJECT_LOCATIONCHANGE,
-                    null_mut(),
-                    Some(foreground_event),
-                    0,
-                    0,
-                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-                );
-                let ok = !keyboard.is_null()
-                    && !mouse.is_null()
-                    && !foreground.is_null()
-                    && !location.is_null();
+                let ok = !keyboard.is_null() && !mouse.is_null() && observer.is_ok();
                 let _ = tx.send(if ok {
                     Ok(GetCurrentThreadId())
                 } else {
@@ -116,6 +105,7 @@ impl Worker {
                         match msg.message {
                             STOP => break,
                             UPDATE => refresh(&state, true),
+                            OBSERVED => refresh(&state, false),
                             RESET => reset(&state),
                             _ => {
                                 TranslateMessage(&msg);
@@ -134,12 +124,8 @@ impl Worker {
                 if !mouse.is_null() {
                     UnhookWindowsHookEx(mouse);
                 }
-                if !foreground.is_null() {
-                    UnhookWinEvent(foreground);
-                }
-                if !location.is_null() {
-                    UnhookWinEvent(location);
-                }
+                // Remove global hooks before waiting for observer shutdown.
+                drop(observer);
                 CONTEXT.with(|v| *v.borrow_mut() = None);
             })
             .map_err(|e| e.to_string())?;
@@ -182,6 +168,115 @@ impl Drop for Worker {
         }
     }
 }
+struct Observer {
+    id: u32,
+    thread: Option<JoinHandle<()>>,
+}
+impl Observer {
+    unsafe fn start(state: Shared, input_thread: u32) -> Result<Self, String> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let thread = std::thread::Builder::new()
+            .name("constellation-window-observer".into())
+            .stack_size(512 * 1024)
+            .spawn(move || unsafe {
+                let mut message: MSG = zeroed();
+                PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+                CONTEXT.with(|slot| *slot.borrow_mut() = Some(state.clone()));
+                INPUT_THREAD.with(|slot| slot.set(input_thread));
+                let foreground = SetWinEventHook(
+                    EVENT_SYSTEM_FOREGROUND,
+                    EVENT_SYSTEM_FOREGROUND,
+                    null_mut(),
+                    Some(foreground_event),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT,
+                );
+                let location = SetWinEventHook(
+                    EVENT_OBJECT_LOCATIONCHANGE,
+                    EVENT_OBJECT_LOCATIONCHANGE,
+                    null_mut(),
+                    Some(foreground_event),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT,
+                );
+                let ok = !foreground.is_null() && !location.is_null();
+                // Publish readiness before inspection; startup must not wait on
+                // another application's window while global hooks are installed.
+                let _ = tx.send(if ok {
+                    Ok(GetCurrentThreadId())
+                } else {
+                    Err("Cannot observe foreground windows".to_string())
+                });
+                if ok {
+                    observe(&state, input_thread);
+                    while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
+                        if message.message == STOP {
+                            break;
+                        }
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                }
+                if !foreground.is_null() {
+                    UnhookWinEvent(foreground);
+                }
+                if !location.is_null() {
+                    UnhookWinEvent(location);
+                }
+                CONTEXT.with(|slot| slot.borrow_mut().take());
+            })
+            .map_err(|e| e.to_string())?;
+        match rx.recv().map_err(|e| e.to_string())? {
+            Ok(id) => Ok(Self {
+                id,
+                thread: Some(thread),
+            }),
+            Err(error) => {
+                let _ = thread.join();
+                Err(error)
+            }
+        }
+    }
+}
+impl Drop for Observer {
+    fn drop(&mut self) {
+        unsafe {
+            PostThreadMessageW(self.id, STOP, 0, 0);
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+unsafe fn observe(state: &Shared, input_thread: u32) {
+    let destination = state.lock().unwrap().hwnd;
+    let foreground = GetForegroundWindow();
+    let blocked = foreground_blocks_launcher(destination);
+    // If focus changed during inspection, wait for its own observation rather
+    // than applying another window's fullscreen status to the new foreground.
+    let changed_during_inspection = GetForegroundWindow() != foreground;
+    {
+        let mut h = state.lock().unwrap();
+        h.observed_foreground = foreground;
+        h.observed_blocked = blocked || changed_during_inspection;
+    }
+    PostThreadMessageW(input_thread, OBSERVED, 0, 0);
+    PostMessageW(destination, FOREGROUND, 0, 0);
+}
+fn hook_allowed(h: &HookState, foreground: HWND) -> bool {
+    // The owned radial can receive its first click before its asynchronous
+    // foreground observation arrives. Its active session is already authorized.
+    if !foreground.is_null() && foreground == h.hwnd && h.active.is_some() {
+        return h.available;
+    }
+    h.enabled
+        && h.foreground == foreground
+        && h.observed_foreground == foreground
+        && !h.observed_blocked
+}
+
 unsafe fn reset(state: &Shared) {
     let mut keys = [false; 256];
     for (i, k) in keys.iter_mut().enumerate() {
@@ -197,11 +292,10 @@ unsafe fn reset(state: &Shared) {
     }
 }
 unsafe fn refresh(state: &Shared, force: bool) {
-    let hwnd = state.lock().unwrap().hwnd;
     let foreground = GetForegroundWindow();
-    let blocked = foreground_blocks_launcher(hwnd);
     let mut h = state.lock().unwrap();
-    let enabled = h.available && !blocked;
+    let hwnd = h.hwnd;
+    let enabled = h.available && h.observed_foreground == foreground && !h.observed_blocked;
     if !force && enabled == h.enabled && foreground == h.foreground {
         return;
     }
@@ -260,9 +354,7 @@ unsafe extern "system" fn foreground_event(
     if event == EVENT_OBJECT_LOCATIONCHANGE && (hwnd != GetForegroundWindow() || object != 0) {
         return;
     }
-    refresh(&state, false);
-    let destination = state.lock().unwrap().hwnd;
-    PostMessageW(destination, FOREGROUND, 0, 0);
+    observe(&state, INPUT_THREAD.with(Cell::get));
 }
 unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if code < 0 {
@@ -271,10 +363,13 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
     let Some(state) = context() else {
         return CallNextHookEx(null_mut(), code, w, l);
     };
-    refresh(&state, false);
+    let foreground = GetForegroundWindow();
     let consumed = {
-        let mut h = state.lock().unwrap();
-        let blocked = !h.enabled;
+        // Never wait for a UI/configuration lock while Windows waits for input.
+        let Ok(mut h) = state.try_lock() else {
+            return CallNextHookEx(null_mut(), code, w, l);
+        };
+        let blocked = !hook_allowed(&h, foreground);
         keyboard_packet(&mut h, w, &*(l as *const KBDLLHOOKSTRUCT), blocked)
     };
     if consumed {
@@ -290,12 +385,12 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
     let Some(state) = context() else {
         return CallNextHookEx(null_mut(), code, w, l);
     };
-    if w as u32 != WM_MOUSEMOVE {
-        refresh(&state, false);
-    }
+    let foreground = GetForegroundWindow();
     let consumed = {
-        let mut h = state.lock().unwrap();
-        let blocked = !h.enabled;
+        let Ok(mut h) = state.try_lock() else {
+            return CallNextHookEx(null_mut(), code, w, l);
+        };
+        let blocked = !hook_allowed(&h, foreground);
         mouse_packet(&mut h, w, &*(l as *const MSLLHOOKSTRUCT), blocked)
     };
     if consumed {
@@ -332,7 +427,7 @@ unsafe fn keyboard_packet(
     }
     let active = a.active;
     if up {
-        if let Some(i) = active {
+        if let Some(i) = active.filter(|_| !blocked) {
             if a.modes.get(i) == Some(&Mode::Hold) && a.bindings[i].requires(Input::Key(vk as u16))
             {
                 PostMessageW(a.hwnd, RELEASE, i, pointer_packet());
@@ -344,6 +439,9 @@ unsafe fn keyboard_packet(
     }
     if a.eaten[vk] {
         return true;
+    }
+    if blocked {
+        return false;
     }
     let ctrl = a.keys[0x11];
     let shift = a.keys[0x10];
@@ -409,7 +507,7 @@ unsafe fn mouse_packet(a: &mut HookState, w: WPARAM, e: &MSLLHOOKSTRUCT, blocked
     };
     let active = a.active;
     if !down {
-        if let Some(i) = active {
+        if let Some(i) = active.filter(|_| !blocked) {
             if a.modes.get(i) == Some(&Mode::Hold)
                 && a.bindings
                     .get(i)
@@ -450,4 +548,73 @@ unsafe fn mouse_packet(a: &mut HookState, w: WPARAM, e: &MSLLHOOKSTRUCT, blocked
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn state() -> HookState {
+        HookState {
+            hwnd: 1usize as HWND,
+            bindings: vec![Binding::parse("Ctrl+Q").unwrap()],
+            modes: vec![Mode::Click],
+            registered: vec![true],
+            keys: [false; 256],
+            eaten: [false; 256],
+            mouse_eaten: [false; 6],
+            active: None,
+            available: true,
+            enabled: true,
+            reserved: 0,
+            failures: vec![],
+            foreground: 2usize as HWND,
+            observed_foreground: 2usize as HWND,
+            observed_blocked: false,
+        }
+    }
+    #[test]
+    fn stale_or_fullscreen_observation_never_authorizes_a_shortcut() {
+        let mut h = state();
+        assert!(hook_allowed(&h, 2usize as HWND));
+        assert!(!hook_allowed(&h, 3usize as HWND));
+        h.observed_blocked = true;
+        assert!(!hook_allowed(&h, 2usize as HWND));
+        h.keys[0x11] = true;
+        let key = KBDLLHOOKSTRUCT {
+            vkCode: 0x51,
+            ..unsafe { zeroed() }
+        };
+        assert!(!unsafe { keyboard_packet(&mut h, WM_KEYDOWN as usize, &key, true) });
+        assert!(!h.eaten[0x51]);
+        assert!(h.active.is_none());
+    }
+    #[test]
+    fn owned_radial_accepts_immediate_selection_without_an_observer_round_trip() {
+        let mut h = state();
+        h.active = Some(0);
+        h.observed_blocked = true;
+        assert!(hook_allowed(&h, h.hwnd));
+        h.available = false;
+        assert!(!hook_allowed(&h, h.hwnd));
+    }
+    #[test]
+    fn ordinary_desktop_clicks_pass_through_without_a_radial_session() {
+        let mut h = state();
+        let event: MSLLHOOKSTRUCT = unsafe { zeroed() };
+        for blocked in [false, true] {
+            for message in [WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP] {
+                assert!(!unsafe { mouse_packet(&mut h, message as usize, &event, blocked) });
+            }
+        }
+        assert!(h.mouse_eaten.iter().all(|v| !v));
+    }
+    #[test]
+    fn finishing_an_eaten_click_clears_it_even_after_fullscreen_transition() {
+        let mut h = state();
+        h.mouse_eaten[1] = true;
+        let event: MSLLHOOKSTRUCT = unsafe { zeroed() };
+        assert!(unsafe { mouse_packet(&mut h, WM_LBUTTONUP as usize, &event, true) });
+        assert!(!unsafe { mouse_packet(&mut h, WM_LBUTTONDOWN as usize, &event, true) });
+        assert!(!h.mouse_eaten[1]);
+    }
 }
