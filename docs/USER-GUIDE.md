@@ -22,7 +22,7 @@ The sample tree includes Calculator, Notepad, the portable folder, and a GitHub 
 
 Every item, including root and nested Constellations, has a **Note** field below Name. Use it for short prerequisites or consequences (for example, “needs ssh-agent running” or “deletes the source”). The live counter caps typing/paste at 140 Unicode characters; pasted line breaks become spaces. **Apply item → Save** persists it. Notes participate in undo/redo and configuration import/export; clearing a note removes its JSON field.
 
-When any note is configured, a fixed central panel shows the hovered item's name and note immediately; over the neutral centre/gaps it shows the root. Long notes wrap inside that panel. Empty-note items keep the same panel footprint. It can cover part of the radial visually but does not change targeting, add delays or affect launching. Notes do not replace missing-target advice in the editor. The full fan-out preview retains its geometry overview.
+Notes are internal configuration metadata. They appear only in the configuration editor and config.json, never in the radial or full fan-out preview. They do not add panels/tooltips or replace missing-target advice.
 
 Choose **Icon: From Software → Browse…** to use an EXE/shortcut icon independently of the launch target. For example, keep a Hydrus instance script as the target and select the Hydrus executable as its icon source. **Apply item → Save** persists both independently. Software is referenced in place, not copied; reselect its source if you move that installation.
 
