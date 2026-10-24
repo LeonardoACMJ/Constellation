@@ -348,6 +348,36 @@ mod queue_tests {
     // A null-handle fixture uses only the recording backend: no device is
     // opened, no scheduling priority is changed, and no sound is played.
     #[test]
+    fn all_instrument_tails_drain_in_order_without_a_device() {
+        use crate::config::Instrument;
+        for instrument in [
+            Instrument::Mallet,
+            Instrument::ClassicBell,
+            Instrument::PluckedStrings,
+            Instrument::WindChimes,
+        ] {
+            let mut device = Device::empty();
+            let (mut mixer, mut reference) = (Mixer::new(instrument), Mixer::new(instrument));
+            mixer.start(0, 0.18);
+            reference.start(0, 0.18);
+            let mut stream = RecordingStream::default();
+            for _ in 0..100 {
+                if !unsafe { device.fill_using(&mut mixer, &mut stream).unwrap() } {
+                    break;
+                }
+                for b in &mut *device.buffers {
+                    b.header.dwFlags |= WHDR_DONE;
+                }
+            }
+            assert_eq!(mixer.active(), 0);
+            assert!(!device.running);
+            let mut expected = vec![0; stream.samples.len()];
+            reference.mix(&mut expected);
+            assert_eq!(stream.samples, expected);
+            assert_eq!(stream.samples.last(), Some(&0));
+        }
+    }
+    #[test]
     fn startup_and_exhausted_queue_are_primed_before_playback() {
         let mut device = Device::empty();
         let (mut mixer, mut reference) = (Mixer::default(), Mixer::default());

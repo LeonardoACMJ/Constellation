@@ -197,6 +197,8 @@ pub enum Instrument {
     #[default]
     Mallet,
     ClassicBell,
+    PluckedStrings,
+    WindChimes,
 }
 impl Instrument {
     pub fn is_default(&self) -> bool {

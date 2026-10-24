@@ -52,10 +52,12 @@ fn main() {
         (2.55, 2),
         (2.6, 0),
     ];
-    let count = (RATE as f64 * 3.2) as usize;
+    let count = (RATE as f64 * 3.5) as usize;
     for (instrument, filename) in [
         (Instrument::Mallet, "02-mallet-novo.wav"),
         (Instrument::ClassicBell, "01-sino-anterior.wav"),
+        (Instrument::PluckedStrings, "03-cordas-dedilhadas.wav"),
+        (Instrument::WindChimes, "04-wind-chimes.wav"),
     ] {
         let mut samples = vec![0i16; count];
         let mut mixer = Mixer::new(instrument);

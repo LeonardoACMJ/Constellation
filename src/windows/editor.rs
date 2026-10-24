@@ -530,7 +530,12 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             160,
             WS_TABSTOP | CBS_DROPDOWNLIST as u32,
         );
-        for title in ["Soft mallet", "Classic bell"] {
+        for title in [
+            "Soft mallet",
+            "Classic bell",
+            "Plucked strings",
+            "Wind chimes",
+        ] {
             send(
                 hwnd,
                 INSTRUMENT,
@@ -1298,6 +1303,8 @@ impl Editor {
             match self.c.sound.instrument {
                 Instrument::Mallet => 0,
                 Instrument::ClassicBell => 1,
+                Instrument::PluckedStrings => 2,
+                Instrument::WindChimes => 3,
             },
             0,
         );
@@ -1335,6 +1342,8 @@ impl Editor {
         candidate.sound.instrument = match send(self.hwnd, INSTRUMENT, CB_GETCURSEL, 0, 0) {
             0 => Instrument::Mallet,
             1 => Instrument::ClassicBell,
+            2 => Instrument::PluckedStrings,
+            3 => Instrument::WindChimes,
             _ => return Err("Choose an instrument".into()),
         };
         candidate.sound.enabled = send(self.hwnd, SOUND, BM_GETCHECK, 0, 0) == 1;

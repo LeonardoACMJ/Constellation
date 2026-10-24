@@ -27,6 +27,8 @@ impl Mixer {
         match instrument {
             Instrument::Mallet => NOTES.map(|f| Arc::from(mallet(f))),
             Instrument::ClassicBell => NOTES.map(|f| Arc::from(classic_bell(f * 2.))),
+            Instrument::PluckedStrings => NOTES.map(|f| Arc::from(plucked_string(f))),
+            Instrument::WindChimes => NOTES.map(|f| Arc::from(wind_chime(f * 2.))),
         }
     }
     pub fn new(instrument: Instrument) -> Self {
@@ -109,12 +111,34 @@ fn mallet(frequency: f64) -> Vec<f32> {
         (9.96, 0.065, 0.012, 0.0015),
         (18.08, 0.018, 0.006, 0.001),
     ];
-    let count = (RATE as f64 * DURATION) as usize;
+    modal_tone(frequency, &MODES, DURATION, 0.29, 0.025)
+}
+
+fn wind_chime(frequency: f64) -> Vec<f32> {
+    // Free tube bending-mode ratios, with a quieter, long metallic tail.
+    const MODES: [(f64, f64, f64, f64); 5] = [
+        (1., 1., 0.18, 0.004),
+        (2.76, 0.35, 0.11, 0.0025),
+        (5.40, 0.14, 0.075, 0.002),
+        (8.93, 0.06, 0.045, 0.0015),
+        (13.34, 0.02, 0.025, 0.0015),
+    ];
+    modal_tone(frequency, &MODES, 0.72, 0.145, 0.060)
+}
+
+fn modal_tone(
+    frequency: f64,
+    modes: &[(f64, f64, f64, f64)],
+    duration: f64,
+    gain: f64,
+    release: f64,
+) -> Vec<f32> {
+    let count = (RATE as f64 * duration) as usize;
     (0..count)
         .map(|i| {
             let t = i as f64 / RATE as f64;
             let mut sum = 0.;
-            for (ratio, amplitude, decay, attack) in MODES {
+            for &(ratio, amplitude, decay, attack) in modes {
                 let partial = frequency * ratio;
                 if partial >= RATE as f64 * 0.5 {
                     continue;
@@ -127,15 +151,124 @@ fn mallet(frequency: f64) -> Vec<f32> {
             }
             // Raised-cosine release reaches exact zero with a flat endpoint.
             let remaining = (count - 1 - i) as f64 / RATE as f64;
-            let fade = 0.5 - 0.5 * (std::f64::consts::PI * (remaining / 0.025).min(1.)).cos();
-            (0.29 * sum * fade) as f32
+            let fade = 0.5 - 0.5 * (std::f64::consts::PI * (remaining / release).min(1.)).cos();
+            (gain * sum * fade) as f32
         })
         .collect()
+}
+
+/// Fractional-delay Karplus-Strong string, rendered once into the note bank.
+/// The half-sample loss-filter delay is included in the pitch calculation.
+fn plucked_string(frequency: f64) -> Vec<f32> {
+    let delay = RATE as f64 / frequency - 0.5;
+    let whole = delay.floor() as usize;
+    let fraction = delay - whole as f64;
+    let length = whole + 3;
+    let mut seed = frequency.to_bits() ^ 0x9e3779b97f4a7c15;
+    let mut line: Vec<f64> = (0..length)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 32) as f64 / u32::MAX as f64 * 2. - 1.
+        })
+        .collect();
+    // A soft pluck: smooth its initial excitation, and remove DC.
+    for _ in 0..3 {
+        let source = line.clone();
+        for i in 0..length {
+            line[i] = 0.5 * (source[i] + source[(i + 1) % length]);
+        }
+    }
+    let mean = line.iter().sum::<f64>() / length as f64;
+    for value in &mut line {
+        *value -= mean;
+    }
+    let loss = (-1. / (frequency * 0.11)).exp();
+    let (mut write, mut previous, mut body) = (0usize, 0., 0.);
+    let count = (RATE as f64 * 0.48) as usize;
+    let mut samples: Vec<f32> = (0..count)
+        .map(|i| {
+            let a = (write + length - whole) % length;
+            let b = (a + length - 1) % length;
+            let value = line[a] * (1. - fraction) + line[b] * fraction;
+            line[write] = 0.5 * (value + previous) * loss;
+            previous = value;
+            write = (write + 1) % length;
+            body = 0.35 * value + 0.65 * body;
+            let t = i as f64 / RATE as f64;
+            let rise = 0.5 - 0.5 * (std::f64::consts::PI * (t / 0.003).min(1.)).cos();
+            let remaining = (count - 1 - i) as f64 / RATE as f64;
+            let fade = 0.5 - 0.5 * (std::f64::consts::PI * (remaining / 0.04).min(1.)).cos();
+            (body * rise * fade) as f32
+        })
+        .collect();
+    let peak = samples.iter().map(|v| v.abs()).fold(0f32, f32::max);
+    if peak > 0. {
+        for value in &mut samples {
+            *value *= 0.28 / peak;
+        }
+    }
+    samples
 }
 
 #[cfg(test)]
 mod synthesis_tests {
     use super::*;
+    #[test]
+    fn new_banks_are_bounded_deterministic_quiet_at_edges_and_decay() {
+        for (instrument, payload) in [
+            (Instrument::PluckedStrings, 460800),
+            (Instrument::WindChimes, 691200),
+        ] {
+            let a = Mixer::new(instrument);
+            let b = Mixer::new(instrument);
+            assert_eq!(
+                a.notes
+                    .iter()
+                    .map(|n| n.len() * size_of::<f32>())
+                    .sum::<usize>(),
+                payload
+            );
+            for (a, b) in a.notes.iter().zip(&b.notes) {
+                assert_eq!(a, b);
+                assert_eq!(a[0], 0.);
+                assert_eq!(*a.last().unwrap(), 0.);
+                assert!(a.iter().all(|v| v.is_finite() && v.abs() < 0.4));
+                let energy =
+                    |s: &[f32]| s.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / s.len() as f64;
+                assert!(energy(&a[480..2400]) > energy(&a[a.len() - 2400..a.len() - 480]) * 5.);
+                assert!(a[a.len() - 16..].iter().all(|v| v.abs() < 0.00001));
+            }
+        }
+    }
+    #[test]
+    fn fractional_string_delay_preserves_the_requested_pitch() {
+        for (frequency, note) in NOTES
+            .into_iter()
+            .zip(Mixer::new(Instrument::PluckedStrings).notes)
+        {
+            let period = RATE as f64 / frequency;
+            let correlation = |lag: usize| {
+                let (mut xy, mut xx, mut yy) = (0., 0., 0.);
+                for i in 5760..10560 {
+                    let (x, y) = (note[i] as f64, note[i + lag] as f64);
+                    xy += x * y;
+                    xx += x * x;
+                    yy += y * y;
+                }
+                xy / (xx * yy).sqrt()
+            };
+            let best = ((period * 0.8) as usize..=(period * 1.2) as usize)
+                .max_by(|a, b| correlation(*a).total_cmp(&correlation(*b)))
+                .unwrap();
+            let actual = RATE as f64 / best as f64;
+            assert!(
+                (actual / frequency - 1.).abs() < 0.01,
+                "{actual} vs {frequency}"
+            );
+        }
+    }
     #[test]
     fn bank_changes_reuse_current_selection_and_release_old_data_after_tails() {
         let mut mixer = Mixer::default();

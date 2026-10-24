@@ -227,3 +227,29 @@ fn switching_instruments_changes_new_notes_but_keeps_existing_tails() {
     mixed.mix(&mut vec![0; RATE as usize / 2]);
     assert_eq!(mixed.active(), 0);
 }
+
+#[test]
+fn all_four_instruments_roundtrip_and_keep_tails_on_switch() {
+    use constellation::config::Instrument;
+    let instruments = [
+        Instrument::Mallet,
+        Instrument::ClassicBell,
+        Instrument::PluckedStrings,
+        Instrument::WindChimes,
+    ];
+    let mut c = Config::default();
+    let mut mixed = Mixer::default();
+    for instrument in instruments {
+        c.sound.instrument = instrument;
+        assert_eq!(
+            storage::parse_config(&serde_json::to_vec(&c).unwrap()).unwrap(),
+            c
+        );
+        mixed.set_instrument(instrument);
+        mixed.start(2, 0.2);
+        mixed.mix(&mut [0; 480]);
+    }
+    assert_eq!(mixed.active(), 4);
+    mixed.mix(&mut vec![0; RATE as usize]);
+    assert_eq!(mixed.active(), 0);
+}
