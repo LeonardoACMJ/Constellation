@@ -85,10 +85,12 @@ U.RegisterClassW(C.byref(wc))
 # Keep the independent foreground application responsive while the driver waits
 # on modal dialogs, disk flushes and cross-process SendMessage calls.
 probe=None
+probe_other=None
 probe_ready=threading.Event()
 def probe_loop():
-    global probe
+    global probe,probe_other
     probe=U.CreateWindowExW(0,wc.name,"Constellation input probe",0x10CF0000,80,80,440,260,None,None,wc.instance,None)
+    probe_other=U.CreateWindowExW(0,wc.name,"Constellation second input probe",0x10CF0000,540,80,440,260,None,None,wc.instance,None)
     probe_ready.set()
     msg=W.MSG()
     while U.IsWindow(probe) and U.GetMessageW(C.byref(msg),None,0,0)>0:
@@ -168,7 +170,7 @@ try:
     mark("another profile is ignored while the Click profile remains open")
     scale=U.GetDpiForWindow(overlay)/96
     U.SetCursorPos(center[0],round(center[1]-144*.65*scale)); pause(); screenshot(overlay,"radial.png")
-    assert U.GetForegroundWindow()==overlay,("Radial failed to take foreground",U.GetForegroundWindow(),overlay)
+    assert U.GetForegroundWindow()==probe,("Radial changed the foreground application",U.GetForegroundWindow(),probe)
     keys((0x20,False),(0x20,True)); wait(lambda:not visible(overlay));wait(marker.exists)
     assert point()==origin,(point(),origin)
     mark("Space launches one target and restores the saved cursor")
@@ -267,9 +269,10 @@ try:
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();marker.unlink(missing_ok=True)
     keys((0x77,False));wait(lambda:visible(overlay));center=point()
     U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause()
-    U.SetForegroundWindow(probe);U.SetFocus(probe);keys((0x77,True));wait(lambda:not visible(overlay));pause()
+    U.SetForegroundWindow(probe_other);wait(lambda:U.GetForegroundWindow()==probe_other)
+    keys((0x77,True));wait(lambda:not visible(overlay));pause()
     assert not marker.exists()
-    mark("focus loss immediately before Hold release cannot launch")
+    mark("foreground switch immediately before Hold release cannot launch")
     for _ in range(12):
         U.SetForegroundWindow(probe);U.SetFocus(probe);pause(.03);invoke();wait(lambda:visible(overlay))
         keys((0x08,False),(0x08,True),(0x1b,False),(0x1b,True));wait(lambda:not visible(overlay))
@@ -566,6 +569,7 @@ try:
 finally:
     for proc in processes:
         if proc.poll() is None: proc.terminate();proc.wait(timeout=5)
+    if probe_other: U.PostMessageW(probe_other,0x10,0,0)
     if probe: U.PostMessageW(probe,0x10,0,0);probe_thread.join(timeout=5)
     U.SetCursorPos(old_cursor.x,old_cursor.y)
     if old_foreground: U.SetForegroundWindow(old_foreground)

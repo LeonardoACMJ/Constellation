@@ -88,7 +88,7 @@ These are **Proposed unless marked Agreed**, based on the prototype and subseque
 | NAV-05 | Enter an empty Constellation | Show an empty state with a route back; do not launch or dismiss. |
 | END-01 | Escape / unassigned right click / left click in an untargeted region | Close without launch and apply CUR-02. A mouse button bound to invocation takes precedence over dismissal. |
 | END-02 | Invoke the same Click profile again | Toggle closed. Ignore key-repeat events so holding a Click binding cannot repeatedly toggle. |
-| END-03 | Focus lost or session interrupted | Cancel selection, close, and apply restoration where possible. Never launch from a late release event. |
+| END-03 | Foreground application changes or session interrupted | Cancel selection, close, and apply restoration where possible. Never launch from a late release event. The Windows overlay keeps the invocation’s foreground app active and receives radial commands through its input worker. |
 | END-04 | Invoke another profile while open | **Agreed:** ignore that invocation. Keep the active profile, navigation path, and saved cursor restoration position unchanged. Only the active Hold profile's release can complete its selection. |
 | END-05 | Display changes, cursor-control failure, or input capture prevents a usable interaction | **Agreed:** cancel cleanly without launching; close the overlay, restore the cursor where possible, and invalidate pending selection/release events. FS-02 takes precedence if a fullscreen app becomes active. |
 

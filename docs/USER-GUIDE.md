@@ -12,7 +12,7 @@ The app stays in the notification area (system tray); it does not show a permane
 - Another shortcut profile is ignored while one is active. Pressing the active Click binding again closes the radial.
 - Shortcuts are suspended while a fullscreen app is foreground. The app does not intentionally overlay fullscreen windows or move their cursor.
 - Locking/disconnecting the session or suspending the PC cancels the current gesture. Availability resumes after unlock/reconnect/resume. Late releases cannot launch from the cancelled gesture.
-- If Windows refuses the radial focus, invocation cancels instead of accepting selection in the background. The tray icon is restored after Explorer recreates the taskbar.
+- The radial opens without activating its window: the current app keeps focus while the launcher consumes navigation/selection inputs. Switching foreground applications cancels the radial. The tray icon is restored after Explorer recreates the taskbar.
 
 The sample tree includes Calculator, Notepad, the portable folder, and a GitHub URL. Customize it before relying on fixed gestures.
 

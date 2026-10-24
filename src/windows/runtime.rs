@@ -15,9 +15,11 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
     System::{LibraryLoader::GetModuleHandleW, RemoteDesktop::*, Threading::*},
-    UI::{HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+    UI::{HiDpi::*, Shell::*, WindowsAndMessaging::*},
 };
 
+const RADIAL_WINDOW_STYLE: u32 =
+    WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE;
 const TRAY: u32 = WM_APP + 1;
 pub(super) const INVOKE: u32 = WM_APP + 2;
 pub(super) const RELEASE: u32 = WM_APP + 3;
@@ -55,6 +57,7 @@ struct Runtime {
     engine: Engine,
     paused: bool,
     menu_open: bool,
+    source_foreground: HWND,
     session_blocked: bool,
     sleeping: bool,
     session_notifications: bool,
@@ -106,7 +109,7 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             return Err("Cannot register radial window class".into());
         }
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            RADIAL_WINDOW_STYLE,
             class.as_ptr(),
             wide("Constellation").as_ptr(),
             WS_POPUP,
@@ -128,30 +131,7 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             .iter()
             .map(|p| Binding::parse(&p.binding))
             .collect::<Result<_, _>>()?;
-        let app = Box::new(Runtime {
-            hwnd,
-            root,
-            config,
-            bindings,
-            engine: Engine::default(),
-            paused: false,
-            menu_open: false,
-            session_blocked: false,
-            sleeping: false,
-            session_notifications: false,
-            taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
-            origin: Point::default(),
-            scale: 1.,
-            saved: zeroed(),
-            center: zeroed(),
-            input: None,
-            chimes: Chimes::default(),
-            smoke,
-            smoke_phase: 0,
-            smoke_opened: false,
-            instance,
-            reload_requested: false,
-        });
+        let app = Box::new(Runtime::new(hwnd, root, config, bindings, smoke, instance));
         APP = Box::into_raw(app);
         let startup_guard = super::DispatchGuard::enter().expect("resident startup dispatch");
         let a = &mut *APP;
@@ -259,6 +239,42 @@ pub(super) unsafe fn foreground_blocks_launcher(overlay: HWND) -> bool {
 }
 
 impl Runtime {
+    fn new(
+        hwnd: HWND,
+        root: PathBuf,
+        config: Config,
+        bindings: Vec<Binding>,
+        smoke: bool,
+        instance: HANDLE,
+    ) -> Self {
+        unsafe {
+            Self {
+                hwnd,
+                root,
+                config,
+                bindings,
+                engine: Engine::default(),
+                paused: false,
+                menu_open: false,
+                source_foreground: null_mut(),
+                session_blocked: false,
+                sleeping: false,
+                session_notifications: false,
+                taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
+                origin: Point::default(),
+                scale: 1.,
+                saved: zeroed(),
+                center: zeroed(),
+                input: None,
+                chimes: Chimes::default(),
+                smoke,
+                smoke_phase: 0,
+                smoke_opened: false,
+                instance,
+                reload_requested: false,
+            }
+        }
+    }
     unsafe fn refresh_registration(&mut self) {
         if let Some(input) = &self.input {
             input.configure(
@@ -352,6 +368,7 @@ impl Runtime {
         if !self.engine.open(i, &self.config) {
             return;
         }
+        self.source_foreground = GetForegroundWindow();
         if GetCursorPos(&mut self.saved) == 0 {
             self.engine.close();
             self.notice("Cannot read cursor position; invocation cancelled.");
@@ -399,13 +416,10 @@ impl Runtime {
         // Keep it transparent until the new root frame has been drawn, so a
         // previously expanded branch can never be presented on reopening.
         SetLayeredWindowAttributes(self.hwnd, 0, 0, LWA_COLORKEY | LWA_ALPHA);
-        ShowWindow(self.hwnd, SW_SHOW);
-        if !super::focus_window(self.hwnd) {
-            self.dismiss(true);
-            self.notice("Windows did not allow the radial to receive focus; invocation cancelled.");
-            return;
-        }
-        SetFocus(self.hwnd);
+        // Input is routed by the resident hooks; the overlay does not need to
+        // become the foreground window. Keep the invocation's original app
+        // active and cancel if that foreground changes during the gesture.
+        ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         render::present(self.hwnd, 0, |dc| {
             render::draw(
                 dc,
@@ -498,7 +512,7 @@ impl Runtime {
         if self.session_blocked
             || self.sleeping
             || foreground_blocks_launcher(self.hwnd)
-            || GetForegroundWindow() != self.hwnd
+            || GetForegroundWindow() != self.source_foreground
         {
             self.dismiss(
                 !self.session_blocked && !self.sleeping && !foreground_blocks_launcher(self.hwnd),
@@ -761,7 +775,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         }
         FOREGROUND => {
             let full = foreground_blocks_launcher(hwnd);
-            if a.engine.profile.is_some() && (full || GetForegroundWindow() != hwnd) {
+            if a.engine.profile.is_some() && (full || GetForegroundWindow() != a.source_foreground)
+            {
                 a.dismiss(!full);
             }
             0
@@ -1026,6 +1041,87 @@ mod native_modal_tests {
             }
             _ => DefWindowProcW(hwnd, msg, w, l),
         }
+    }
+    #[test]
+    #[ignore = "native overlay session; run on remote Windows CI only"]
+    fn radial_opens_navigates_and_cancels_without_foreground_activation() {
+        std::thread::spawn(|| unsafe {
+            let module = GetModuleHandleW(null());
+            let name = wide("Constellation.Test.NonactivatingRadial");
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(window_proc),
+                hInstance: module,
+                lpszClassName: name.as_ptr(),
+                ..zeroed()
+            };
+            assert_ne!(RegisterClassW(&class), 0);
+            let hwnd = CreateWindowExW(
+                RADIAL_WINDOW_STYLE,
+                name.as_ptr(),
+                wide("test radial").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                1,
+                1,
+                null_mut(),
+                null_mut(),
+                module,
+                null(),
+            );
+            assert!(!hwnd.is_null());
+            SetLayeredWindowAttributes(hwnd, 0, 255, LWA_COLORKEY);
+            let root = std::env::temp_dir().join(format!(
+                "constellation-overlay-{}-{}",
+                std::process::id(),
+                GetCurrentThreadId()
+            ));
+            let mut config = Config::default();
+            config.sound.enabled = false;
+            storage::save(&root, &config).unwrap();
+            let bindings = config
+                .profiles
+                .iter()
+                .map(|p| Binding::parse(&p.binding).unwrap())
+                .collect();
+            let foreground = GetForegroundWindow();
+            let mut saved: POINT = zeroed();
+            GetCursorPos(&mut saved);
+            APP = Box::into_raw(Box::new(Runtime::new(
+                hwnd,
+                root,
+                config,
+                bindings,
+                false,
+                null_mut(),
+            )));
+            // Real production invocation and cancellation. This isolated fixture
+            // intentionally has no Worker, so no global hooks are installed.
+            SendMessageW(hwnd, INVOKE, 0, 0);
+            assert_eq!((*APP).engine.profile, Some(0));
+            assert_ne!(IsWindowVisible(hwnd), 0);
+            assert_eq!(GetForegroundWindow(), foreground);
+            assert!((*APP).selection_allowed());
+            let sector = (&(*APP).engine.sectors)[0].clone();
+            let mut point = POINT {
+                x: ((*APP).origin.x + sector.dot.x * (*APP).scale) as i32,
+                y: ((*APP).origin.y + sector.dot.y * (*APP).scale) as i32,
+            };
+            ClientToScreen(hwnd, &mut point);
+            SendMessageW(hwnd, POINTER_MOVE, 0, pack_point(point));
+            assert_eq!((*APP).engine.hovered, Some(sector.id));
+            SendMessageW(hwnd, KEY_ACTION, 0x1b, 0);
+            assert!((*APP).engine.profile.is_none());
+            assert_eq!(IsWindowVisible(hwnd), 0);
+            assert_eq!(GetForegroundWindow(), foreground);
+            DestroyWindow(hwnd);
+            drop(Box::from_raw(APP));
+            APP = null_mut();
+            SetCursorPos(saved.x, saved.y);
+            UnregisterClassW(name.as_ptr(), module);
+        })
+        .join()
+        .unwrap();
     }
     #[test]
     #[ignore = "native popup menu; run on remote Windows CI only"]

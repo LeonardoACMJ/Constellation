@@ -1,10 +1,10 @@
-# Constellation 0.1.9 — manual checks
+# Constellation 0.1.10 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.9**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.10**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -23,6 +23,7 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 | Preview updates | Change each spacing slider, then type a value. Switch the monitor preview, resize the window and scroll. | Layout/warnings update when values change; scrolling alone reuses the same preview. Save remains available with advisory overflow warnings. |
 | Chime overlap | Enable Chimes, set a comfortable low volume, Save, then sweep across several Stars quickly. Stop moving; test mute afterward. | Single notes and overlapping tails sound clean, without the reported crunch/crackle, clipping or obvious volume pumping. A new note does not cut off the preceding note; staying on one item does not repeatedly chime. |
 | Cursor end | In Shortcut profiles, try each **Cursor on close** choice: Restore original, Return to menu center, Leave at selection. Test launch and Escape; optionally repeat with Hold. | Original position, invocation monitor's usable center, or selection position respectively. Cursor does not recenter during branch navigation. |
+| Opening without focus takeover | Focus an ordinary app and invoke Ctrl+Q. Hover a Star, then cancel with Esc; repeat with click/Space and any configured Hold profile. Open again, then switch to another app before selecting. | Radial opens without the focus-denied notification; the original app keeps focus; selection/cancel inputs do not activate its controls. Switching apps closes the radial and a late Hold release cannot launch. Fullscreen still blocks invocation. |
 | Reopening | Hover Everyday → Calculator, launch it, then Ctrl+Q again. Repeat after closing an expanded branch with Escape. | The newly opened menu starts at the root with no flash of the previous expanded branch. |
 | Outside targeting | Enable **Select by direction beyond the outer edge** for a profile. Move beyond a Star's outer edge in its direction; click or press Space. Repeat in a nested fan and, if configured, with Hold release. | The matching visible item stays highlighted and launches once. Painted sectors take precedence; gaps and the root hub stay neutral. |
 | Exact targeting option | Disable that option, Save, then repeat outside the circle. | Outside positions stop targeting Stars; the drawn outer edge is the selection boundary. |
