@@ -1,6 +1,6 @@
 [package]
 name = "constellation"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2024"
 description = "Portable system-tray radial launcher"
 publish = false

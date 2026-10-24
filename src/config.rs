@@ -36,6 +36,9 @@ pub enum ItemIcon {
     Custom {
         path: String,
     },
+    Software {
+        path: String,
+    },
 }
 impl ItemIcon {
     pub fn is_auto(&self) -> bool {
@@ -247,9 +250,9 @@ impl Config {
             if n.name.trim().is_empty() {
                 return Err("Every node needs a name".into());
             }
-            if let ItemIcon::Custom { path } = &n.icon {
+            if let ItemIcon::Custom { path } | ItemIcon::Software { path } = &n.icon {
                 if path.trim().is_empty() || path.contains('\0') {
-                    return Err(format!("Invalid custom icon for {}", n.name));
+                    return Err(format!("Invalid icon source for {}", n.name));
                 }
             }
             match (&n.children, &n.target) {

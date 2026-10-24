@@ -43,6 +43,7 @@ pub enum Source {
 fn source(node: &Node) -> Option<Source> {
     match &node.icon {
         ItemIcon::Symbol => None,
+        ItemIcon::Software { path } => Some(Source::Program(path.clone())),
         ItemIcon::Custom { path } => Some(Source::Custom(path.clone())),
         ItemIcon::Automatic => match node.target.as_ref()? {
             Target::Program { path, .. } => Some(Source::Program(path.clone())),
@@ -495,6 +496,26 @@ mod cache_tests {
             }),
             icon: ItemIcon::Automatic,
         }
+    }
+    #[test]
+    fn software_icon_source_is_independent_of_script_target() {
+        let mut item = node(1);
+        item.target = Some(Target::Script {
+            path: "instances/hydrus-one.cmd".into(),
+            runner: None,
+            args: vec![],
+            cwd: None,
+        });
+        item.icon = ItemIcon::Software {
+            path: "software/hydrus_client.exe".into(),
+        };
+        assert!(
+            matches!(source(&item), Some(Source::Program(path)) if path == "software/hydrus_client.exe")
+        );
+        item.icon = ItemIcon::Automatic;
+        assert!(
+            matches!(source(&item), Some(Source::File(path)) if path == "instances/hydrus-one.cmd")
+        );
     }
     #[test]
     fn redraws_do_not_repeat_pending_or_failed_shell_requests() {

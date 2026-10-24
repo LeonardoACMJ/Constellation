@@ -79,3 +79,31 @@ fn invalid_or_oversize_import_does_not_overwrite_existing_asset() {
         before
     );
 }
+
+#[test]
+fn software_icon_roundtrip_preserves_script_launch_definition() {
+    use constellation::config::Target;
+    let mut config = Config::default();
+    let item = &mut config.root.children.as_mut().unwrap()[0];
+    item.children = None;
+    let target = Target::Script {
+        path: "instances/hydrus-one.cmd".into(),
+        runner: Some("cmd.exe".into()),
+        args: vec!["one".into()],
+        cwd: Some("instances".into()),
+    };
+    item.target = Some(target.clone());
+    item.icon = ItemIcon::Software {
+        path: "software/hydrus_client.exe".into(),
+    };
+    let loaded = storage::parse_config(&serde_json::to_vec(&config).unwrap()).unwrap();
+    assert_eq!(loaded, config);
+    assert_eq!(
+        loaded.root.children.as_ref().unwrap()[0].target,
+        Some(target)
+    );
+    for path in ["", " ", "bad\0.exe"] {
+        config.root.icon = ItemIcon::Software { path: path.into() };
+        assert!(config.validate().is_err());
+    }
+}

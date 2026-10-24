@@ -4,6 +4,8 @@
 
 ## Current revision and manual review
 
+**Software icon sources 0.1.18:** adds From Software to choose an executable/shortcut icon independently of the launch target, using the existing asynchronous bounded cache and symbol fallback. Tests cover script-target preservation and software source selection.
+
 **Item icons 0.1.17:** adds optional Node.icon metadata (Automatic default, Symbol or Custom path), an item-editor selector and Image picker, portable PNG/JPEG/BMP/ICO import, and icon display in the radial/full preview including custom Constellations/root. Existing configuration without icon metadata still loads. Native Windows Shell extraction handles local executables/shortcuts/file associations; URLs use the .url association without fetching favicons. Custom images are copied into data/icons with relative references and a bounded, collision-checked content-derived filename; sources are capped at 8 MiB and decoded dimensions at 4096 × 4096. Imported assets remain available for undo/backups; JSON-only export does not bundle them.
 
 A dedicated blocking worker owns COM/Shell lookup and image decoding; visible eligible nodes request icons without blocking UI/input handlers. The bounded cache stores at most 128 normalized 64 × 64 premultiplied BGRA images (2 MiB pixel payload, excluding native/decoder overhead), including negative-result caching and a stable working set for large previews. Notifications coalesce and invalidate the relevant cached preview without erasing the form. No input hooks, launch dispatch or selection geometry changed. GDI+ draws real radial icons; the configuration preview alpha-blends the same cached pixels.

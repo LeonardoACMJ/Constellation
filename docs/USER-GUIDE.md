@@ -20,6 +20,8 @@ The sample tree includes Calculator, Notepad, the portable folder, and a GitHub 
 
 ## Configure
 
+Choose **Icon: From Software → Browse…** to use an EXE/shortcut icon independently of the launch target. For example, keep a Hydrus instance script as the target and select the Hydrus executable as its icon source. **Apply item → Save** persists both independently. Software is referenced in place, not copied; reselect its source if you move that installation.
+
 Each item has an **Icon** selector: **Automatic** uses its Windows target/file-association icon; **Star symbol** keeps the existing symbol. Click **Image…** to import a PNG, JPEG, BMP or ICO (up to 8 MiB; decoded images up to 4096 × 4096). This selects **Custom image** and copies the file into `data/icons`; **Apply item → Save** persists the choice. Constellations support custom images too. Automatic Constellations retain their three-star radial symbol; the list keeps its hollow star.
 
 Icons appear asynchronously in the radial and full preview; unresolved or unreadable icons retain the symbol. Scripts use the associated file-type icon. URLs use Windows' URL-file association; website favicons are not downloaded. Move the whole app folder, including `data/icons`, to preserve custom images. Configuration JSON export references images but does not bundle them; copy `data/icons` alongside an imported configuration if needed. Imported files are retained when drafts are cancelled or items deleted, so undo and backups do not lose their images.
@@ -83,6 +85,6 @@ Stop the resident app using **Quit** in its tray menu. Closing the configuration
 
 This is the first native build. The configuration UI is functional and deliberately plain. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.
 
-Customization feasibility and the proposed later app-action adapters are described in [the personalization study](PERSONALIZATION-STUDY.md). Themes, custom icons/images, and action adapters are not settings in this preview.
+Customization feasibility and the proposed later app-action adapters are described in [the personalization study](PERSONALIZATION-STUDY.md). Themes and action adapters remain future work; item icons are available in Configure.
 
 Use [the feedback-build manual checklist](MANUAL-CHECKS.md) to review scrolling, styling, overlapping chimes, cursor-end options, fresh opening and outside targeting. Local desktop automation is on hold while the user uses the PC.

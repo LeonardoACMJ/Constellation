@@ -394,7 +394,12 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             180,
             WS_TABSTOP | CBS_DROPDOWNLIST as u32,
         );
-        for title in ["Icon: Automatic", "Icon: Star symbol", "Icon: Custom image"] {
+        for title in [
+            "Icon: Automatic",
+            "Icon: Star symbol",
+            "Icon: Custom image",
+            "Icon: From Software",
+        ] {
             send(
                 hwnd,
                 ICON_MODE,
@@ -790,16 +795,24 @@ impl Editor {
             .and_then(|n| n.target.as_ref())
             .map(|t| editing::target_advice(&self.root, t).join(" "))
             .unwrap_or_default();
-        if self
-            .c
-            .find(self.selected)
-            .is_some_and(|n| matches!(n.icon, ItemIcon::Custom { .. }) && self.icons.failed(n))
-        {
+        if self.c.find(self.selected).is_some_and(|n| {
+            matches!(n.icon, ItemIcon::Custom { .. } | ItemIcon::Software { .. })
+                && self.icons.failed(n)
+        }) {
             warning = format!("Icon unavailable; showing symbol. {warning}");
         }
         set(self.hwnd, ADVICE, &warning);
     }
     unsafe fn enable_fields(&self) {
+        set(
+            self.hwnd,
+            ICON_BROWSE,
+            if send(self.hwnd, ICON_MODE, CB_GETCURSEL, 0, 0) == 3 {
+                "Browse…"
+            } else {
+                "Image…"
+            },
+        );
         let kind = send(self.hwnd, KIND, CB_GETCURSEL, 0, 0);
         for (id, on) in [
             (TARGET, kind != 0),
@@ -1123,6 +1136,7 @@ impl Editor {
             ItemIcon::Automatic => 0,
             ItemIcon::Symbol => 1,
             ItemIcon::Custom { .. } => 2,
+            ItemIcon::Software { .. } => 3,
         };
         send(self.hwnd, ICON_MODE, CB_SETCURSEL, mode, 0);
         let (mut kind, mut path, mut args, mut runner, mut cwd) =
@@ -1292,6 +1306,10 @@ impl Editor {
             2 => match &self.icon_draft {
                 ItemIcon::Custom { .. } => self.icon_draft.clone(),
                 _ => return Err("Choose an image with Image… first.".into()),
+            },
+            3 => match &self.icon_draft {
+                ItemIcon::Software { .. } => self.icon_draft.clone(),
+                _ => return Err("Choose software with Browse… first.".into()),
             },
             _ => return Err("Choose an icon mode.".into()),
         };
@@ -1737,13 +1755,29 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             e.checkpoint_settings();
             let result = match id {
                 ICON_BROWSE => (|| {
-                    if let Some(path) = pickers::choose(hwnd, &e.root, Pick::Icon)? {
-                        let imported = crate::icon_assets::import(&e.root, &path)?;
-                        e.icon_draft = ItemIcon::Custom { path: imported };
-                        send(hwnd, ICON_MODE, CB_SETCURSEL, 2, 0);
+                    let software = send(hwnd, ICON_MODE, CB_GETCURSEL, 0, 0) == 3;
+                    let pick = if software { Pick::Software } else { Pick::Icon };
+                    if let Some(path) = pickers::choose(hwnd, &e.root, pick)? {
+                        e.icon_draft = if software {
+                            ItemIcon::Software {
+                                path: editing::portable_path(&e.root, &path),
+                            }
+                        } else {
+                            ItemIcon::Custom {
+                                path: crate::icon_assets::import(&e.root, &path)?,
+                            }
+                        };
+                        send(
+                            hwnd,
+                            ICON_MODE,
+                            CB_SETCURSEL,
+                            if software { 3 } else { 2 },
+                            0,
+                        );
+                        e.enable_fields();
                         e.item_dirty = true;
                         e.status = format!(
-                            "Icon imported: {}. Apply item, then Save.",
+                            "Icon source: {}. Apply item, then Save.",
                             path.file_name().unwrap_or_default().to_string_lossy()
                         );
                     }
