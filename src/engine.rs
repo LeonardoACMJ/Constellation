@@ -37,8 +37,13 @@ impl Engine {
         self.sectors = geometry::visible(c, &self.path);
     }
     pub fn motion(&mut self, c: &Config, p: Point) -> Action {
+        self.motion_with_feedback(c, p).0
+    }
+    /// The second result is true only when the hovered item gains a light.
+    /// Ancestors already illuminated in the active path do not gain it again.
+    pub fn motion_with_feedback(&mut self, c: &Config, p: Point) -> (Action, bool) {
         let Some(profile) = self.profile.map(|i| &c.profiles[i]) else {
-            return Action::None;
+            return (Action::None, false);
         };
         // The root hub remains neutral even if an offset child fan crosses it.
         let item = if p.x.hypot(p.y) < c.layout.radius * 0.30 {
@@ -50,8 +55,9 @@ impl Engine {
         };
         let id = item.as_ref().map(|s| s.id);
         if id == self.hovered {
-            return Action::None;
+            return (Action::None, false);
         }
+        let new_highlight = id.is_some_and(|id| !self.path.contains(&id));
         self.hovered = id;
         if let Some(s) = item {
             if c.find(s.id).is_some_and(|n| n.children.is_some()) {
@@ -65,7 +71,7 @@ impl Engine {
                 self.rebuild(c);
             }
         }
-        Action::Changed
+        (Action::Changed, new_highlight)
     }
     pub fn select(&mut self, c: &Config) -> Action {
         if self.profile.is_none() {

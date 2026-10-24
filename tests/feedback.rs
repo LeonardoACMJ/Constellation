@@ -117,3 +117,51 @@ fn extended_direction_selects_stars_and_branches_but_preserves_hub_and_gaps() {
         .polar(s.outer * 5., s.from - c.layout.gap / c.layout.radius * 0.25);
     assert!(geometry::directional_hit(&root, gap).is_none());
 }
+
+#[test]
+fn chimes_follow_new_lights_instead_of_every_hover_change() {
+    for hover in [true, false] {
+        let mut c = Config::default();
+        c.profiles[0].hover = hover;
+        let mut e = Engine::default();
+        e.open(0, &c);
+        let move_to = |e: &mut Engine, id| {
+            let point = e.sectors.iter().find(|s| s.id == id).unwrap().dot;
+            let (action, chime) = e.motion_with_feedback(&c, point);
+            assert_eq!(e.hovered, Some(id));
+            (action, chime)
+        };
+        assert_eq!(move_to(&mut e, 2), (Action::Changed, true));
+        if !hover {
+            assert_eq!(e.select(&c), Action::Changed);
+        }
+        assert_eq!(move_to(&mut e, 3), (Action::Changed, true));
+        // MusicBee -> Media: its ancestor light never went out.
+        assert_eq!(move_to(&mut e, 2), (Action::Changed, false));
+        assert_eq!(move_to(&mut e, 2), (Action::None, false));
+        // A Star actually loses its light when returning to the ancestor.
+        assert_eq!(move_to(&mut e, 3), (Action::Changed, true));
+        assert_eq!(move_to(&mut e, 4), (Action::Changed, true));
+        assert_eq!(
+            e.motion_with_feedback(&c, Point::default()),
+            (Action::Changed, false)
+        );
+        assert_eq!(move_to(&mut e, 2), (Action::Changed, false));
+        assert_eq!(move_to(&mut e, 5), (Action::Changed, true));
+        if !hover {
+            assert_eq!(e.select(&c), Action::Changed);
+        }
+        assert_eq!(move_to(&mut e, 6), (Action::Changed, true));
+        assert_eq!(move_to(&mut e, 5), (Action::Changed, false));
+        assert_eq!(move_to(&mut e, 2), (Action::Changed, false));
+        // Both Constellations remain in the lit path, even when visiting the hub.
+        e.motion_with_feedback(&c, Point::default());
+        assert_eq!(move_to(&mut e, 5), (Action::Changed, false));
+        // Switching to a root sibling collapses that path; re-entry is new.
+        assert_eq!(move_to(&mut e, 8), (Action::Changed, true));
+        assert_eq!(move_to(&mut e, 2), (Action::Changed, true));
+        e.close();
+        e.open(0, &c);
+        assert_eq!(move_to(&mut e, 2), (Action::Changed, true));
+    }
+}

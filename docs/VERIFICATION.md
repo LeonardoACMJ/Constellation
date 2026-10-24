@@ -4,6 +4,8 @@
 
 ## Current revision and manual review
 
+**Highlight chime triggers 0.1.21:** pointer processing now distinguishes a newly illuminated hovered item from a hover change to an already-lit ancestor. Chimes follow new highlights; returning through ancestors/gaps/hub stays silent while their path lights persist. Losing a light and regaining it, or starting a new invocation, allows another chime. No audio synthesis/output or navigation rules changed. Device-free feedback regressions cover parent/child returns, nested ancestors, repeated motion, sibling changes, collapse/re-entry, invocation reset and both hover/click Constellation profiles. Perceived playback remains a manual check.
+
 **Configuration-only notes 0.1.20:** notes remain on all node types in the editor and JSON, with the existing 140-character limit, counter, history, transfer and migration rules. Radial rendering is restored to the 0.1.18 implementation; no note panel, tooltip or hover text is drawn in either the radial or overview preview. Existing saved notes are preserved.
 
 Device-free tests cover note storage, validation, editing/history and unchanged navigation/dispatch. A remote-only offscreen Windows regression compares every rendered pixel with and without notes on root, Constellations and Stars at 100%/150%, across hover states. Local interactive checks remain manual: verify the Note field persists while the radial and preview show no note overlay.

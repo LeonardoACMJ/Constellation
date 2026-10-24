@@ -481,7 +481,7 @@ impl Runtime {
             return;
         }
         ScreenToClient(self.hwnd, &mut p);
-        let action = self.engine.motion(
+        let (action, new_highlight) = self.engine.motion_with_feedback(
             &self.config,
             Point {
                 x: (p.x as f64 - self.origin.x) / self.scale,
@@ -489,7 +489,7 @@ impl Runtime {
             },
         );
         if action != Action::None {
-            if self.engine.hovered.is_some() {
+            if new_highlight {
                 self.chimes.play(self.config.sound);
             }
             InvalidateRect(self.hwnd, null(), 0);
