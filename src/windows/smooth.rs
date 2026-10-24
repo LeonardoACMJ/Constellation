@@ -122,6 +122,58 @@ mod render_tests {
             for (scale, suffix) in [(1., "100"), (1.5, "150")] {
                 let origin = Point { x: 450., y: 450. };
                 let mut surface = Surface::new(900, 900).unwrap();
+                // A full-width-script note must fit without losing its final line.
+                let graphics = owned(
+                    |out| GdipCreateFromHDC(surface.dc, out),
+                    |p| GdipDeleteGraphics(p),
+                )
+                .unwrap();
+                status(GdipSetPageUnit(graphics.pointer, UnitPixel)).unwrap();
+                let family = owned(
+                    |out| GdipCreateFontFamilyFromName(wide("Segoe UI").as_ptr(), null_mut(), out),
+                    |p| GdipDeleteFontFamily(p),
+                )
+                .unwrap();
+                let font = owned(
+                    |out| {
+                        GdipCreateFont(
+                            family.pointer,
+                            (13. * scale) as f32,
+                            FontStyleRegular,
+                            UnitPixel,
+                            out,
+                        )
+                    },
+                    |p| GdipDeleteFont(p),
+                )
+                .unwrap();
+                let format = owned(
+                    |out| GdipStringFormatGetGenericDefault(out),
+                    |p| GdipDeleteStringFormat(p),
+                )
+                .unwrap();
+                let area = RectF {
+                    X: 0.,
+                    Y: 0.,
+                    Width: (336. * scale) as f32,
+                    Height: (144. * scale) as f32,
+                };
+                let note = wide(&c.find(6).unwrap().note);
+                let (mut bounds, mut fitted, mut lines) = (RectF::default(), 0, 0);
+                status(GdipMeasureString(
+                    graphics.pointer,
+                    note.as_ptr(),
+                    note.len() as i32 - 1,
+                    font.pointer,
+                    &area,
+                    format.pointer,
+                    &mut bounds,
+                    &mut fitted,
+                    &mut lines,
+                ))
+                .unwrap();
+                assert_eq!(fitted, note.len() as i32 - 1);
+                drop(graphics);
                 for (hover, kind) in [
                     (None, "root"),
                     (Some(5), "constellation"),
@@ -138,7 +190,7 @@ mod render_tests {
                     );
                     // Panel dimensions and edge remain constant even for an empty note.
                     let x = (origin.x - 179. * scale).round() as usize;
-                    let y = (origin.y - 77. * scale).round() as usize;
+                    let y = (origin.y - 94. * scale).round() as usize;
                     assert_eq!(bytes(&surface)[(y * 900 + x) * 4 + 3], 255);
                     save_png(
                         &composite(&surface, [24, 20, 16]),
@@ -811,9 +863,9 @@ impl Canvas {
         let item = hover.and_then(|id| c.find(id)).unwrap_or(&c.root);
         let rect = RectF {
             X: (origin.x - 180. * scale) as f32,
-            Y: (origin.y - 78. * scale) as f32,
+            Y: (origin.y - 95. * scale) as f32,
             Width: (360. * scale) as f32,
-            Height: (156. * scale) as f32,
+            Height: (190. * scale) as f32,
         };
         let brush = self.brush(color(18, 25, 39, 255))?;
         status(GdipFillRectangle(
@@ -849,7 +901,7 @@ impl Canvas {
             X: rect.X + 12. * scale as f32,
             Y: rect.Y + 36. * scale as f32,
             Width: rect.Width - 24. * scale as f32,
-            Height: 110. * scale as f32,
+            Height: 144. * scale as f32,
         };
         status(GdipSetStringFormatFlags(self.format.pointer, 0))?;
         let text = wide(&item.note);
