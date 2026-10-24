@@ -176,6 +176,8 @@ impl Default for Layout {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Sound {
+    #[serde(skip_serializing_if = "Instrument::is_default")]
+    pub instrument: Instrument,
     pub enabled: bool,
     pub volume: f64,
 }
@@ -184,7 +186,21 @@ impl Default for Sound {
         Self {
             enabled: true,
             volume: 0.18,
+            instrument: Instrument::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Instrument {
+    #[default]
+    Mallet,
+    ClassicBell,
+}
+impl Instrument {
+    pub fn is_default(&self) -> bool {
+        *self == Self::Mallet
     }
 }
 

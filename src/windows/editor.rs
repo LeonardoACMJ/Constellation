@@ -5,7 +5,7 @@ use super::{
     render, wide,
 };
 use crate::{
-    config::{Binding, Config, CursorEnd, ItemIcon, Mode, Node, Profile, Target},
+    config::{Binding, Config, CursorEnd, Instrument, ItemIcon, Mode, Node, Profile, Target},
     editing::{self, History},
     editor_layout::{Layout as FormLayout, Rect as FormRect},
     geometry::{self, Point},
@@ -66,6 +66,7 @@ const GAP: i32 = 504;
 const SOUND: i32 = 505;
 const VOLUME: i32 = 506;
 const MONITOR: i32 = 507;
+const INSTRUMENT: i32 = 508;
 // Opt-in diagnostics live only in the separate configuration process. Each
 // stage is written before the next native call, so a stall leaves its location.
 struct EditorTrace {
@@ -517,6 +518,27 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             28,
             WS_BORDER | ES_AUTOHSCROLL as u32,
         );
+        label(hwnd, "Instrument", 305, 838, 90);
+        control(
+            hwnd,
+            "COMBOBOX",
+            "",
+            INSTRUMENT,
+            405,
+            833,
+            260,
+            160,
+            WS_TABSTOP | CBS_DROPDOWNLIST as u32,
+        );
+        for title in ["Soft mallet", "Classic bell"] {
+            send(
+                hwnd,
+                INSTRUMENT,
+                CB_ADDSTRING,
+                0,
+                wide(title).as_ptr() as isize,
+            );
+        }
         label(hwnd, "FULL FAN-OUT PREVIEW", 700, 18, 300);
         control(
             hwnd,
@@ -552,19 +574,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Save",
             SAVE,
             20,
-            868,
+            906,
             100,
             35,
             BS_DEFPUSHBUTTON as u32,
         );
-        control(hwnd, "BUTTON", "Reload", RELOAD, 130, 868, 100, 35, 0);
+        control(hwnd, "BUTTON", "Reload", RELOAD, 130, 906, 100, 35, 0);
         control(
             hwnd,
             "BUTTON",
             "Shortcut profiles…",
             PROFILES,
             240,
-            868,
+            906,
             250,
             35,
             0,
@@ -575,7 +597,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Advanced JSON…",
             ADVANCED,
             500,
-            868,
+            906,
             170,
             35,
             WS_TABSTOP,
@@ -1269,6 +1291,16 @@ impl Editor {
     unsafe fn settings_to_controls(&mut self) {
         self.settings_invalid = false;
         self.sync_sliders();
+        send(
+            self.hwnd,
+            INSTRUMENT,
+            CB_SETCURSEL,
+            match self.c.sound.instrument {
+                Instrument::Mallet => 0,
+                Instrument::ClassicBell => 1,
+            },
+            0,
+        );
         let l = self.c.layout;
         for (id, value) in [
             (RADIUS, l.radius),
@@ -1300,6 +1332,11 @@ impl Editor {
         candidate.layout.spread = number(SPREAD)?;
         candidate.layout.gap = number(GAP)?;
         candidate.sound.volume = number(VOLUME)?;
+        candidate.sound.instrument = match send(self.hwnd, INSTRUMENT, CB_GETCURSEL, 0, 0) {
+            0 => Instrument::Mallet,
+            1 => Instrument::ClassicBell,
+            _ => return Err("Choose an instrument".into()),
+        };
         candidate.sound.enabled = send(self.hwnd, SOUND, BM_GETCHECK, 0, 0) == 1;
         candidate.validate()?;
         if candidate != self.c {
@@ -1791,6 +1828,17 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     }
                 }
                 InvalidateRect(hwnd, null(), 1);
+                return 0;
+            }
+            if id == INSTRUMENT && notify == CBN_SELCHANGE as u32 {
+                e.checkpoint_settings();
+                let result = e.controls_to_settings();
+                e.settings_invalid = result.is_err();
+                if let Err(message) = result {
+                    e.status = message;
+                }
+                e.checkpoint_settings();
+                InvalidateRect(hwnd, null(), 0);
                 return 0;
             }
             if id == MONITOR && notify == CBN_SELCHANGE as u32 {

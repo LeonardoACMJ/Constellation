@@ -78,3 +78,50 @@ fn layout_keeps_controls_inside_panels_and_retains_combo_dropdown_height() {
         }
     }
 }
+
+#[test]
+fn instrument_row_fits_above_footer_and_advice_stays_above_layout() {
+    for (w, h) in [(680, 500), (1380, 870), (1920, 1050), (2451, 1080)] {
+        let layout = Layout::new(w, h, 17, 17);
+        let instrument = layout.control(
+            Rect {
+                x: 405,
+                y: 833,
+                w: 260,
+                h: 160,
+            },
+            508,
+        );
+        let save = layout.control(
+            Rect {
+                x: 20,
+                y: 906,
+                w: 100,
+                h: 35,
+            },
+            401,
+        );
+        assert!(instrument.y + 28 < save.y);
+        assert!(instrument.y + 28 < layout.panels()[1].y + layout.panels()[1].h);
+        assert_eq!(instrument.h, 160);
+        let advice = layout.control(
+            Rect {
+                x: 465,
+                y: 585,
+                w: 200,
+                h: 48,
+            },
+            214,
+        );
+        let heading = layout.control(
+            Rect {
+                x: 305,
+                y: 638,
+                w: 370,
+                h: 18,
+            },
+            0,
+        );
+        assert!(advice.y + advice.h < heading.y);
+    }
+}

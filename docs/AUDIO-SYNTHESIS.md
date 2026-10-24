@@ -1,6 +1,6 @@
 # Lightweight synthesized chimes
 
-The 0.1.22 prototype replaces the two-wave high bell with a warmer struck-bar tone. Audition quality remains a user decision; numerical checks establish stability, not realism.
+The 0.1.23 editor exposes Soft mallet (the warmer struck-bar tone introduced in 0.1.22) and Classic bell (the previous high bell). Audition quality remains a user decision; numerical checks establish stability, not realism.
 
 | Technique | Existing work | Fit here |
 |---|---|---|
@@ -15,7 +15,7 @@ These sources establish the methods. The small Rust implementation and tuning ar
 - Four damped sinusoidal modes: approximate ratios 1, 4, 10 and 18. Upper modes decay sooner than the fundamental. Per-mode cosine attacks avoid an abrupt onset; a cosine release reaches zero smoothly.
 - Duration 320 ms (previously 160 ms). Bank is generated once on the existing audio worker. The playback loop still mixes cached PCM with the same overlapping voices, limiter and primed driver queue. Longer tails can keep more voices active during a sweep; the existing 32-voice cap applies.
 - Five mono float32 tables at 48 kHz contain **307,200 bytes (300 KiB)** of PCM, versus 153,600 bytes previously. This is table payload, not total application memory. No new dependency, resident thread, filesystem audio source or idle polling is introduced.
-- Configuration and volume settings stay compatible. Instrument choice remains a possible follow-up; this revision changes the single current timbre.
+- Configuration defaults to Soft mallet. The editor instrument selector persists on Save and applies to the next chime without restarting. Classic bell uses the original high register and 160 ms envelope. A selected bank is generated on the audio worker; active voices keep shared references to their own note data so switching never cuts or retunes existing tails. Old note data is released after those voices finish. The default bank is omitted from JSON; an explicitly saved Classic bell field requires 0.1.23 or newer.
 
 ## Review
 

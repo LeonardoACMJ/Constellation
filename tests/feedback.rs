@@ -165,3 +165,65 @@ fn chimes_follow_new_lights_instead_of_every_hover_change() {
         assert_eq!(move_to(&mut e, 2), (Action::Changed, true));
     }
 }
+
+#[test]
+fn instrument_defaults_persist_and_participate_in_history() {
+    use constellation::{config::Instrument, editing::History};
+    let original = Config::default();
+    let old_json = serde_json::to_value(&original).unwrap();
+    assert!(old_json["sound"].get("instrument").is_none());
+    assert_eq!(
+        storage::parse_config(&serde_json::to_vec(&old_json).unwrap())
+            .unwrap()
+            .sound
+            .instrument,
+        Instrument::Mallet
+    );
+    let mut changed = original.clone();
+    changed.sound.instrument = Instrument::ClassicBell;
+    let saved = serde_json::to_vec(&changed).unwrap();
+    assert_eq!(storage::parse_config(&saved).unwrap(), changed);
+    let mut history = History::default();
+    history.record(&original, &changed);
+    assert_eq!(history.undo(&changed).unwrap(), original);
+    assert_eq!(history.redo(&original).unwrap(), changed);
+    let mut invalid = serde_json::to_value(&changed).unwrap();
+    invalid["sound"]["instrument"] = "missing_bank".into();
+    assert!(storage::parse_config(&serde_json::to_vec(&invalid).unwrap()).is_err());
+}
+
+#[test]
+fn switching_instruments_changes_new_notes_but_keeps_existing_tails() {
+    use constellation::config::Instrument;
+    let (mut mixed, mut old, mut classic) = (
+        Mixer::default(),
+        Mixer::default(),
+        Mixer::new(Instrument::ClassicBell),
+    );
+    mixed.start(0, 0.2);
+    old.start(0, 0.2);
+    mixed.mix(&mut [0; 500]);
+    old.mix(&mut [0; 500]);
+    mixed.set_instrument(Instrument::ClassicBell);
+    assert_eq!(mixed.active(), 1);
+    let (mut a, mut b) = ([0; 128], [0; 128]);
+    mixed.mix(&mut a);
+    old.mix(&mut b);
+    assert_eq!(
+        a, b,
+        "Changing the bank cannot cut or retune an existing note"
+    );
+    mixed.start(2, 0.2);
+    classic.start(2, 0.2);
+    let (mut old_tail, mut new_tone, mut actual) = ([0; 128], [0; 128], [0; 128]);
+    old.mix(&mut old_tail);
+    classic.mix(&mut new_tone);
+    mixed.mix(&mut actual);
+    assert_ne!(old_tail, new_tone);
+    for i in 0..128 {
+        assert!((actual[i] as i32 - old_tail[i] as i32 - new_tone[i] as i32).abs() <= 2);
+    }
+    mixed.set_instrument(Instrument::Mallet);
+    mixed.mix(&mut vec![0; RATE as usize / 2]);
+    assert_eq!(mixed.active(), 0);
+}

@@ -270,6 +270,7 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
                         seed ^= seed >> 7;
                         seed ^= seed << 17;
                         if s.enabled {
+                            mixer.set_instrument(s.instrument);
                             mixer.start((seed % 5) as usize, s.volume);
                         }
                     }

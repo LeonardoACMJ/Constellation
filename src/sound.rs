@@ -1,27 +1,49 @@
 //! Small portable mallet mixer. Existing notes always finish; saturation drops
 //! new requests rather than stealing a playing voice. No work while silent.
+use crate::config::Instrument;
+use std::sync::Arc;
+
 pub const RATE: u32 = 48000;
 pub const VOICES: usize = 32;
 const NOTES: [f64; 5] = [261.625, 293.665, 329.625, 391.995, 440.];
 const DURATION: f64 = 0.32;
 struct Voice {
-    note: usize,
+    samples: Arc<[f32]>,
     at: usize,
     volume: f32,
 }
 pub struct Mixer {
-    notes: [Vec<f32>; 5],
+    notes: [Arc<[f32]>; 5],
+    instrument: Instrument,
     voices: Vec<Voice>,
 }
 impl Default for Mixer {
     fn default() -> Self {
-        Self {
-            notes: NOTES.map(mallet),
-            voices: Vec::with_capacity(VOICES),
-        }
+        Self::new(Instrument::default())
     }
 }
 impl Mixer {
+    fn bank(instrument: Instrument) -> [Arc<[f32]>; 5] {
+        match instrument {
+            Instrument::Mallet => NOTES.map(|f| Arc::from(mallet(f))),
+            Instrument::ClassicBell => NOTES.map(|f| Arc::from(classic_bell(f * 2.))),
+        }
+    }
+    pub fn new(instrument: Instrument) -> Self {
+        Self {
+            notes: Self::bank(instrument),
+            instrument,
+            voices: Vec::with_capacity(VOICES),
+        }
+    }
+    /// Generate only the selected bank, off the UI thread. Already-playing
+    /// voices retain their old note until its natural end, even across changes.
+    pub fn set_instrument(&mut self, instrument: Instrument) {
+        if instrument != self.instrument {
+            self.notes = Self::bank(instrument);
+            self.instrument = instrument;
+        }
+    }
     pub fn start(&mut self, note: usize, volume: f64) -> bool {
         if note >= self.notes.len()
             || !volume.is_finite()
@@ -31,7 +53,7 @@ impl Mixer {
             return false;
         }
         self.voices.push(Voice {
-            note,
+            samples: self.notes[note].clone(),
             at: 0,
             volume: volume.min(1.) as f32,
         });
@@ -44,7 +66,7 @@ impl Mixer {
         for sample in samples {
             let mut sum = 0.;
             for v in &mut self.voices {
-                if let Some(value) = self.notes[v.note].get(v.at) {
+                if let Some(value) = v.samples.get(v.at) {
                     sum += value * v.volume;
                     v.at += 1;
                 }
@@ -59,8 +81,21 @@ impl Mixer {
             };
             *sample = (32767. * output) as i16;
         }
-        self.voices.retain(|v| v.at < self.notes[v.note].len());
+        self.voices.retain(|v| v.at < v.samples.len());
     }
+}
+/// Historical 0.1.21 bell, with its original register and 160 ms envelope.
+fn classic_bell(frequency: f64) -> Vec<f32> {
+    let count = (RATE as f64 * 0.16) as usize;
+    (0..count)
+        .map(|i| {
+            let t = i as f64 / RATE as f64;
+            let fade = ((count - i) as f64 / (count as f64 * 0.15)).min(1.);
+            let wave = (std::f64::consts::TAU * frequency * t).sin()
+                + 0.25 * (std::f64::consts::TAU * frequency * 2.76 * t).sin() * (-35. * t).exp();
+            (wave * (-27. * t).exp() * (t / 0.003).min(1.) * fade * 0.35) as f32
+        })
+        .collect()
 }
 /// Independently tuned struck-bar model: damped sinusoidal modes. See
 /// docs/AUDIO-SYNTHESIS.md for research and design. All synthesis is performed
@@ -101,6 +136,26 @@ fn mallet(frequency: f64) -> Vec<f32> {
 #[cfg(test)]
 mod synthesis_tests {
     use super::*;
+    #[test]
+    fn bank_changes_reuse_current_selection_and_release_old_data_after_tails() {
+        let mut mixer = Mixer::default();
+        let old = Arc::downgrade(&mixer.notes[0]);
+        mixer.set_instrument(Instrument::Mallet);
+        assert!(Arc::ptr_eq(&old.upgrade().unwrap(), &mixer.notes[0]));
+        mixer.start(0, 0.2);
+        mixer.set_instrument(Instrument::ClassicBell);
+        assert!(old.upgrade().is_some());
+        assert_eq!(
+            mixer
+                .notes
+                .iter()
+                .map(|n| n.len() * size_of::<f32>())
+                .sum::<usize>(),
+            153600
+        );
+        mixer.mix(&mut vec![0; RATE as usize / 2]);
+        assert!(old.upgrade().is_none());
+    }
     #[test]
     fn bank_is_bounded_finite_and_releases_without_discontinuities() {
         let mixer = Mixer::default();

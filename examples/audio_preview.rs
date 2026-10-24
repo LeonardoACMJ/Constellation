@@ -1,5 +1,8 @@
 //! Offline A/B renders only: writes WAV files, never opens an audio device.
-use constellation::sound::{Mixer, RATE};
+use constellation::{
+    config::Instrument,
+    sound::{Mixer, RATE},
+};
 use std::{fs, io::Write, path::Path};
 const VOLUME: f64 = 0.28;
 fn wav(path: &Path, samples: &[i16]) {
@@ -50,38 +53,20 @@ fn main() {
         (2.6, 0),
     ];
     let count = (RATE as f64 * 3.2) as usize;
-    let mut current = vec![0i16; count];
-    let mut mixer = Mixer::default();
-    let mut at = 0;
-    for (time, note) in events {
-        let next = (time * RATE as f64) as usize;
-        mixer.mix(&mut current[at..next]);
-        mixer.start(note, VOLUME);
-        at = next;
-    }
-    mixer.mix(&mut current[at..]);
-    wav(&output.join("02-mallet-novo.wav"), &current);
-    let mut old = vec![0f64; count];
-    // Historical 0.1.21 formula, reproduced only for the listening comparison.
-    let frequencies = [523.25, 587.33, 659.25, 783.99, 880.];
-    let length = (RATE as f64 * 0.16) as usize;
-    for (time, note) in events {
-        let start = (time * RATE as f64) as usize;
-        for i in 0..length {
-            let t = i as f64 / RATE as f64;
-            let f = frequencies[note];
-            let wave = (std::f64::consts::TAU * f * t).sin()
-                + 0.25 * (std::f64::consts::TAU * f * 2.76 * t).sin() * (-35. * t).exp();
-            old[start + i] += wave
-                * (-27. * t).exp()
-                * (t / 0.003).min(1.)
-                * ((length - i) as f64 / (length as f64 * 0.15)).min(1.)
-                * 0.35
-                * VOLUME;
+    for (instrument, filename) in [
+        (Instrument::Mallet, "02-mallet-novo.wav"),
+        (Instrument::ClassicBell, "01-sino-anterior.wav"),
+    ] {
+        let mut samples = vec![0i16; count];
+        let mut mixer = Mixer::new(instrument);
+        let mut at = 0;
+        for (time, note) in events {
+            let next = (time * RATE as f64) as usize;
+            mixer.mix(&mut samples[at..next]);
+            mixer.start(note, VOLUME);
+            at = next;
         }
+        mixer.mix(&mut samples[at..]);
+        wav(&output.join(filename), &samples);
     }
-    // Preview levels stay below the existing mixer's limiter knee.
-    assert!(old.iter().all(|s| s.abs() <= 0.95));
-    let old: Vec<i16> = old.into_iter().map(|s| (s * 32767.) as i16).collect();
-    wav(&output.join("01-sino-anterior.wav"), &old);
 }
