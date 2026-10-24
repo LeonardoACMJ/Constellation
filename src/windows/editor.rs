@@ -1025,11 +1025,7 @@ impl Editor {
             let text = format!(
                 "{}{} {}",
                 "  ".repeat(depth),
-                if n.children.is_some() {
-                    "✦✦✦"
-                } else {
-                    "✦"
-                },
+                if n.children.is_some() { "✧" } else { "✦" },
                 n.name
             );
             rows.push((n.id, text.clone()));

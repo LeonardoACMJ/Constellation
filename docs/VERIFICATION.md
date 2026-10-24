@@ -4,6 +4,8 @@
 
 ## Current revision and manual review
 
+**List symbol correction 0.1.16:** user clarified that the three-star symbol belongs to the radial, not the configuration hierarchy list. The list and parent dropdown now use the original single hollow star for Constellations; Stars retain their filled star. Radial/preview symbols remain three stars.
+
 **White-dot pointer 0.1.15:** adds per-profile `dot_cursor`, default true for new and older profiles. The profile editor checkbox can retain the system cursor. A cached DPI-scaled native ARGB cursor has a white 6-logical-pixel center, subtle dark outline (about 8 px total diameter), centered hotspot and antialiased edges. There is no cursor animation/render timer. Activation and WM_SETCURSOR use the owned cursor; close/cancel/empty Hold/quit restore the prior cursor when still owned, without overwriting a newer cursor installed by another app. No system cursor replacement, ShowCursor counter, capture, clipping or input-queue attachment is used.
 
 With the dot enabled, the overlay uses alpha 1/255 black over otherwise transparent pixels in its work area, because zero-alpha layered-window pixels pass native cursor messages to underlying apps. This minimally darkens that area and keeps cursor ownership stable in gaps/outside sectors; geometric selection rules remain unchanged. System-cursor profiles retain zero-alpha gaps. The overlay remains nonactivating. Pure bitmap/serialization tests run without cursor installation; the remote native regression covers cursor creation/hotspot, ownership over blank space, Escape and empty Hold restoration, opting out and unchanged foreground. Actual perceived pointer behavior still requires manual review.

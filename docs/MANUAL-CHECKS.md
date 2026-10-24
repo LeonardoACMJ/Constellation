@@ -1,17 +1,17 @@
-# Constellation 0.1.15 — manual checks
+# Constellation 0.1.16 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.15**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.16**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
 | Check | Steps | Expected |
 |---|---|---|
 | Smooth radial appearance | Open over light and dark windows; inspect arcs, diagonals, text and symbols. Repeat at available display scaling settings. | Smooth transparent edges without a black/white matte. Subtle darker blue-shifted outlines and tiny white stars; decorations remain stationary while hovering. Geometry and selection remain unchanged. |
-| App and tray icons | Inspect the executable in Explorer, its tray icon, Configure title bar and Alt+Tab. Open a nested Constellation and compare the preview. | Mint four-point app icon; one mint star for Stars and three smaller lavender stars for Constellations/root. Check readability over light/dark taskbars and available scaling settings. Explorer may retain an old cached executable icon; do not restart Explorer solely for this check. |
+| App and tray icons | Inspect the executable in Explorer, its tray icon, Configure title bar and Alt+Tab. Open a nested Constellation and compare the preview. | Mint four-point app icon; one mint star for Stars and three smaller lavender stars for Constellations/root in the radial/preview; configuration lists use a single hollow star for Constellations. Check readability over light/dark taskbars and available scaling settings. Explorer may retain an old cached executable icon; do not restart Explorer solely for this check. |
 | Tray menu responsiveness | Open the tray menu with right-click, dismiss with Escape and with an outside click, then reopen. Try Pause/resume, Configure and Quit. | No prolonged input blackout; the menu dismisses normally, Pause/resume works, opening Configure restores shortcut availability after dismissal, and Quit exits. Ctrl+Q while the menu is open must not open a second overlay or steal its focus. |
 | Tray Quit | Close Configure, right-click the tray icon → Quit. Check Task Manager, then start the same executable again and try Ctrl+Q. Repeat Quit after using the radial. | Resident exits, tray icon disappears, shortcut stops intercepting input; restarting succeeds without an already-running warning. |
 | Editor scrolling | Make the editor short enough to scroll. Wheel up/down slowly, then quickly; drag the vertical/horizontal scrollbars. | No whole-form flash, overlapping/duplicated fields or preview-header jumps; the painted panel outlines move with their contents. Resize small → maximize → restore and repeat. |
