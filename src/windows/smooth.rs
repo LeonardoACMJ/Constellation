@@ -723,7 +723,7 @@ impl Canvas {
             let shape = self.sector_path(sector, origin, scale)?;
             let halo = self.pen(
                 (edges[palette] & 0x00ffffff) | 0x46000000,
-                (5. * scale) as f32,
+                (3. * scale) as f32,
             )?;
             status(GdipDrawPath(self.graphics, halo, shape.pointer))?;
             let fill = self.brush(fills[palette])?;
