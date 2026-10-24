@@ -4,6 +4,10 @@
 
 ## Current revision and manual review
 
+**Synthesized mallet 0.1.22:** replaces the high two-wave bell with four independently damped sinusoidal modes, soft attack/release and an octave-lower pentatonic register. Notes last 320 ms; five precomputed float32 tables contain 300 KiB of PCM (previously 150 KiB). This is PCM payload only. The same mixer, voice cap, limiter, driver queue and highlight-trigger rules remain; longer tails can overlap more voices during movement. No dependency, recorded sample bank or audio file loader is added. Research, exact approach and offline comparison generation are in [the synthesis note](AUDIO-SYNTHESIS.md).
+
+Device-free tests validate table memory bounds, finite samples, zero/quiet endpoints, decaying tails and pitch, alongside overlap/chunk/saturation regressions. The Rust audio_preview example writes old/new WAV files without opening an audio device. Neither waveform generation nor numerical tests establish perceived realism or playback quality; the user's listening review is still needed. No local sound is played automatically.
+
 **Highlight chime triggers 0.1.21:** pointer processing now distinguishes a newly illuminated hovered item from a hover change to an already-lit ancestor. Chimes follow new highlights; returning through ancestors/gaps/hub stays silent while their path lights persist. Losing a light and regaining it, or starting a new invocation, allows another chime. No audio synthesis/output or navigation rules changed. Device-free feedback regressions cover parent/child returns, nested ancestors, repeated motion, sibling changes, collapse/re-entry, invocation reset and both hover/click Constellation profiles. Perceived playback remains a manual check.
 
 **Configuration-only notes 0.1.20:** notes remain on all node types in the editor and JSON, with the existing 140-character limit, counter, history, transfer and migration rules. Radial rendering is restored to the 0.1.18 implementation; no note panel, tooltip or hover text is drawn in either the radial or overview preview. Existing saved notes are preserved.
