@@ -105,6 +105,57 @@ mod render_tests {
             }
         }
     }
+    #[test]
+    #[ignore = "offscreen Windows note rendering; remote CI only"]
+    fn notes_use_a_stable_panel_without_touching_geometry_or_alpha() {
+        unsafe {
+            let _engine = Engine::start().unwrap();
+            let mut c = Config::default();
+            c.root.note = "Root usage advice".into();
+            c.root.find_mut(5).unwrap().note =
+                "Needs ssh-agent running; uses the work instance".into();
+            c.root.find_mut(6).unwrap().note = "界".repeat(crate::config::NOTE_MAX_CHARS);
+            let path = [2, 5];
+            let sectors = crate::geometry::visible(&c, &path);
+            let output = Path::new(".local/render-review");
+            std::fs::create_dir_all(output).unwrap();
+            for (scale, suffix) in [(1., "100"), (1.5, "150")] {
+                let origin = Point { x: 450., y: 450. };
+                let mut surface = Surface::new(900, 900).unwrap();
+                for (hover, kind) in [
+                    (None, "root"),
+                    (Some(5), "constellation"),
+                    (Some(6), "max-note"),
+                    (Some(4), "empty-note"),
+                ] {
+                    surface
+                        .draw(&c, &sectors, &path, hover, origin, scale, false)
+                        .unwrap();
+                    assert!(
+                        bytes(&surface)
+                            .chunks_exact(4)
+                            .all(|p| p[..3].iter().all(|v| *v <= p[3]))
+                    );
+                    // Panel dimensions and edge remain constant even for an empty note.
+                    let x = (origin.x - 179. * scale).round() as usize;
+                    let y = (origin.y - 77. * scale).round() as usize;
+                    assert_eq!(bytes(&surface)[(y * 900 + x) * 4 + 3], 255);
+                    save_png(
+                        &composite(&surface, [24, 20, 16]),
+                        &output.join(format!("note-{kind}-{suffix}.png")),
+                    );
+                }
+                surface
+                    .draw(&c, &sectors, &path, Some(5), origin, scale, false)
+                    .unwrap();
+                let first = bytes(&surface).to_vec();
+                surface
+                    .draw(&c, &sectors, &path, Some(5), origin, scale, false)
+                    .unwrap();
+                assert_eq!(first, bytes(&surface));
+            }
+        }
+    }
     unsafe fn bytes(surface: &Surface) -> &[u8] {
         std::slice::from_raw_parts(
             surface.pixels,
@@ -748,6 +799,75 @@ impl Canvas {
             brush,
         ))
     }
+    unsafe fn note_panel(
+        &mut self,
+        c: &Config,
+        hover: Option<u64>,
+        origin: Point,
+        scale: f64,
+    ) -> Result<(), String> {
+        // Reserve the same opaque region for the whole invocation, including
+        // items with no note. No tooltip timer, motion, or hit-test changes.
+        let item = hover.and_then(|id| c.find(id)).unwrap_or(&c.root);
+        let rect = RectF {
+            X: (origin.x - 180. * scale) as f32,
+            Y: (origin.y - 78. * scale) as f32,
+            Width: (360. * scale) as f32,
+            Height: (156. * scale) as f32,
+        };
+        let brush = self.brush(color(18, 25, 39, 255))?;
+        status(GdipFillRectangle(
+            self.graphics,
+            brush,
+            rect.X,
+            rect.Y,
+            rect.Width,
+            rect.Height,
+        ))?;
+        let pen = self.pen(color(63, 78, 111, 255), scale as f32)?;
+        status(GdipDrawRectangle(
+            self.graphics,
+            pen,
+            rect.X,
+            rect.Y,
+            rect.Width,
+            rect.Height,
+        ))?;
+        let size = (13. * scale).max(7.) as f32;
+        self.text(
+            &item.name,
+            rect.X + 12. * scale as f32,
+            rect.Y + 10. * scale as f32,
+            rect.Width - 24. * scale as f32,
+            size,
+            color(233, 237, 250, 255),
+        )?;
+        // Reuse the title font, but allow the stored single line to wrap on display.
+        let font = self.fonts[&size.to_bits()].pointer;
+        let brush = self.brush(color(205, 215, 235, 255))?;
+        let body = RectF {
+            X: rect.X + 12. * scale as f32,
+            Y: rect.Y + 36. * scale as f32,
+            Width: rect.Width - 24. * scale as f32,
+            Height: 110. * scale as f32,
+        };
+        status(GdipSetStringFormatFlags(self.format.pointer, 0))?;
+        let text = wide(&item.note);
+        let result = status(GdipDrawString(
+            self.graphics,
+            text.as_ptr(),
+            text.len() as i32 - 1,
+            font,
+            &body,
+            self.format.pointer,
+            brush,
+        ));
+        status(GdipSetStringFormatFlags(
+            self.format.pointer,
+            StringFormatFlagsNoWrap,
+        ))?;
+        result
+    }
     unsafe fn circle(&mut self, p: Point, radius: f64, value: u32) -> Result<(), String> {
         let brush = self.brush(value)?;
         status(GdipFillEllipse(
@@ -1034,6 +1154,9 @@ impl Canvas {
                 (9. * scale) as f32,
                 color(156, 175, 207, 255),
             )?;
+        }
+        if nodes.values().any(|node| !node.note.is_empty()) {
+            self.note_panel(c, hover, origin, scale)?;
         }
         Result::Ok(())
     }

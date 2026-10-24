@@ -20,6 +20,10 @@ The sample tree includes Calculator, Notepad, the portable folder, and a GitHub 
 
 ## Configure
 
+Every item, including root and nested Constellations, has a **Note** field below Name. Use it for short prerequisites or consequences (for example, “needs ssh-agent running” or “deletes the source”). The live counter caps typing/paste at 140 Unicode characters; pasted line breaks become spaces. **Apply item → Save** persists it. Notes participate in undo/redo and configuration import/export; clearing a note removes its JSON field.
+
+When any note is configured, a fixed central panel shows the hovered item's name and note immediately; over the neutral centre/gaps it shows the root. Long notes wrap inside that panel. Empty-note items keep the same panel footprint. It can cover part of the radial visually but does not change targeting, add delays or affect launching. Notes do not replace missing-target advice in the editor. The full fan-out preview retains its geometry overview.
+
 Choose **Icon: From Software → Browse…** to use an EXE/shortcut icon independently of the launch target. For example, keep a Hydrus instance script as the target and select the Hydrus executable as its icon source. **Apply item → Save** persists both independently. Software is referenced in place, not copied; reselect its source if you move that installation.
 
 Each item has an **Icon** selector: **Automatic** uses its Windows target/file-association icon; **Star symbol** keeps the existing symbol. Click **Image…** to import a PNG, JPEG, BMP or ICO (up to 8 MiB; decoded images up to 4096 × 4096). This selects **Custom image** and copies the file into `data/icons`; **Apply item → Save** persists the choice. Constellations support custom images too. Automatic Constellations retain their three-star radial symbol; the list keeps its hollow star.
@@ -76,6 +80,8 @@ Click mode stays open after release. Hold mode selects the hovered Star when the
 Relative file paths resolve from this folder, not the directory from which the app was invoked. A plain program/runner name resolves through PATH. External installed applications remain external; copying Constellation does not copy those programs.
 
 ## Files and exit
+
+**Note compatibility (0.1.19):** the configuration format version stays unchanged and old files load normally. Older app builds reject configurations containing a `note` field because Node rejects unknown fields. A backup only helps if it predates notes; later saves can copy notes into the backup too. Before downgrading, keep a compatible configuration copy or remove `note` from every node, including Constellations and root. Notes live only in config.json; no scripts-folder README/index is generated.
 
 `data/config.json` and `data/config.backup.json` live beside the executable. Profiles carry stable numeric IDs; older configurations without IDs are upgraded when loaded and persist those IDs on Save. Saving a repaired configuration preserves an existing valid backup instead of backing up malformed JSON. Errors, when present, are recorded in the same `data` directory. No installer, AppData fallback, startup registration, or global PATH modification is used.
 

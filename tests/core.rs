@@ -51,6 +51,7 @@ fn subdivision_keeps_every_target_without_pages() {
     c.root.children = Some(
         (10..210)
             .map(|id| Node {
+                note: String::new(),
                 icon: Default::default(),
                 id,
                 name: format!("Star {id}"),
@@ -284,6 +285,7 @@ fn legacy_profiles_get_stable_ids_across_rename_reorder_and_relocation() {
 #[test]
 fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
     let star = |id| Node {
+        note: String::new(),
         icon: Default::default(),
         id,
         name: format!("Star {id}"),
@@ -292,6 +294,7 @@ fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
     };
     let mut c = Config::default();
     c.root.children = Some(vec![Node {
+        note: String::new(),
         icon: Default::default(),
         id: 2,
         name: "One".into(),
@@ -304,6 +307,7 @@ fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
             .any(|s| s.contains("overlap"))
     );
     c.root.children.as_mut().unwrap().push(Node {
+        note: String::new(),
         icon: Default::default(),
         id: 4,
         name: "Two".into(),

@@ -8,6 +8,7 @@ use serde_json::json;
 use std::time::Instant;
 fn star(id: u64) -> Node {
     Node {
+        note: String::new(),
         icon: Default::default(),
         id,
         name: format!("Star {id}"),
@@ -22,6 +23,7 @@ fn balanced(depth: usize, width: usize, id: &mut u64) -> Node {
         return star(own);
     }
     Node {
+        note: String::new(),
         icon: Default::default(),
         id: own,
         name: format!("Branch {own}"),

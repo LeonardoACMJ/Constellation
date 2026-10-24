@@ -5,6 +5,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Normalize pasted/typed note text immediately, before it reaches Save.
+pub fn note_input(text: &str) -> String {
+    text.chars()
+        .map(|c| if crate::config::note_break(c) { ' ' } else { c })
+        .take(crate::config::NOTE_MAX_CHARS)
+        .collect()
+}
+
 /// Double quotes group arguments; backslashes before quotes use Windows/CRT
 /// escaping. This is a string-vector editor, never a shell command evaluator.
 pub fn parse_arguments(text: &str) -> Result<Vec<String>, String> {
@@ -163,6 +171,7 @@ pub fn star_from_path(root: &Path, path: &Path, id: u64) -> Result<Node, String>
         return Err(format!("Dropped path is unavailable: {}", path.display()));
     };
     Ok(Node {
+        note: String::new(),
         icon: Default::default(),
         id,
         name: if path.is_dir() {

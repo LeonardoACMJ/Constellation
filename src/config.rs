@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Short, single-line usage advice; count Unicode scalar values, not bytes.
+pub const NOTE_MAX_CHARS: usize = 140;
+pub fn note_break(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -16,6 +22,8 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
     pub id: u64,
     pub name: String,
     /// A node is either a constellation (Some children, including empty), or a Star.
@@ -247,6 +255,12 @@ impl Config {
             if !ids.insert(n.id) {
                 return Err(format!("Duplicate node ID {}", n.id));
             }
+            if n.note.chars().count() > NOTE_MAX_CHARS || n.note.chars().any(note_break) {
+                return Err(format!(
+                    "Note for {} must be a single line of at most {NOTE_MAX_CHARS} characters",
+                    n.name
+                ));
+            }
             if n.name.trim().is_empty() {
                 return Err("Every node needs a name".into());
             }
@@ -365,6 +379,7 @@ impl Default for Config {
     fn default() -> Self {
         fn star(id: u64, name: &str, target: Target) -> Node {
             Node {
+                note: String::new(),
                 icon: Default::default(),
                 id,
                 name: name.into(),
@@ -375,12 +390,14 @@ impl Default for Config {
         Self {
             version: 1,
             root: Node {
+                note: String::new(),
                 icon: Default::default(),
                 id: 1,
                 name: "Your universe".into(),
                 target: None,
                 children: Some(vec![
                     Node {
+                        note: String::new(),
                         icon: Default::default(),
                         id: 2,
                         name: "Everyday".into(),
@@ -405,6 +422,7 @@ impl Default for Config {
                                 },
                             ),
                             Node {
+                                note: String::new(),
                                 icon: Default::default(),
                                 id: 5,
                                 name: "Explore".into(),

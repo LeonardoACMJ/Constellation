@@ -1,6 +1,6 @@
 //! Pure editor layout, independent of native windows and their current pixels.
 pub const MIN_WIDTH: i32 = 1050;
-pub const MIN_HEIGHT: i32 = 895;
+pub const MIN_HEIGHT: i32 = 958;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -92,7 +92,7 @@ impl Layout {
     pub fn control(&self, base: Rect, id: i32) -> Rect {
         let extra = self.height - MIN_HEIGHT;
         let mut r = base;
-        if base.y >= 805 {
+        if base.y >= 868 {
             let available = self.item_x + self.item_width - 20;
             r.x = 20 + (base.x - 20) * available / 650;
             r.w = base.w * available / 650;
@@ -108,7 +108,7 @@ impl Layout {
         } else if base.x < 690 {
             r.x = self.item_x + (base.x - 305) * self.item_width / 360;
             r.w = base.w * self.item_width / 360;
-            if base.y >= 575 {
+            if base.y >= 638 {
                 r.y += extra;
             }
             if id == 214 {

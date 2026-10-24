@@ -39,6 +39,8 @@ const REDO: i32 = 406;
 const IMPORT: i32 = 407;
 const EXPORT: i32 = 408;
 const NAME: i32 = 201;
+const NOTE: i32 = 217;
+const NOTE_COUNT: i32 = 218;
 const KIND: i32 = 202;
 const TARGET: i32 = 203;
 const ARGS: i32 = 204;
@@ -334,14 +336,29 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         label(hwnd, "ITEM", 305, 18, 340);
         for (id, title, y) in [
             (NAME, "Name", 45),
-            (KIND, "Kind", 108),
-            (TARGET, "Target path / URL", 171),
-            (ARGS, "Arguments (quote values containing spaces)", 234),
-            (RUNNER, "Script runner (blank = extension default)", 297),
-            (CWD, "Working directory (blank = portable folder)", 360),
-            (PARENT, "Parent constellation", 423),
+            (NOTE, "Note", 108),
+            (KIND, "Kind", 171),
+            (TARGET, "Target path / URL", 234),
+            (ARGS, "Arguments (quote values containing spaces)", 297),
+            (RUNNER, "Script runner (blank = extension default)", 360),
+            (CWD, "Working directory (blank = portable folder)", 423),
+            (PARENT, "Parent constellation", 486),
         ] {
-            label(hwnd, title, 305, y, 360);
+            if id == NOTE {
+                control(
+                    hwnd,
+                    "STATIC",
+                    "Note (0/140)",
+                    NOTE_COUNT,
+                    305,
+                    y,
+                    360,
+                    20,
+                    0,
+                );
+            } else {
+                label(hwnd, title, 305, y, 360);
+            }
             let combo = matches!(id, KIND | PARENT);
             control(
                 hwnd,
@@ -365,6 +382,13 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                     },
             );
         }
+        send(
+            hwnd,
+            NOTE,
+            EM_SETLIMITTEXT,
+            crate::config::NOTE_MAX_CHARS * 2,
+            0,
+        );
         for title in [
             "Constellation",
             "Program",
@@ -376,20 +400,20 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             send(hwnd, KIND, CB_ADDSTRING, 0, wide(title).as_ptr() as isize);
         }
         for (id, y) in [
-            (BROWSE_TARGET, 194),
-            (BROWSE_RUNNER, 318),
-            (BROWSE_CWD, 381),
+            (BROWSE_TARGET, 257),
+            (BROWSE_RUNNER, 381),
+            (BROWSE_CWD, 444),
         ] {
             control(hwnd, "BUTTON", "Browse…", id, 592, y, 73, 28, 0);
         }
-        control(hwnd, "STATIC", "", ADVICE, 465, 522, 200, 48, 0);
+        control(hwnd, "STATIC", "", ADVICE, 465, 585, 200, 48, 0);
         control(
             hwnd,
             "COMBOBOX",
             "",
             ICON_MODE,
             305,
-            484,
+            547,
             280,
             180,
             WS_TABSTOP | CBS_DROPDOWNLIST as u32,
@@ -408,7 +432,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                 wide(title).as_ptr() as isize,
             );
         }
-        control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 592, 484, 73, 28, 0);
+        control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 592, 547, 73, 28, 0);
         control(hwnd, "BUTTON", "Undo", UNDO, 20, 610, 120, 32, 0);
         control(hwnd, "BUTTON", "Redo", REDO, 150, 610, 130, 32, 0);
         control(hwnd, "BUTTON", "Import…", IMPORT, 20, 652, 120, 32, 0);
@@ -424,19 +448,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             75,
             0,
         );
-        control(hwnd, "BUTTON", "Apply item", APPLY, 305, 522, 150, 32, 0);
+        control(hwnd, "BUTTON", "Apply item", APPLY, 305, 585, 150, 32, 0);
         label(
             hwnd,
             "LAYOUT (numeric values; no forced fitting)",
             305,
-            575,
+            638,
             370,
         );
         for (id, title, x, y) in [
-            (RADIUS, "Radius", 305, 605),
-            (DISTANCE, "Distance × radius", 490, 605),
-            (SPREAD, "Spread °", 305, 665),
-            (GAP, "Gap", 490, 665),
+            (RADIUS, "Radius", 305, 668),
+            (DISTANCE, "Distance × radius", 490, 668),
+            (SPREAD, "Spread °", 305, 728),
+            (GAP, "Gap", 490, 728),
         ] {
             label(hwnd, title, x, y, 175);
             control(
@@ -476,19 +500,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Chimes",
             SOUND,
             305,
-            735,
+            798,
             110,
             28,
             BS_AUTOCHECKBOX as u32,
         );
-        label(hwnd, "Volume (0–1)", 430, 735, 110);
+        label(hwnd, "Volume (0–1)", 430, 798, 110);
         control(
             hwnd,
             "EDIT",
             "",
             VOLUME,
             550,
-            732,
+            795,
             110,
             28,
             WS_BORDER | ES_AUTOHSCROLL as u32,
@@ -528,19 +552,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Save",
             SAVE,
             20,
-            805,
+            868,
             100,
             35,
             BS_DEFPUSHBUTTON as u32,
         );
-        control(hwnd, "BUTTON", "Reload", RELOAD, 130, 805, 100, 35, 0);
+        control(hwnd, "BUTTON", "Reload", RELOAD, 130, 868, 100, 35, 0);
         control(
             hwnd,
             "BUTTON",
             "Shortcut profiles…",
             PROFILES,
             240,
-            805,
+            868,
             250,
             35,
             0,
@@ -551,7 +575,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             "Advanced JSON…",
             ADVANCED,
             500,
-            805,
+            868,
             170,
             35,
             WS_TABSTOP,
@@ -802,6 +826,38 @@ impl Editor {
             warning = format!("Icon unavailable; showing symbol. {warning}");
         }
         set(self.hwnd, ADVICE, &warning);
+    }
+    unsafe fn note_counter(&self) {
+        let count = get(self.hwnd, NOTE).chars().count();
+        set(
+            self.hwnd,
+            NOTE_COUNT,
+            &format!("Note ({count}/{})", crate::config::NOTE_MAX_CHARS),
+        );
+    }
+    unsafe fn edit_note(&self) {
+        let input = get(self.hwnd, NOTE);
+        let value = editing::note_input(&input);
+        if input != value {
+            let (mut start, mut end) = (0u32, 0u32);
+            send(
+                self.hwnd,
+                NOTE,
+                EM_GETSEL,
+                &mut start as *mut u32 as usize,
+                &mut end as *mut u32 as isize,
+            );
+            set(self.hwnd, NOTE, &value);
+            let length = value.encode_utf16().count() as u32;
+            send(
+                self.hwnd,
+                NOTE,
+                EM_SETSEL,
+                start.min(length) as usize,
+                end.min(length) as isize,
+            );
+        }
+        self.note_counter();
     }
     unsafe fn enable_fields(&self) {
         set(
@@ -1131,6 +1187,8 @@ impl Editor {
             return;
         };
         set(self.hwnd, NAME, &n.name);
+        set(self.hwnd, NOTE, &n.note);
+        self.note_counter();
         self.icon_draft = n.icon.clone();
         let mode = match n.icon {
             ItemIcon::Automatic => 0,
@@ -1294,6 +1352,7 @@ impl Editor {
         }
         let n = candidate.root.find_mut(self.selected).unwrap();
         n.name = get(self.hwnd, NAME);
+        n.note = get(self.hwnd, NOTE);
         n.children = if target.is_none() {
             Some(old.children.clone().unwrap_or_default())
         } else {
@@ -1360,6 +1419,7 @@ impl Editor {
             .checked_add(1)
             .ok_or("Item ID space exhausted")?;
         let n = Node {
+            note: String::new(),
             icon: Default::default(),
             id,
             name: if folder {
@@ -1697,7 +1757,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_COMMAND => {
             let id = (w & 0xffff) as i32;
             let notify = (w >> 16) as u32;
-            if matches!(id, NAME | TARGET | ARGS | RUNNER | CWD) && notify == EN_CHANGE {
+            if matches!(id, NAME | NOTE | TARGET | ARGS | RUNNER | CWD) && notify == EN_CHANGE {
+                if id == NOTE {
+                    e.edit_note();
+                }
                 e.item_dirty = true;
                 InvalidateRect(hwnd, null(), 1);
                 return 0;

@@ -494,6 +494,7 @@ mod cache_tests {
                 args: vec![],
                 cwd: None,
             }),
+            note: String::new(),
             icon: ItemIcon::Automatic,
         }
     }
