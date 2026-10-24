@@ -1,12 +1,11 @@
 # Lightweight synthesized chimes
 
-The 0.1.23 editor exposes Soft mallet (the warmer struck-bar tone introduced in 0.1.22) , Classic bell (the previous high bell), Plucked strings and Wind chimes. Audition quality remains a user decision; numerical checks establish stability, not realism.
+The 0.1.23 editor exposes Soft mallet (the warmer struck-bar tone introduced in 0.1.22), Classic bell (the previous high bell), Plucked strings and Wind chimes. Audition quality remains a user decision; numerical checks establish stability, not realism.
 
 | Technique | Existing work | Fit here |
 |---|---|---|
 | Additive / modal synthesis | [CMU additive synthesis](https://www.cs.cmu.edu/~15322/book/ch03/index.html); [Stanford STK ModalBar documentation](https://chuck.stanford.edu/doc/reference/ugens-stk.html#ModalBar) and [implementation](https://github.com/thestk/stk/blob/master/src/ModalBar.cpp) | Chosen: a small set of independently damped modes models the ringing after a soft strike. Our closed-form sum needs no external engine or excitation recording. |
 | Karplus–Strong | [Stanford explanation](https://xenon.stanford.edu/~blynn/sound/karplusstrong.html) and [Julius O. Smith's physical audio text](https://www.dsprelated.com/freebooks/pasp/Electric_Guitars.html) | Used for Plucked strings: filtered fractional delay with a softened generated excitation, decay and smooth release. |
-
 | Tubular modes | [Lee Hite's chime design guide](https://leehite.org/Chimes.htm), [Rose-Hulman wind chimes acoustics](https://www.rose-hulman.edu/~moloney/Acoustics/WindChimes.htm), and [Julius O. Smith on modal expansion](https://dsprelated.com/freebooks/pasp/Modal_Expansion.html) | Used for Wind chimes: a struck tube with inharmonic modes, not a recording or ambient wind loop. |
 
 These sources establish the methods. The small Rust implementation and tuning are our own; no STK code, raw excitation file, preset bank or library is incorporated.
