@@ -27,6 +27,8 @@ These sources establish the methods. The small Rust implementation and tuning ar
 
 These figures exclude application/native overhead. Only the selected full bank is kept; old notes can temporarily remain while existing voices finish. Switching instruments regenerates its bank on the audio worker, not in the input/UI handler. All remain behind the existing 32-voice cap. The 0.1.22 Mallet PCM was checked byte-identical after extracting the shared modal helper.
 
+Wind chimes evaluates damped modes using a decaying complex rotation, avoiding trigonometric/exponential calls for every sample. A regression compares it with the closed-form formula below 16-bit PCM resolution. In one offline release run on this PC, bank generation dropped from about 28.5 ms to 1.95 ms. These are local bank-generation timings, not a playback-latency guarantee; the preview example reports them for repeatable inspection.
+
 ## Review
 
 Run `cargo run --example audio_preview --locked --offline` to write four 3.5-second WAV comparisons into `.local/audio-review`. The files are offline listening artifacts only: the application neither loads nor packages them. Generation never opens an audio device. Same volume and event timing; the new bank intentionally uses a lower register. Each file contains isolated notes, then a rapid overlapping sweep. The example reports peaks; it does not certify equal perceived loudness.

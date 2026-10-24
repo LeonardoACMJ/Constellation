@@ -123,7 +123,7 @@ fn wind_chime(frequency: f64) -> Vec<f32> {
         (8.93, 0.06, 0.045, 0.0015),
         (13.34, 0.02, 0.025, 0.0015),
     ];
-    modal_tone(frequency, &MODES, 0.72, 0.145, 0.060)
+    modal_tone_recursive(frequency, &MODES, 0.72, 0.145, 0.060)
 }
 
 fn modal_tone(
@@ -152,6 +152,71 @@ fn modal_tone(
             // Raised-cosine release reaches exact zero with a flat endpoint.
             let remaining = (count - 1 - i) as f64 / RATE as f64;
             let fade = 0.5 - 0.5 * (std::f64::consts::PI * (remaining / release).min(1.)).cos();
+            (gain * sum * fade) as f32
+        })
+        .collect()
+}
+
+/// Same damped sine model as modal_tone, evaluated with complex rotation.
+/// Trigonometry/exponentials occur once per mode, except at attack/release edges.
+fn modal_tone_recursive(
+    frequency: f64,
+    modes: &[(f64, f64, f64, f64)],
+    duration: f64,
+    gain: f64,
+    release: f64,
+) -> Vec<f32> {
+    struct Mode {
+        real: f64,
+        imaginary: f64,
+        rotation_real: f64,
+        rotation_imaginary: f64,
+        amplitude: f64,
+        attack: f64,
+    }
+    let mut states: Vec<_> = modes
+        .iter()
+        .filter_map(|&(ratio, amplitude, decay, attack)| {
+            let partial = frequency * ratio;
+            if partial >= RATE as f64 * 0.5 {
+                return None;
+            }
+            let angle = std::f64::consts::TAU * partial / RATE as f64;
+            let radius = (-1. / (RATE as f64 * decay)).exp();
+            Some(Mode {
+                real: 1.,
+                imaginary: 0.,
+                rotation_real: radius * angle.cos(),
+                rotation_imaginary: radius * angle.sin(),
+                amplitude,
+                attack,
+            })
+        })
+        .collect();
+    let count = (RATE as f64 * duration) as usize;
+    (0..count)
+        .map(|i| {
+            let t = i as f64 / RATE as f64;
+            let mut sum = 0.;
+            for mode in &mut states {
+                let rise = if t >= mode.attack {
+                    1.
+                } else {
+                    0.5 - 0.5 * (std::f64::consts::PI * t / mode.attack).cos()
+                };
+                sum += mode.amplitude * mode.imaginary * rise;
+                let real =
+                    mode.real * mode.rotation_real - mode.imaginary * mode.rotation_imaginary;
+                mode.imaginary =
+                    mode.imaginary * mode.rotation_real + mode.real * mode.rotation_imaginary;
+                mode.real = real;
+            }
+            let remaining = (count - 1 - i) as f64 / RATE as f64;
+            let fade = if remaining >= release {
+                1.
+            } else {
+                0.5 - 0.5 * (std::f64::consts::PI * remaining / release).cos()
+            };
             (gain * sum * fade) as f32
         })
         .collect()
@@ -215,6 +280,18 @@ fn plucked_string(frequency: f64) -> Vec<f32> {
 #[cfg(test)]
 mod synthesis_tests {
     use super::*;
+    #[test]
+    fn recursive_modes_match_the_closed_form_below_pcm_resolution() {
+        let modes = [
+            (1., 1., 0.18, 0.004),
+            (2.76, 0.35, 0.11, 0.0025),
+            (5.4, 0.14, 0.075, 0.002),
+        ];
+        let a = modal_tone(523.25, &modes, 0.72, 0.145, 0.06);
+        let b = modal_tone_recursive(523.25, &modes, 0.72, 0.145, 0.06);
+        assert_eq!(a.len(), b.len());
+        assert!(a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.000001));
+    }
     #[test]
     fn new_banks_are_bounded_deterministic_quiet_at_edges_and_decay() {
         for (instrument, payload) in [

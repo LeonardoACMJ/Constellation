@@ -60,7 +60,9 @@ fn main() {
         (Instrument::WindChimes, "04-wind-chimes.wav"),
     ] {
         let mut samples = vec![0i16; count];
+        let started = std::time::Instant::now();
         let mut mixer = Mixer::new(instrument);
+        println!("{instrument:?}: bank generated in {:?}", started.elapsed());
         let mut at = 0;
         for (time, note) in events {
             let next = (time * RATE as f64) as usize;
