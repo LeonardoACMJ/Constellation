@@ -262,6 +262,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         let module = GetModuleHandleW(null());
         let class = wide("Constellation.Config");
         let wc = WNDCLASSW {
+            hIcon: super::icons::large(),
             lpfnWndProc: Some(proc),
             hInstance: module,
             lpszClassName: class.as_ptr(),
@@ -289,6 +290,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             module,
             null(),
         );
+        super::icons::set_small(hwnd);
         if hwnd.is_null() {
             return Err("Cannot create configuration window".into());
         }
@@ -1023,7 +1025,11 @@ impl Editor {
             let text = format!(
                 "{}{} {}",
                 "  ".repeat(depth),
-                if n.children.is_some() { "✧" } else { "✦" },
+                if n.children.is_some() {
+                    "✦✦✦"
+                } else {
+                    "✦"
+                },
                 n.name
             );
             rows.push((n.id, text.clone()));
@@ -1362,6 +1368,7 @@ unsafe fn advanced(e: &mut Editor) {
     let class = wide("Constellation.Advanced");
     let module = GetModuleHandleW(null());
     let wc = WNDCLASSW {
+        hIcon: super::icons::large(),
         lpfnWndProc: Some(json_proc),
         hInstance: module,
         lpszClassName: class.as_ptr(),
@@ -1384,6 +1391,7 @@ unsafe fn advanced(e: &mut Editor) {
         module,
         null(),
     );
+    super::icons::set_small(hwnd);
     theme::window(hwnd);
     e.json = hwnd;
     EnableWindow(e.hwnd, 0);
@@ -1995,6 +2003,7 @@ unsafe fn profiles(e: &mut Editor) {
     let class = wide("Constellation.Profiles");
     let module = GetModuleHandleW(null());
     let wc = WNDCLASSW {
+        hIcon: super::icons::large(),
         lpfnWndProc: Some(profiles_proc),
         hInstance: module,
         lpszClassName: class.as_ptr(),
@@ -2027,6 +2036,7 @@ unsafe fn profiles(e: &mut Editor) {
         module,
         null(),
     );
+    super::icons::set_small(hwnd);
     if hwnd.is_null() {
         error("Cannot create shortcut profile window");
         return;

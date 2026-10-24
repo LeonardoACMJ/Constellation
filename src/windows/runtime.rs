@@ -100,6 +100,7 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
         let module = GetModuleHandleW(null());
         let class = wide("Constellation.Native.Radial");
         let wc = WNDCLASSW {
+            hIcon: super::icons::large(),
             lpfnWndProc: Some(window_proc),
             hInstance: module,
             lpszClassName: class.as_ptr(),
@@ -123,6 +124,7 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             module,
             null(),
         );
+        super::icons::set_small(hwnd);
         if hwnd.is_null() {
             return Err("Cannot create native overlay".into());
         }
@@ -183,7 +185,7 @@ unsafe fn add_tray(hwnd: HWND) -> bool {
     tray.uID = 1;
     tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     tray.uCallbackMessage = TRAY;
-    tray.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+    tray.hIcon = super::icons::small();
     let tip = wide("Constellation — right-click for settings");
     tray.szTip[..tip.len()].copy_from_slice(&tip);
     Shell_NotifyIconW(NIM_ADD, &tray) != 0 || Shell_NotifyIconW(NIM_MODIFY, &tray) != 0

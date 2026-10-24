@@ -30,6 +30,9 @@ jobs:
       - name: Package portable folder
         if: runner.os == 'Windows'
         run: python scripts/package.py
+      - name: Verify embedded application icon
+        if: runner.os == 'Windows'
+        run: python scripts/check_icons.py
       - name: Save portable archive
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7.0.2

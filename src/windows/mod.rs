@@ -2,6 +2,7 @@
 mod audio;
 mod editor;
 mod editor_theme;
+mod icons;
 mod input;
 mod pickers;
 mod recorder;

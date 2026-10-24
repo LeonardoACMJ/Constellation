@@ -79,6 +79,43 @@ unsafe fn dot(dc: HDC, p: Point, r: i32, color: u32) {
     DeleteObject(brush);
 }
 
+unsafe fn symbol(dc: HDC, p: Point, folder: bool, scale: f64) {
+    let shapes: &[(f64, f64, f64)] = if folder {
+        &super::icons::CLUSTER
+    } else {
+        &[(0., 0., 7.5)]
+    };
+    let brush = CreateSolidBrush(if folder {
+        rgb(195, 175, 255)
+    } else {
+        rgb(142, 226, 205)
+    });
+    let old_brush = SelectObject(dc, brush);
+    let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    for &(x, y, radius) in shapes {
+        let center = Point {
+            x: p.x + x * scale,
+            y: p.y + y * scale,
+        };
+        let points: Vec<POINT> = (0..8)
+            .map(|i| {
+                let q = center.polar(
+                    radius * scale * if i % 2 == 0 { 1. } else { 0.25 },
+                    -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::FRAC_PI_4,
+                );
+                POINT {
+                    x: q.x.round() as i32,
+                    y: q.y.round() as i32,
+                }
+            })
+            .collect();
+        Polygon(dc, points.as_ptr(), points.len() as i32);
+    }
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    DeleteObject(brush);
+}
+
 pub unsafe fn draw(
     dc: HDC,
     c: &Config,
@@ -153,18 +190,14 @@ pub unsafe fn draw(
         let p = map(s.dot);
         let w = (((s.inner + s.outer) * 0.5 * s.sweep * scale) as i32).clamp(12, 125);
         let size = (12. * scale).round().max(7.) as i32;
-        text(
+        symbol(
             dc,
-            if folder { "✧" } else { "✦" },
-            p.x as i32 - 15,
-            p.y as i32 - 26,
-            30,
-            if folder {
-                rgb(195, 175, 255)
-            } else {
-                rgb(142, 226, 205)
+            Point {
+                x: p.x,
+                y: p.y - 15. * scale,
             },
-            (21. * scale).max(9.) as i32,
+            folder,
+            scale,
         );
         text(
             dc,
@@ -226,14 +259,14 @@ pub unsafe fn draw(
     }
     let radius = (c.layout.radius * 0.27 * scale).max(3.) as i32;
     dot(dc, origin, radius, rgb(18, 25, 39));
-    text(
+    symbol(
         dc,
-        "✧",
-        origin.x as i32 - 20,
-        origin.y as i32 - 23,
-        40,
-        rgb(195, 175, 255),
-        26,
+        Point {
+            x: origin.x,
+            y: origin.y - 7. * scale,
+        },
+        true,
+        scale,
     );
     if radius > 25 {
         text(

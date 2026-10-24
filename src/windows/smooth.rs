@@ -620,6 +620,21 @@ impl Canvas {
             status(GdipDrawPath(self.graphics, pen, shape.pointer))
         }
     }
+    unsafe fn constellation(&mut self, p: Point, scale: f64) -> Result<(), String> {
+        for (x, y, radius) in super::icons::CLUSTER {
+            self.sparkle(
+                Point {
+                    x: p.x + x * scale,
+                    y: p.y + y * scale,
+                },
+                radius * scale,
+                color(195, 175, 255, 255),
+                true,
+                scale,
+            )?;
+        }
+        Result::Ok(())
+    }
     unsafe fn sector_path(
         &self,
         sector: &Sector,
@@ -762,20 +777,15 @@ impl Canvas {
                 continue;
             }
             let point = map(sector.dot);
-            self.sparkle(
-                Point {
-                    x: point.x,
-                    y: point.y - 15. * scale,
-                },
-                7.5 * scale,
-                if folder {
-                    color(195, 175, 255, 255)
-                } else {
-                    color(142, 226, 205, 255)
-                },
-                !folder,
-                scale,
-            )?;
+            let symbol = Point {
+                x: point.x,
+                y: point.y - 15. * scale,
+            };
+            if folder {
+                self.constellation(symbol, scale)?;
+            } else {
+                self.sparkle(symbol, 7.5 * scale, color(142, 226, 205, 255), true, scale)?;
+            }
             let width = arc.clamp(12. * scale, 125. * scale);
             self.text(
                 &node.name,
@@ -827,14 +837,11 @@ impl Canvas {
         }
         let radius = (c.layout.radius * 0.27 * scale).max(3.);
         self.circle(origin, radius, color(18, 25, 39, 255))?;
-        self.sparkle(
+        self.constellation(
             Point {
                 x: origin.x,
                 y: origin.y - 7. * scale,
             },
-            9. * scale,
-            color(195, 175, 255, 255),
-            false,
             scale,
         )?;
         if radius > 25. * scale {
