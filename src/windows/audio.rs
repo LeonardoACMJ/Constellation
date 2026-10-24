@@ -1,83 +1,199 @@
-use crate::config::Sound;
-use std::sync::mpsc::{SyncSender, sync_channel};
-use windows_sys::Win32::Media::Audio::*;
-
+//! Event-driven PCM output. Only the audio worker touches driver buffers.
+use crate::{
+    config::Sound,
+    sound::{Mixer, RATE},
+};
+use std::{
+    mem::{size_of, zeroed},
+    ptr::{null, null_mut},
+    sync::{
+        Arc,
+        mpsc::{Receiver, SyncSender, sync_channel},
+    },
+};
+use windows_sys::Win32::{Foundation::*, Media::Audio::*, System::Threading::*};
+struct Wake(HANDLE);
+// The event handle is thread-safe, and is closed only after both owners drop.
+unsafe impl Send for Wake {}
+unsafe impl Sync for Wake {}
+impl Drop for Wake {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
 pub struct Chimes {
-    tx: SyncSender<Sound>,
+    channel: Option<(SyncSender<Sound>, Arc<Wake>)>,
 }
 impl Default for Chimes {
     fn default() -> Self {
-        let (tx, rx) = sync_channel::<Sound>(2);
-        std::thread::spawn(move || {
-            let frequencies = [523.25, 587.33, 659.25, 783.99, 880.];
-            let mut seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos() as u64;
-            // One bounded voice. Keep the current buffer alive for asynchronous playback;
-            // each new call stops the previous sound before its buffer is dropped.
-            let mut current: Option<Vec<u8>> = None;
-            while let Ok(sound) = rx.recv() {
-                if !sound.enabled || sound.volume <= 0. {
-                    continue;
-                }
-                let mut latest = sound;
-                while let Ok(s) = rx.try_recv() {
-                    latest = s;
-                }
-                if !latest.enabled || latest.volume <= 0. {
-                    continue;
-                }
-                seed ^= seed << 13;
-                seed ^= seed >> 7;
-                seed ^= seed << 17;
-                let wav = bell(frequencies[(seed % 5) as usize], latest.volume);
-                unsafe {
-                    PlaySoundW(
-                        wav.as_ptr() as *const u16,
-                        std::ptr::null_mut(),
-                        SND_MEMORY | SND_NODEFAULT | SND_ASYNC,
-                    );
-                }
-                current.replace(wav);
+        unsafe {
+            let event = CreateEventW(null(), 0, 0, null());
+            if event.is_null() {
+                return Self { channel: None };
             }
-            unsafe {
-                PlaySoundW(std::ptr::null(), std::ptr::null_mut(), 0);
+            let wake = Arc::new(Wake(event));
+            let worker_wake = wake.clone();
+            let (tx, rx) = sync_channel(64);
+            if std::thread::Builder::new()
+                .name("constellation-audio".into())
+                .stack_size(512 * 1024)
+                .spawn(move || output(rx, worker_wake))
+                .is_err()
+            {
+                return Self { channel: None };
             }
-            drop(current);
-        });
-        Self { tx }
+            Self {
+                channel: Some((tx, wake)),
+            }
+        }
     }
 }
 impl Chimes {
     pub fn play(&self, s: Sound) {
-        let _ = self.tx.try_send(s);
+        if !s.enabled || s.volume <= 0. {
+            return;
+        }
+        if let Some((tx, wake)) = &self.channel {
+            if tx.try_send(s).is_ok() {
+                unsafe {
+                    SetEvent(wake.0);
+                }
+            }
+        }
     }
 }
-pub fn bell(frequency: f64, volume: f64) -> Vec<u8> {
-    let rate = 22050u32;
-    let count = (rate as f64 * 0.11) as usize;
-    let mut out = vec![];
-    out.extend(b"RIFF");
-    out.extend((36 + count as u32 * 2).to_le_bytes());
-    out.extend(b"WAVEfmt ");
-    out.extend(16u32.to_le_bytes());
-    out.extend(1u16.to_le_bytes());
-    out.extend(1u16.to_le_bytes());
-    out.extend(rate.to_le_bytes());
-    out.extend((rate * 2).to_le_bytes());
-    out.extend(2u16.to_le_bytes());
-    out.extend(16u16.to_le_bytes());
-    out.extend(b"data");
-    out.extend((count as u32 * 2).to_le_bytes());
-    for i in 0..count {
-        let t = i as f64 / rate as f64;
-        let fade = ((count - i) as f64 / (count as f64 * 0.15)).min(1.);
-        let wave = (std::f64::consts::TAU * frequency * t).sin()
-            + 0.25 * (std::f64::consts::TAU * frequency * 2.76 * t).sin() * (-35. * t).exp();
-        let amplitude =
-            wave * (-27. * t).exp() * (t / 0.003).min(1.) * fade * volume.clamp(0., 1.) * 20000.;
-        out.extend((amplitude as i16).to_le_bytes());
+impl Drop for Chimes {
+    fn drop(&mut self) {
+        if let Some((tx, wake)) = self.channel.take() {
+            drop(tx);
+            unsafe {
+                SetEvent(wake.0);
+            }
+        }
     }
-    out
+}
+struct Buffer {
+    header: WAVEHDR,
+    samples: [i16; 256],
+    queued: bool,
+}
+fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
+    unsafe {
+        let mut mixer = Mixer::default();
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as u64
+            | 1;
+        // Heap addresses stay stable from PrepareHeader until UnprepareHeader.
+        let mut buffers: Box<[Buffer; 2]> = Box::new(std::array::from_fn(|_| Buffer {
+            header: zeroed(),
+            samples: [0; 256],
+            queued: false,
+        }));
+        let mut device: HWAVEOUT = null_mut();
+        loop {
+            let mut disconnected = false;
+            loop {
+                match rx.try_recv() {
+                    Ok(s) => {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        if s.enabled {
+                            mixer.start((seed % 5) as usize, s.volume);
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+            if disconnected {
+                break;
+            }
+            if device.is_null() && mixer.active() > 0 {
+                let format = WAVEFORMATEX {
+                    wFormatTag: 1,
+                    nChannels: 1,
+                    nSamplesPerSec: RATE,
+                    nAvgBytesPerSec: RATE * 2,
+                    nBlockAlign: 2,
+                    wBitsPerSample: 16,
+                    cbSize: 0,
+                };
+                if waveOutOpen(
+                    &mut device,
+                    WAVE_MAPPER,
+                    &format,
+                    wake.0 as usize,
+                    0,
+                    CALLBACK_EVENT,
+                ) != 0
+                {
+                    break;
+                }
+            }
+            if !device.is_null() {
+                let mut failed = false;
+                for b in buffers.iter_mut() {
+                    if b.queued && b.header.dwFlags & WHDR_DONE != 0 {
+                        if waveOutUnprepareHeader(
+                            device,
+                            &mut b.header,
+                            size_of::<WAVEHDR>() as u32,
+                        ) != 0
+                        {
+                            failed = true;
+                            break;
+                        }
+                        b.queued = false;
+                    }
+                    if !b.queued && mixer.active() > 0 {
+                        mixer.mix(&mut b.samples);
+                        b.header = zeroed();
+                        b.header.lpData = b.samples.as_mut_ptr().cast();
+                        b.header.dwBufferLength = (b.samples.len() * 2) as u32;
+                        if waveOutPrepareHeader(device, &mut b.header, size_of::<WAVEHDR>() as u32)
+                            != 0
+                        {
+                            failed = true;
+                            break;
+                        }
+                        if waveOutWrite(device, &mut b.header, size_of::<WAVEHDR>() as u32) != 0 {
+                            waveOutUnprepareHeader(
+                                device,
+                                &mut b.header,
+                                size_of::<WAVEHDR>() as u32,
+                            );
+                            failed = true;
+                            break;
+                        }
+                        b.queued = true;
+                    }
+                }
+                if failed {
+                    break;
+                }
+                if mixer.active() == 0 && buffers.iter().all(|b| !b.queued) {
+                    waveOutClose(device);
+                    device = null_mut();
+                }
+            }
+            // Commands and driver completion share an auto-reset event. No timer,
+            // polling or silence stream runs while the launcher waits in the tray.
+            WaitForSingleObject(wake.0, INFINITE);
+        }
+        if !device.is_null() {
+            waveOutReset(device);
+            for b in buffers.iter_mut() {
+                waveOutUnprepareHeader(device, &mut b.header, size_of::<WAVEHDR>() as u32);
+            }
+            waveOutClose(device);
+        }
+    }
 }

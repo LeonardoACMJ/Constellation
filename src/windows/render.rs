@@ -10,7 +10,7 @@ use windows_sys::Win32::{
     Graphics::Gdi::*,
 };
 
-pub fn rgb(r: u8, g: u8, b: u8) -> u32 {
+pub const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
 }
 pub unsafe fn fill(dc: HDC, rect: &RECT, color: u32) {
@@ -255,6 +255,25 @@ pub unsafe fn buffered(
 ) {
     let mut ps = std::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut ps);
+    buffer_into(hwnd, dc, background, paint);
+    EndPaint(hwnd, &ps);
+}
+/// Present a fresh frame synchronously, including during transparent opening.
+pub unsafe fn present(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    background: u32,
+    paint: impl FnOnce(HDC),
+) {
+    let dc = GetDC(hwnd);
+    buffer_into(hwnd, dc, background, paint);
+    ReleaseDC(hwnd, dc);
+}
+unsafe fn buffer_into(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    dc: HDC,
+    background: u32,
+    paint: impl FnOnce(HDC),
+) {
     let mut r: RECT = std::mem::zeroed();
     GetClientRect(hwnd, &mut r);
     let memory = CreateCompatibleDC(dc);
@@ -266,5 +285,4 @@ pub unsafe fn buffered(
     SelectObject(memory, old);
     DeleteObject(bitmap);
     DeleteDC(memory);
-    EndPaint(hwnd, &ps);
 }

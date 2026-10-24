@@ -40,7 +40,14 @@ impl Engine {
         let Some(profile) = self.profile.map(|i| &c.profiles[i]) else {
             return Action::None;
         };
-        let item = geometry::hit(&self.sectors, p).cloned();
+        // The root hub remains neutral even if an offset child fan crosses it.
+        let item = if p.x.hypot(p.y) < c.layout.radius * 0.30 {
+            None
+        } else if profile.directional {
+            geometry::directional_hit(&self.sectors, p).cloned()
+        } else {
+            geometry::hit(&self.sectors, p).cloned()
+        };
         let id = item.as_ref().map(|s| s.id);
         if id == self.hovered {
             return Action::None;

@@ -1,11 +1,11 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use super::{
-    error,
+    editor_theme as theme, error,
     pickers::{self, Pick},
     render, wide,
 };
 use crate::{
-    config::{Binding, Config, Mode, Node, Profile, Target},
+    config::{Binding, Config, CursorEnd, Mode, Node, Profile, Target},
     editing::{self, History},
     geometry::{self, Point},
     storage,
@@ -83,6 +83,23 @@ struct Editor {
     item_dirty: bool,
     settings_invalid: bool,
     measure_preview: bool,
+    preview_cache: Option<PreviewCache>,
+    wheel_delta: i32,
+}
+struct PreviewCache {
+    config: Config,
+    monitor: usize,
+    width: i32,
+    height: i32,
+    bitmap: HBITMAP,
+    sectors: usize,
+}
+impl Drop for PreviewCache {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteObject(self.bitmap);
+        }
+    }
 }
 static mut EDITOR: *mut Editor = null_mut();
 
@@ -111,7 +128,12 @@ unsafe fn control(
     h: i32,
     style: u32,
 ) -> HWND {
-    CreateWindowExW(
+    let style = if class == "BUTTON" && matches!(style & BS_TYPEMASK as u32, 0 | 1) {
+        (style & !(BS_TYPEMASK as u32)) | BS_OWNERDRAW as u32
+    } else {
+        style
+    };
+    let hwnd = CreateWindowExW(
         0,
         wide(class).as_ptr(),
         wide(label).as_ptr(),
@@ -124,7 +146,9 @@ unsafe fn control(
         id as usize as HMENU,
         GetModuleHandleW(null()),
         null(),
-    )
+    );
+    theme::control(hwnd, class);
+    hwnd
 }
 unsafe fn get(hwnd: HWND, id: i32) -> String {
     let e = GetDlgItem(hwnd, id);
@@ -156,6 +180,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             return Err("Cannot initialize folder picker".into());
         }
         let c = storage::load_or_create(&root)?;
+        theme::install();
         let module = GetModuleHandleW(null());
         let class = wide("Constellation.Config");
         let wc = WNDCLASSW {
@@ -163,15 +188,15 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             hInstance: module,
             lpszClassName: class.as_ptr(),
             hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-            hbrBackground: GetSysColorBrush(COLOR_BTNFACE),
+            hbrBackground: null_mut(),
             ..zeroed()
         };
         RegisterClassW(&wc);
         let hwnd = CreateWindowExW(
-            0,
+            WS_EX_COMPOSITED,
             class.as_ptr(),
             wide("Constellation — Configure & Visualize").as_ptr(),
-            WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_HSCROLL,
+            WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_HSCROLL | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             1380,
@@ -184,6 +209,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         if hwnd.is_null() {
             return Err("Cannot create configuration window".into());
         }
+        theme::window(hwnd);
         let mut displays = vec![];
         EnumDisplayMonitors(
             null_mut(),
@@ -201,6 +227,8 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             item_dirty: false,
             settings_invalid: false,
             measure_preview: std::env::args().any(|s| s == "--measure-preview"),
+            preview_cache: None,
+            wheel_delta: 0,
             c,
             rows: vec![],
             parents: vec![],
@@ -462,6 +490,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         }
         drop(Box::from_raw(EDITOR));
         EDITOR = null_mut();
+        theme::shutdown();
         CoUninitialize();
         Ok(())
     }
@@ -485,6 +514,128 @@ unsafe extern "system" fn monitor_callback(
 }
 
 impl Editor {
+    unsafe fn paint_preview(&self, dc: HDC) -> usize {
+        let e = self;
+        render::fill(dc, &e.preview, render::rgb(15, 22, 36));
+        let all = geometry::full(&e.c);
+        let (workw, workh) = if let Some(d) = e.displays.get(e.monitor) {
+            let (mut x, mut y) = (96, 96);
+            GetDpiForMonitor(d.handle, MDT_EFFECTIVE_DPI, &mut x, &mut y);
+            (
+                (d.work.right - d.work.left) as f64 * 96. / x.max(1) as f64,
+                (d.work.bottom - d.work.top) as f64 * 96. / y.max(1) as f64,
+            )
+        } else {
+            (1920., 1080.)
+        };
+        let mut extentx = workw / 2.;
+        let mut extenty = workh / 2.;
+        for s in &all {
+            for p in s.polygon() {
+                extentx = extentx.max(p.x.abs());
+                extenty = extenty.max(p.y.abs());
+            }
+        }
+        let r = e.preview;
+        let scale = (((r.right - r.left - 30) as f64) / (extentx * 2.))
+            .min((r.bottom - r.top - 70) as f64 / (extenty * 2.))
+            .min(1.0)
+            .max(0.000001);
+        let origin = Point {
+            x: (r.left + r.right) as f64 / 2.,
+            y: (r.top + r.bottom) as f64 / 2.,
+        };
+        let saved = SaveDC(dc);
+        IntersectClipRect(dc, r.left, r.top, r.right, r.bottom);
+        let pen = CreatePen(PS_DASH, 1, render::rgb(112, 125, 153));
+        let oldp = SelectObject(dc, pen);
+        let oldb = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Rectangle(
+            dc,
+            (origin.x - workw * scale / 2.) as i32,
+            (origin.y - workh * scale / 2.) as i32,
+            (origin.x + workw * scale / 2.) as i32,
+            (origin.y + workh * scale / 2.) as i32,
+        );
+        SelectObject(dc, oldp);
+        SelectObject(dc, oldb);
+        DeleteObject(pen);
+        render::draw(dc, &e.c, &all, &[], None, origin, scale, true);
+        RestoreDC(dc, saved);
+        render::text(
+            dc,
+            &format!(
+                "Overview zoom: {:.0}% · dashed outline = monitor work area",
+                scale * 100.
+            ),
+            r.left,
+            r.bottom - 25,
+            r.right - r.left,
+            render::rgb(148, 164, 190),
+            12,
+        );
+        let warnings = geometry::warnings(&e.c, workw, workh);
+        let warning = if warnings.is_empty() {
+            "Layout fits this monitor's work area.".into()
+        } else {
+            warnings.join(" ")
+        };
+        render::text(
+            dc,
+            &warning,
+            r.left,
+            r.bottom + 8,
+            r.right - r.left,
+            theme::MUTED,
+            12,
+        );
+        all.len()
+    }
+    unsafe fn cached_preview(&mut self, dc: HDC) -> usize {
+        let r = self.preview;
+        let width = (r.right - r.left).max(1);
+        let height = (r.bottom - r.top + 110).max(1);
+        let valid = self.preview_cache.as_ref().is_some_and(|v| {
+            v.config == self.c
+                && v.monitor == self.monitor
+                && v.width == width
+                && v.height == height
+        });
+        if !valid {
+            let memory = CreateCompatibleDC(dc);
+            let bitmap = CreateCompatibleBitmap(dc, width, height);
+            let old = SelectObject(memory, bitmap);
+            render::fill(
+                memory,
+                &RECT {
+                    left: 0,
+                    top: 0,
+                    right: width,
+                    bottom: height,
+                },
+                theme::BACKGROUND,
+            );
+            SetViewportOrgEx(memory, -r.left, -r.top, null_mut());
+            let sectors = self.paint_preview(memory);
+            SelectObject(memory, old);
+            DeleteDC(memory);
+            self.preview_cache = Some(PreviewCache {
+                config: self.c.clone(),
+                monitor: self.monitor,
+                width,
+                height,
+                bitmap,
+                sectors,
+            });
+        }
+        let cache = self.preview_cache.as_ref().unwrap();
+        let memory = CreateCompatibleDC(dc);
+        let old = SelectObject(memory, cache.bitmap);
+        BitBlt(dc, r.left, r.top, width, height, memory, 0, 0, SRCCOPY);
+        SelectObject(memory, old);
+        DeleteDC(memory);
+        cache.sectors
+    }
     fn checkpoint_settings(&mut self) {
         if let Some(before) = self.settings_before.take() {
             self.history.record(&before, &self.c);
@@ -636,32 +787,47 @@ impl Editor {
     }
     unsafe fn scroll_to(&mut self, x: i32, y: i32) {
         let (dx, dy) = (self.scroll_x - x, self.scroll_y - y);
+        if dx == 0 && dy == 0 {
+            return;
+        }
         self.scroll_x = x;
         self.scroll_y = y;
-        SetScrollPos(self.hwnd, SB_HORZ, x, 1);
-        SetScrollPos(self.hwnd, SB_VERT, y, 1);
+        SetScrollPos(self.hwnd, SB_HORZ, x, 0);
+        SetScrollPos(self.hwnd, SB_VERT, y, 0);
+        let mut positions = vec![];
         let mut child = GetWindow(self.hwnd, GW_CHILD);
         while !child.is_null() {
-            let next = GetWindow(child, GW_HWNDNEXT);
-            let mut rect: RECT = zeroed();
-            GetWindowRect(child, &mut rect);
-            let mut point = POINT {
-                x: rect.left,
-                y: rect.top,
+            let mut r: RECT = zeroed();
+            GetWindowRect(child, &mut r);
+            let mut p = POINT {
+                x: r.left,
+                y: r.top,
             };
-            ScreenToClient(self.hwnd, &mut point);
-            SetWindowPos(
-                child,
-                null_mut(),
-                point.x + dx,
-                point.y + dy,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-            child = next;
+            ScreenToClient(self.hwnd, &mut p);
+            positions.push((child, p.x + dx, p.y + dy));
+            child = GetWindow(child, GW_HWNDNEXT);
         }
-        InvalidateRect(self.hwnd, null(), 1);
+        let flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW;
+        let mut batch = BeginDeferWindowPos(positions.len() as i32);
+        for &(child, x, y) in &positions {
+            if batch.is_null() {
+                break;
+            }
+            batch = DeferWindowPos(batch, child, null_mut(), x, y, 0, 0, flags);
+        }
+        let moved = !batch.is_null() && EndDeferWindowPos(batch) != 0;
+        if !moved {
+            for (child, x, y) in positions {
+                SetWindowPos(child, null_mut(), x, y, 0, 0, flags);
+            }
+        }
+        // One combined invalidation, no intermediate erase or per-child paint.
+        RedrawWindow(
+            self.hwnd,
+            null(),
+            null_mut(),
+            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE,
+        );
     }
     unsafe fn resize_view(&mut self) {
         let mut client: RECT = zeroed();
@@ -1092,12 +1258,12 @@ unsafe fn advanced(e: &mut Editor) {
         hInstance: module,
         lpszClassName: class.as_ptr(),
         hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-        hbrBackground: GetSysColorBrush(COLOR_BTNFACE),
+        hbrBackground: null_mut(),
         ..zeroed()
     };
     RegisterClassW(&wc);
     let hwnd = CreateWindowExW(
-        0,
+        WS_EX_COMPOSITED,
         class.as_ptr(),
         wide("Constellation — Advanced JSON").as_ptr(),
         WS_OVERLAPPEDWINDOW,
@@ -1110,6 +1276,7 @@ unsafe fn advanced(e: &mut Editor) {
         module,
         null(),
     );
+    theme::window(hwnd);
     e.json = hwnd;
     EnableWindow(e.hwnd, 0);
     label(
@@ -1153,6 +1320,9 @@ unsafe fn advanced(e: &mut Editor) {
 }
 
 unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if let Some(result) = theme::message(msg, w, l) {
+        return result;
+    }
     if EDITOR.is_null() {
         return DefWindowProcW(hwnd, msg, w, l);
     }
@@ -1164,6 +1334,10 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
     };
     let e = &mut *EDITOR;
     match msg {
+        WM_PAINT => {
+            render::buffered(hwnd, theme::BACKGROUND, |_| {});
+            0
+        }
         WM_SIZE => {
             let width = (l as u32 & 0xffff) as i32;
             let height = ((l as u32 >> 16) & 0xffff) as i32;
@@ -1210,6 +1384,9 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if let Some(result) = theme::message(msg, w, l) {
+        return result;
+    }
     if msg == WM_DESTROY {
         PostQuitMessage(0);
         return 0;
@@ -1255,13 +1432,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_MOUSEWHEEL => {
-            let request = if ((w >> 16) as u16 as i16) > 0 {
-                SB_LINEUP
-            } else {
-                SB_LINEDOWN
-            };
-            for _ in 0..3 {
-                e.scroll(true, request);
+            e.wheel_delta += ((w >> 16) as u16 as i16) as i32;
+            let steps = e.wheel_delta / 120;
+            e.wheel_delta %= 120;
+            if steps != 0 {
+                let mut info: SCROLLINFO = zeroed();
+                info.cbSize = size_of::<SCROLLINFO>() as u32;
+                info.fMask = SIF_ALL;
+                GetScrollInfo(hwnd, SB_VERT, &mut info);
+                info.fMask = SIF_POS;
+                info.nPos -= steps * 72;
+                let y = SetScrollInfo(hwnd, SB_VERT, &info, 0);
+                e.scroll_to(e.scroll_x, y);
             }
             0
         }
@@ -1274,7 +1456,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 set(hwnd, id, &value.to_string());
                 if e.controls_to_settings().is_ok() {
                     e.dirty = true;
-                    InvalidateRect(hwnd, null(), 1);
+                    InvalidateRect(hwnd, null(), 0);
                 }
             }
             0
@@ -1432,105 +1614,55 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         WM_PAINT => {
             let measured = std::time::Instant::now();
-            let mut ps = zeroed();
-            let dc = BeginPaint(hwnd, &mut ps);
-            SetViewportOrgEx(dc, -e.scroll_x, -e.scroll_y, null_mut());
-            render::fill(dc, &e.preview, render::rgb(15, 22, 36));
-            let all = geometry::full(&e.c);
-            let (workw, workh) = if let Some(d) = e.displays.get(e.monitor) {
-                let (mut x, mut y) = (96, 96);
-                GetDpiForMonitor(d.handle, MDT_EFFECTIVE_DPI, &mut x, &mut y);
-                (
-                    (d.work.right - d.work.left) as f64 * 96. / x.max(1) as f64,
-                    (d.work.bottom - d.work.top) as f64 * 96. / y.max(1) as f64,
-                )
-            } else {
-                (1920., 1080.)
-            };
-            let mut extentx = workw / 2.;
-            let mut extenty = workh / 2.;
-            for s in &all {
-                for p in s.polygon() {
-                    extentx = extentx.max(p.x.abs());
-                    extenty = extenty.max(p.y.abs());
-                }
-            }
-            let r = e.preview;
-            let scale = (((r.right - r.left - 30) as f64) / (extentx * 2.))
-                .min((r.bottom - r.top - 70) as f64 / (extenty * 2.))
-                .min(1.0)
-                .max(0.000001);
-            let origin = Point {
-                x: (r.left + r.right) as f64 / 2.,
-                y: (r.top + r.bottom) as f64 / 2.,
-            };
-            let saved = SaveDC(dc);
-            IntersectClipRect(dc, r.left, r.top, r.right, r.bottom);
-            let pen = CreatePen(PS_DASH, 1, render::rgb(112, 125, 153));
-            let oldp = SelectObject(dc, pen);
-            let oldb = SelectObject(dc, GetStockObject(NULL_BRUSH));
-            Rectangle(
-                dc,
-                (origin.x - workw * scale / 2.) as i32,
-                (origin.y - workh * scale / 2.) as i32,
-                (origin.x + workw * scale / 2.) as i32,
-                (origin.y + workh * scale / 2.) as i32,
-            );
-            SelectObject(dc, oldp);
-            SelectObject(dc, oldb);
-            DeleteObject(pen);
-            render::draw(dc, &e.c, &all, &[], None, origin, scale, true);
-            RestoreDC(dc, saved);
-            render::text(
-                dc,
-                &format!(
-                    "Overview zoom: {:.0}% · dashed outline = monitor work area",
-                    scale * 100.
-                ),
-                r.left,
-                r.bottom - 25,
-                r.right - r.left,
-                render::rgb(148, 164, 190),
-                12,
-            );
-            let warnings = geometry::warnings(&e.c, workw, workh);
-            let warning = if warnings.is_empty() {
-                "Layout fits this monitor's work area.".into()
-            } else {
-                warnings.join(" ")
-            };
-            render::text(
-                dc,
-                &warning,
-                r.left,
-                r.bottom + 8,
-                r.right - r.left,
-                render::rgb(100, 105, 115),
-                12,
-            );
-            let mut cr: RECT = zeroed();
-            GetClientRect(hwnd, &mut cr);
-            render::text(
-                dc,
-                &format!(
-                    "{}{}",
-                    if e.dirty || e.item_dirty || e.settings_invalid {
-                        "Unsaved changes · "
-                    } else {
-                        ""
+            let mut sectors = 0;
+            render::buffered(hwnd, theme::BACKGROUND, |dc| {
+                SetViewportOrgEx(dc, -e.scroll_x, -e.scroll_y, null_mut());
+                for r in [
+                    RECT {
+                        left: 10,
+                        top: 8,
+                        right: 290,
+                        bottom: 785,
                     },
-                    e.status
-                ),
-                15,
-                cr.bottom.max(895) - 32,
-                cr.right - 30,
-                render::rgb(85, 90, 105),
-                12,
-            );
-            EndPaint(hwnd, &ps);
+                    RECT {
+                        left: 295,
+                        top: 8,
+                        right: 680,
+                        bottom: 785,
+                    },
+                    RECT {
+                        left: 690,
+                        top: 8,
+                        right: e.preview.right + 10,
+                        bottom: 800,
+                    },
+                ] {
+                    theme::panel(dc, r);
+                }
+                sectors = e.cached_preview(dc);
+                let mut cr: RECT = zeroed();
+                GetClientRect(hwnd, &mut cr);
+                render::text(
+                    dc,
+                    &format!(
+                        "{}{}",
+                        if e.dirty || e.item_dirty || e.settings_invalid {
+                            "Unsaved changes · "
+                        } else {
+                            ""
+                        },
+                        e.status
+                    ),
+                    15,
+                    cr.bottom.max(895) - 32,
+                    cr.right - 30,
+                    theme::MUTED,
+                    12,
+                );
+            });
             if e.measure_preview {
                 e.measure_preview = false;
-                let report = serde_json::json!({"sectors":all.len(),"paint_ms":measured.elapsed().as_secs_f64()*1000.,
+                let report = serde_json::json!({"sectors":sectors,"paint_ms":measured.elapsed().as_secs_f64()*1000.,
                     "conditions":"Native full-preview paint including layout, GDI drawing and warnings; excludes startup, user input and display scanout"});
                 let _ = std::fs::write(
                     e.root.join("data/preview-measurement.json"),
@@ -1575,6 +1707,7 @@ const P_DONE: i32 = 610;
 const P_RECORD: i32 = 611;
 const P_STATUS: i32 = 612;
 const P_CANCEL: i32 = 613;
+const P_DIRECTIONAL: i32 = 615;
 struct Profiles {
     hwnd: HWND,
     draft: Vec<Profile>,
@@ -1601,7 +1734,15 @@ impl Profiles {
     unsafe fn fields(&self) {
         let p = self.selected.and_then(|i| self.draft.get(i));
         for id in [
-            P_NAME, P_BINDING, P_MODE, P_HOVER, P_RESTORE, P_REMOVE, P_APPLY, P_RECORD,
+            P_NAME,
+            P_BINDING,
+            P_MODE,
+            P_HOVER,
+            P_RESTORE,
+            P_DIRECTIONAL,
+            P_REMOVE,
+            P_APPLY,
+            P_RECORD,
         ] {
             EnableWindow(GetDlgItem(self.hwnd, id), p.is_some() as i32);
         }
@@ -1624,10 +1765,17 @@ impl Profiles {
         send(
             self.hwnd,
             P_RESTORE,
-            BM_SETCHECK,
-            usize::from(p.is_some_and(|p| p.restore_cursor)),
+            CB_SETCURSEL,
+            p.map_or(0, |p| match p.cursor_end {
+                CursorEnd::Restore => 0,
+                CursorEnd::Center => 1,
+                CursorEnd::Leave => 2,
+            }),
             0,
         );
+        for (id, on) in [(P_DIRECTIONAL, p.is_some_and(|p| p.directional))] {
+            send(self.hwnd, id, BM_SETCHECK, usize::from(on), 0);
+        }
     }
     unsafe fn apply(&mut self) -> Result<(), String> {
         let Some(i) = self.selected else {
@@ -1657,7 +1805,12 @@ impl Profiles {
                 Mode::Click
             },
             hover: send(self.hwnd, P_HOVER, BM_GETCHECK, 0, 0) == 1,
-            restore_cursor: send(self.hwnd, P_RESTORE, BM_GETCHECK, 0, 0) == 1,
+            cursor_end: match send(self.hwnd, P_RESTORE, CB_GETCURSEL, 0, 0) {
+                1 => CursorEnd::Center,
+                2 => CursorEnd::Leave,
+                _ => CursorEnd::Restore,
+            },
+            directional: send(self.hwnd, P_DIRECTIONAL, BM_GETCHECK, 0, 0) == 1,
         };
         self.refresh();
         Ok(())
@@ -1709,22 +1862,22 @@ unsafe fn profiles(e: &mut Editor) {
         hInstance: module,
         lpszClassName: class.as_ptr(),
         hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-        hbrBackground: GetSysColorBrush(COLOR_BTNFACE),
+        hbrBackground: null_mut(),
         ..zeroed()
     };
     RegisterClassW(&wc);
     // Reserve the intended client area, including the current DPI's title bar
     // and frame rather than clipping the bottom row of controls.
-    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
     let mut bounds = RECT {
         left: 0,
         top: 0,
         right: 810,
-        bottom: 515,
+        bottom: 585,
     };
     AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
     let hwnd = CreateWindowExW(
-        0,
+        WS_EX_COMPOSITED,
         class.as_ptr(),
         wide("Constellation — Shortcut profiles").as_ptr(),
         style,
@@ -1741,6 +1894,7 @@ unsafe fn profiles(e: &mut Editor) {
         error("Cannot create shortcut profile window");
         return;
     }
+    theme::window(hwnd);
     e.profiles = Some(Profiles {
         hwnd,
         draft: e.c.profiles.clone(),
@@ -1825,24 +1979,55 @@ unsafe fn profiles(e: &mut Editor) {
         28,
         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
     );
+    label(hwnd, "Cursor on close", 310, 308, 140);
     control(
         hwnd,
-        "BUTTON",
-        "Restore cursor after closing",
+        "COMBOBOX",
+        "",
         P_RESTORE,
-        310,
-        305,
-        460,
-        28,
-        WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+        455,
+        302,
+        315,
+        180,
+        WS_TABSTOP | CBS_DROPDOWNLIST as u32,
     );
+    for name in [
+        "Restore original position",
+        "Return to menu center",
+        "Leave at selection",
+    ] {
+        send(
+            hwnd,
+            P_RESTORE,
+            CB_ADDSTRING,
+            0,
+            wide(name).as_ptr() as isize,
+        );
+    }
+    for (id, title, y) in [(
+        P_DIRECTIONAL,
+        "Select by direction beyond the outer edge",
+        382,
+    )] {
+        control(
+            hwnd,
+            "BUTTON",
+            title,
+            id,
+            310,
+            y,
+            460,
+            28,
+            WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+        );
+    }
     control(
         hwnd,
         "BUTTON",
         "Apply profile",
         P_APPLY,
         310,
-        350,
+        425,
         170,
         32,
         WS_TABSTOP,
@@ -1853,7 +2038,7 @@ unsafe fn profiles(e: &mut Editor) {
         "Edits follow you when switching profiles. Done keeps changes in the main editor; Save writes them to disk.",
         P_STATUS,
         310,
-        395,
+        465,
         470,
         48,
         0,
@@ -1864,13 +2049,13 @@ unsafe fn profiles(e: &mut Editor) {
         "Done",
         P_DONE,
         570,
-        460,
+        530,
         95,
         32,
         WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
     );
     control(
-        hwnd, "BUTTON", "Cancel", P_CANCEL, 675, 460, 95, 32, WS_TABSTOP,
+        hwnd, "BUTTON", "Cancel", P_CANCEL, 675, 530, 95, 32, WS_TABSTOP,
     );
     e.profiles.as_mut().unwrap().refresh();
     EnableWindow(e.hwnd, 0);
@@ -1881,6 +2066,13 @@ unsafe fn profiles(e: &mut Editor) {
     super::focus_window(hwnd);
 }
 unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if let Some(result) = theme::message(msg, w, l) {
+        return result;
+    }
+    if msg == WM_PAINT {
+        render::buffered(hwnd, theme::BACKGROUND, |_| {});
+        return 0;
+    }
     if EDITOR.is_null() {
         return DefWindowProcW(hwnd, msg, w, l);
     }
@@ -2040,7 +2232,8 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
                         binding,
                         mode: Mode::Click,
                         hover: true,
-                        restore_cursor: true,
+                        cursor_end: CursorEnd::Restore,
+                        directional: true,
                     });
                     p.selected = Some(p.draft.len() - 1);
                     p.refresh();

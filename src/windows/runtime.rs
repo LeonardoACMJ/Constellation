@@ -1,7 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use super::{audio::Chimes, editor, input::Worker, render, target, wide};
 use crate::{
-    config::{Binding, Config, Mode},
+    config::{Binding, Config, CursorEnd, Mode},
     engine::{Action, Engine},
     geometry::Point,
     storage,
@@ -58,6 +58,7 @@ struct Runtime {
     origin: Point,
     scale: f64,
     saved: POINT,
+    center: POINT,
     input: Option<Worker>,
     chimes: Chimes,
     smoke: bool,
@@ -137,6 +138,7 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             origin: Point::default(),
             scale: 1.,
             saved: zeroed(),
+            center: zeroed(),
             input: None,
             chimes: Chimes::default(),
             smoke,
@@ -373,6 +375,7 @@ impl Runtime {
         self.scale = GetDpiForWindow(self.hwnd) as f64 / 96.;
         let x = r.left + self.origin.x as i32;
         let y = r.top + self.origin.y as i32;
+        self.center = POINT { x, y };
         if SetCursorPos(x, y) == 0 {
             self.engine.close();
             self.notice("Cannot center the cursor; invocation cancelled.");
@@ -386,6 +389,10 @@ impl Runtime {
             self.notice("Another application confines the cursor; invocation cancelled.");
             return;
         }
+        // The layered window retains its last presented pixels while hidden.
+        // Keep it transparent until the new root frame has been drawn, so a
+        // previously expanded branch can never be presented on reopening.
+        SetLayeredWindowAttributes(self.hwnd, 0, 0, LWA_COLORKEY | LWA_ALPHA);
         ShowWindow(self.hwnd, SW_SHOW);
         if !super::focus_window(self.hwnd) {
             self.dismiss(true);
@@ -393,19 +400,39 @@ impl Runtime {
             return;
         }
         SetFocus(self.hwnd);
+        render::present(self.hwnd, 0, |dc| {
+            render::draw(
+                dc,
+                &self.config,
+                &self.engine.sectors,
+                &self.engine.path,
+                self.engine.hovered,
+                self.origin,
+                self.scale,
+                false,
+            )
+        });
+        SetLayeredWindowAttributes(self.hwnd, 0, 255, LWA_COLORKEY | LWA_ALPHA);
         InvalidateRect(self.hwnd, null(), 0);
     }
+    unsafe fn finish_cursor(&self, policy: CursorEnd) {
+        let p = match policy {
+            CursorEnd::Restore => self.saved,
+            CursorEnd::Center => self.center,
+            CursorEnd::Leave => return,
+        };
+        SetCursorPos(p.x, p.y);
+    }
     unsafe fn dismiss(&mut self, restore: bool) {
-        let should = self
+        let policy = self
             .engine
             .profile
-            .is_some_and(|i| self.config.profiles[i].restore_cursor)
-            && restore;
+            .map(|i| self.config.profiles[i].cursor_end);
         self.engine.close();
         self.cancel_packets();
         ShowWindow(self.hwnd, SW_HIDE);
-        if should {
-            SetCursorPos(self.saved.x, self.saved.y);
+        if let Some(policy) = policy.filter(|_| restore) {
+            self.finish_cursor(policy);
         }
         if self.reload_requested {
             self.reload();
@@ -571,24 +598,24 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         WM_MOUSEMOVE => {
             // Cursor warps and accessibility tools can generate window mouse messages
             // without a low-level hook event. Preserve that route as well.
-            let mut p = POINT {
-                x: l as u16 as i16 as i32,
-                y: ((l as u32) >> 16) as u16 as i16 as i32,
-            };
-            ClientToScreen(hwnd, &mut p);
-            a.pointer_at(p);
+            // Window mouse messages may remain queued across a close/reopen.
+            // Use today's cursor, never the last gesture's stale coordinates.
+            let mut p: POINT = zeroed();
+            if GetCursorPos(&mut p) != 0 {
+                a.pointer_at(p);
+            }
             0
         }
         RELEASE => {
             if a.selection_allowed() && a.engine.profile == Some(w) {
                 a.pointer_at(unpack_point(l));
-                let restore = a.config.profiles[w].restore_cursor;
+                let policy = a.config.profiles[w].cursor_end;
                 let result = a.engine.release(&a.config);
                 if a.engine.profile.is_none() {
                     a.cancel_packets();
                     ShowWindow(hwnd, SW_HIDE);
-                    if restore && !foreground_blocks_launcher(hwnd) {
-                        SetCursorPos(a.saved.x, a.saved.y);
+                    if !foreground_blocks_launcher(hwnd) {
+                        a.finish_cursor(policy);
                     }
                     if a.reload_requested {
                         a.reload();

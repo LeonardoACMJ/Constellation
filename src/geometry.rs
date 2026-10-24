@@ -162,6 +162,19 @@ pub fn full(config: &Config) -> Vec<Sector> {
 pub fn hit(sectors: &[Sector], p: Point) -> Option<&Sector> {
     sectors.iter().rev().find(|s| s.sweep > 0. && s.contains(p))
 }
+/// Real painted sectors win. Beyond the outer edge, extend a fan's existing
+/// angular target without closing its gaps. Deeper visible fans win there.
+pub fn directional_hit(sectors: &[Sector], p: Point) -> Option<&Sector> {
+    hit(sectors, p).or_else(|| {
+        sectors.iter().rev().find(|s| {
+            let dx = p.x - s.center.x;
+            let dy = p.y - s.center.y;
+            s.sweep > 0.
+                && dx.hypot(dy) > s.outer
+                && (dy.atan2(dx) - s.from).rem_euclid(TAU) <= s.sweep
+        })
+    })
+}
 pub fn warnings(config: &Config, width: f64, height: f64) -> Vec<String> {
     let sectors = full(config);
     let mut narrow = false;

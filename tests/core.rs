@@ -86,7 +86,8 @@ fn child_expansion_does_not_move_existing_sectors() {
 }
 #[test]
 fn hover_opens_immediately_gaps_preserve_and_ancestors_switch() {
-    let c = Config::default();
+    let mut c = Config::default();
+    c.profiles[0].directional = false;
     let mut e = Engine::default();
     assert!(e.open(0, &c));
     let folder = e.sectors.iter().find(|s| s.id == 2).unwrap().dot;

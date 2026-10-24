@@ -56,18 +56,58 @@ pub enum Target {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "ProfileInput")]
 pub struct Profile {
-    #[serde(default)]
     pub id: u64,
     pub name: String,
     pub binding: String,
-    #[serde(default)]
     pub mode: Mode,
-    #[serde(default = "yes")]
     pub hover: bool,
+    pub cursor_end: CursorEnd,
+    pub directional: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileInput {
+    #[serde(default)]
+    id: u64,
+    name: String,
+    binding: String,
+    #[serde(default)]
+    mode: Mode,
     #[serde(default = "yes")]
-    pub restore_cursor: bool,
+    hover: bool,
+    #[serde(default)]
+    cursor_end: Option<CursorEnd>,
+    #[serde(default)]
+    restore_cursor: Option<bool>,
+    #[serde(default = "yes")]
+    directional: bool,
+}
+impl From<ProfileInput> for Profile {
+    fn from(p: ProfileInput) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            binding: p.binding,
+            mode: p.mode,
+            hover: p.hover,
+            cursor_end: p.cursor_end.unwrap_or(if p.restore_cursor.unwrap_or(true) {
+                CursorEnd::Restore
+            } else {
+                CursorEnd::Leave
+            }),
+            directional: p.directional,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorEnd {
+    #[default]
+    Restore,
+    Center,
+    Leave,
 }
 fn yes() -> bool {
     true
@@ -367,7 +407,8 @@ impl Default for Config {
                 binding: "Ctrl+Q".into(),
                 mode: Mode::Click,
                 hover: true,
-                restore_cursor: true,
+                cursor_end: CursorEnd::Restore,
+                directional: true,
             }],
             layout: Layout::default(),
             sound: Sound::default(),

@@ -1,6 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 mod audio;
 mod editor;
+mod editor_theme;
 mod input;
 mod pickers;
 mod recorder;

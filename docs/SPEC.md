@@ -37,23 +37,25 @@ Each row is authoritative for its setting. Bindings are invocations; Star target
 | CFG-02 | Activation | Click: press to open / Hold: release to select | Click | Agreed |
 | CFG-03 | Open Constellations | Hover / Left click | Hover | Agreed |
 | CFG-04 | Opening position | Always centered, with cursor moved to center | Centered | Agreed; fixed for the first release |
-| CFG-05 | Restore cursor after centered use | On / Off | On | Agreed |
+| CFG-05 | Cursor on close | Restore original / Return to menu center / Leave at selection | Restore original | Restore and center agreed; leave retained as a compatibility option |
 | CFG-06 | Hover timing | No intentional opening or ancestor-collapse delay | 0 ms | Agreed |
+| CFG-07 | Cursor appearance | System cursor now; optional custom cursor later | System | Requested conditionally; deferred after inconsistent native cursor checks |
+| CFG-08 | Outside targeting | Exact painted sectors / Extend direction beyond outer edge | Extend direction | Requested behavior; initial default proposed |
 
-**Agreed:** CFG-01–03 and CFG-05 apply independently to each shortcut profile. CFG-04 and CFG-06 are shared requirements, not per-profile choices. Hold mode must support an appropriate mouse binding as well as keyboard input.
+**Agreed:** CFG-01–03, CFG-05, and CFG-08 apply independently to each shortcut profile. CFG-04 and CFG-06 are shared requirements, not per-profile choices. Hold mode must support an appropriate mouse binding as well as keyboard input.
 
 | ID | Centered opening rule | Status |
 |---|---|---|
 | CUR-01 | On invocation, select the monitor containing the pointer before moving it, save the original cursor position once, and center the cursor and root radial within that monitor's usable work area excluding the taskbar before enabling selection. | Agreed |
-| CUR-02 | Keep the cursor available for navigation while open. On launch or dismissal, apply CFG-05 and restore the saved position once when enabled. | Agreed |
+| CUR-02 | Keep a visible navigation pointer while open. CFG-07 records the deferred custom-cursor option. On launch or dismissal, apply CFG-05 once. Return to center uses the invocation monitor's saved work-area center. Restore the normal cursor when closing; FS-02 forbids moving it during fullscreen takeover. | Agreed |
 | CUR-03 | All shortcut profiles use centered opening. Move the cursor to the root center on invocation, not on each child expansion; navigation leaves the cursor under user control. | Agreed |
-| CUR-04 | For a successful launch, close the overlay and restore the cursor before handing the launch request to the target. If cursor movement fails, cancel centered invocation and report it. | Proposed |
+| CUR-04 | For a successful launch, close the overlay and apply CFG-05 before handing the launch request to the target. If cursor movement fails, cancel centered invocation and report it. | Proposed |
 
 Restoration happens after use, rather than immediately after opening. Recovery from display/cursor/input interruptions is defined in END-05; fullscreen non-interference is defined in FS-01–02.
 
 ## 3. Interaction
 
-“Hovered Star” means the pointer is inside a visible Star's selectable region. A highlighted Constellation is not a Star. Folder-opening rules apply at every depth.
+“Hovered Star” means the pointer targets a visible Star, including its extended angular region under CFG-08. A highlighted Constellation is not a Star. Folder-opening rules apply at every depth.
 
 ### 3.1 Open, navigate, select
 
@@ -61,7 +63,7 @@ Restoration happens after use, rather than immediately after opening. Recovery f
 
 | ID | State / event | Condition | Result |
 |---|---|---|---|
-| INT-01 | Closed → binding activated | Any profile; FS-01 permits invocation | Open root using that profile's settings and CUR rules. |
+| INT-01 | Closed → binding activated | Any profile; FS-01 permits invocation | Open a fresh root using that profile's settings and CUR rules. Never expose pixels or queued pointer coordinates from the previous gesture during opening. |
 | INT-02 | Open → pointer enters Constellation | CFG-03 = Hover | Reveal its children in that sector's radial direction with no intentional delay (CFG-06). |
 | INT-03 | Open → left click Constellation | CFG-03 = Left click | Reveal its children; do not launch anything. |
 | INT-04 | Click mode → left click Star | Pointer is over a Star | Select that Star and request its launch. |
@@ -84,7 +86,7 @@ These are **Proposed unless marked Agreed**, based on the prototype and subseque
 | NAV-03 | Hover an ancestor-level Star | **Agreed:** collapse deeper descendants with no intentional delay (CFG-06); retain the Star as the candidate. |
 | NAV-04 | Backspace / click center hub | Backspace closes the deepest child fan; hub returns to root. Neither launches a Star. |
 | NAV-05 | Enter an empty Constellation | Show an empty state with a route back; do not launch or dismiss. |
-| END-01 | Escape / unassigned right click / left click outside menu | Close without launch and apply CUR-02. A mouse button bound to invocation takes precedence over dismissal. |
+| END-01 | Escape / unassigned right click / left click in an untargeted region | Close without launch and apply CUR-02. A mouse button bound to invocation takes precedence over dismissal. |
 | END-02 | Invoke the same Click profile again | Toggle closed. Ignore key-repeat events so holding a Click binding cannot repeatedly toggle. |
 | END-03 | Focus lost or session interrupted | Cancel selection, close, and apply restoration where possible. Never launch from a late release event. |
 | END-04 | Invoke another profile while open | **Agreed:** ignore that invocation. Keep the active profile, navigation path, and saved cursor restoration position unchanged. Only the active Hold profile's release can complete its selection. |
@@ -125,11 +127,13 @@ stateDiagram-v2
 | FX-02 | Constellation lines | Connect an active parent Constellation's dot to its highlighted child, repeating along the active nested path. Replace the affected connection when switching siblings; never connect unrelated siblings as though they were parent/child. | Proposed |
 | FX-03 | Chime | Play a short bell-like chime on transition to a different highlighted Star or Constellation. Choose a random note from one pentatonic scale; staying on the same item or redrawing it does not retrigger audio. | Proposed |
 | FX-04 | Sound controls | Provide mute and volume controls. Exact default volume, notes, timbre, and decay are tunable during prototyping. | Proposed |
-| FX-05 | Fast navigation | Visual/audio feedback must not add dwell time, block selection, or wait for a sound/animation to finish. Keep concurrent voices and total volume bounded; limit audio retriggering only if necessary, without delaying navigation. | Proposed |
+| FX-05 | Fast navigation | New notes overlap existing notes and let their tails finish. Feedback must not block selection or add dwell time. Initial implementation: bounded 32-voice mix with soft limiting; when saturated, omit a new note instead of cutting an existing one. | Agreed behavior; implementation limit proposed |
 
 Prefer a small preloaded sound set or compact procedural bell generation; choose the audio implementation after checking idle cost. A per-item stable pitch can be considered later if random notes make feedback less recognizable. Feedback is app-managed, including any audio assets, under PORT-02.
 
 ## 4. Radial layout
+
+**CFG-08 targeting:** painted sectors take precedence. Outside all painted sectors, extend their existing angles beyond each fan's outer radius; prefer the deepest visible fan. Keep angular gaps and the root hub neutral. Do not change saved geometry or dispatch before the normal selection event. Exact targeting keeps the outer edge as a boundary.
 
 ![Overlapping parent radial and child fan, with an outward center offset](radial-layout.svg)
 
@@ -183,6 +187,13 @@ The prototype switches to Previous/More sectors above its capacity thresholds; t
 | DATA-09 | Configuration transfer | **Agreed capability:** import/export. **Initial implementation:** validate before replacing the draft; imports are undoable and require Save. Exports contain configuration, not bundled targets/assets. Explicitly chosen export documents may be written to the user's selected destination; no background storage fallback is introduced. |
 | DATA-10 | Target advice | **Agreed capability:** warn about missing targets without preventing configuration. Availability can change after editing; dispatch errors remain governed by RUN-02. |
 
+**Editor presentation — agreed goals; initial native styling:**
+
+| ID | Requirement |
+|---|---|
+| UI-01 | Configuration should visually belong to Constellation. Initial styling uses the radial palette, readable Segoe UI text, grouped panels and clear primary actions. User-selectable themes remain future work. |
+| UI-02 | Scrolling must not visibly erase/flash the whole form. Batch child positioning, buffer parent/child painting and reuse an unchanged preview. Edit and monitor/viewport changes must invalidate the relevant preview cache. |
+
 ### 5.1 Portable folder
 
 **Agreed** unless marked Proposed. This contract applies to the resident launcher, configuration UI, and app-managed helper processes on each supported platform.
@@ -231,7 +242,7 @@ These describe acceptance criteria; the [verification record](VERIFICATION.md) s
 |---|---|---|
 | A-01 | CFG-01–06, INT-01–09 | Two profiles retain different settings. Click survives binding release; Hold completes on release of its single bound input or any required key in a combination, ignores unrelated releases, and selects only the eligible hovered Star. |
 | A-02 | CORE-04, CFG-06, LAY-02–03, LAY-07, NAV-01–05 | Traverse at least three nested Constellations with fast mouse gestures, cross gaps, return, and switch branches without an unintended launch or deliberate dwell. Hover opening and ancestor-Star collapse add no intentional wait; empty branches remain escapable. |
-| A-03 | CUR-01–04, CFG-04–05 | Invoke each profile from an off-center position on each monitor; both cursor and root open at the pointer monitor's work-area center excluding the taskbar. Test restore on/off; verify cursor position after launch and cancellation and no recentering during child navigation. |
+| A-03 | CUR-01–04, CFG-04–05, CFG-07 | Invoke each profile from an off-center position on each monitor; both cursor and root open at the pointer monitor's work-area center excluding the taskbar. Test all three cursor-end choices after launch/cancellation; no recentering during child navigation. |
 | A-04 | END-01–05, RUN-01 | Repeat, cancel, interrupt focus, and release after explicit selection. No duplicate or late launch occurs. Invoke another profile while open: the active profile, navigation path, and saved restoration position remain unchanged. Interrupt via display/cursor/input failure: cancel without dispatching a launch. |
 | A-05 | LAY-01, LAY-04–06, LAY-08–09, LAY-13–14 | Add many items and verify continued subdivision without paging or an item-count cap for target size. Across deep branches, display edges, and DPI settings, preserve saved geometry. User-chosen visibility/reachability compromises produce advisory warnings rather than forced corrections. |
 | A-06 | DATA-01–05 | Edit, restart, and verify persistence; reject a cyclic move and malformed configuration without losing valid data. |
@@ -242,8 +253,9 @@ These describe acceptance criteria; the [verification record](VERIFICATION.md) s
 | A-11 | PORT-01–06, DATA-02 | Extract to a user-selected folder, run from a different working directory, edit settings, and inspect app-managed writes for confinement to the portable root. Stop, move the whole folder, and verify settings/assets survive. With writes denied, report the error without external fallback. If PORT-06 is adopted, verify a bundled relative script still launches after moving. |
 | A-12 | LAY-10–12, LAY-14 | Open Visualize mode with sibling and nested Constellations; verify all four spacing controls update the full fan-out preview. Deliberately overflow the work area and create narrow targets: a subdued inline warning appears, saving remains available, and no auto-fit or blocking prompt occurs. Preview must not dispatch a target launch. |
 | A-13 | FS-01–02, BIND-03 | With a fullscreen app foreground, invoke a configured binding and verify no overlay, cursor movement, focus takeover, delayed launch, or input suppression. After leaving fullscreen, invocation works normally. Enter fullscreen while the radial is open: it cancels without launch or cursor/focus takeover. |
-| A-14 | FX-01–05 | Hover through nested Constellations and sibling Stars: dots and lines follow the active parent/child path, with one chime per highlight transition and none on stationary redraws. Verify mute/volume, bounded rapid-note playback, and selection with no feedback-induced delay. |
+| A-14 | FX-01–05 | Hover through nested Constellations and sibling Stars: dots and lines follow the active parent/child path, with one chime per highlight transition and none on stationary redraws. Verify mute/volume, overlapping notes with uninterrupted tails, bounded saturation, and selection with no feedback-induced delay. |
 | A-15 | DATA-06–10 | Pick target/runner/folder paths; drop multiple kinds; preserve quoted and empty arguments. Switch with valid and invalid edits. Undo/redo changes after Save, delete a branch, and import valid/malformed files without losing the previous valid draft. Export a readable snapshot without silently bundling programs. |
+| A-16 | INT-01, CFG-08 | Reopen after selecting from an expanded branch: a fresh root is presented before becoming visible; stale window mouse messages cannot expand it. Test far-away Star/child directions, gaps, hub, click/Hold selection, and exact-targeting opt-out. |
 
 ## 8. Evidence & prototype boundary
 

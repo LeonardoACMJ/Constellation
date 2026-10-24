@@ -7,3 +7,4 @@ pub mod storage;
 pub mod windows;
 
 pub mod editing;
+pub mod sound;

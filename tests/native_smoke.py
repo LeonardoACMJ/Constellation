@@ -193,6 +193,27 @@ try:
     mouse_side(True);wait(lambda:visible(overlay));center=point();U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause();mouse_side(False)
     wait(lambda:not visible(overlay));wait(lambda:marker.exists() and marker.read_text()=="script")
     mark("live profile reload, Mouse4 Hold, and executable-root-relative script launch")
+    U.SetForegroundWindow(probe);pause();origin=point();marker.unlink()
+    invoke();wait(lambda:visible(overlay));center=point()
+    move_cursor(center[0],round(center[1]-144*2*scale));pause()
+    keys((0x20,False),(0x20,True));wait(lambda:not visible(overlay));wait(marker.exists)
+    assert point()==origin
+    mark("extended Star direction launches outside the circle without precision aiming")
+    # Exercise center-on-close and exact-targeting opt-out without adding profiles.
+    original_profile=c["profiles"][3].copy()
+    c["profiles"][3].update(cursor_end="center",directional=True)
+    config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
+    U.SetForegroundWindow(probe);pause();marker.unlink();keys((0x77,False));wait(lambda:visible(overlay));center=point()
+    move_cursor(center[0],round(center[1]-144*2*scale));pause();keys((0x77,True))
+    wait(lambda:not visible(overlay));wait(marker.exists);assert point()==center
+    c["profiles"][3].update(directional=False)
+    config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
+    U.SetForegroundWindow(probe);pause();marker.unlink();keys((0x77,False));wait(lambda:visible(overlay));center=point()
+    move_cursor(center[0],round(center[1]-144*2*scale));pause()
+    keys((0x77,True));wait(lambda:not visible(overlay));pause();assert not marker.exists() and point()==center
+    c["profiles"][3]=original_profile
+    config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
+    mark("Hold supports center-on-close, directional opt-out")
     # A real nested branch; snapshot captures the illuminated path and connection.
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();invoke();wait(lambda:visible(overlay));center=point()
     move_cursor(center[0],round(center[1]+144*.65*scale));pause()
@@ -203,6 +224,16 @@ try:
         assert pixel!=(0,0,0),"Expected a visible child fan outside the root circle"
     keys((0x1b,False),(0x1b,True));wait(lambda:not visible(overlay))
     mark("nested hover path renders and Escape restores the interaction")
+    U.SetForegroundWindow(probe);pause();invoke();wait(lambda:visible(overlay));center=point()
+    # Simulate a window mouse message queued from the previous branch. Its old
+    # client coordinates must not override today's centered cursor.
+    rect=W.RECT();U.GetWindowRect(overlay,C.byref(rect))
+    stale=(center[0]-rect.left)|((round(center[1]+144*.65*scale)-rect.top)<<16)
+    U.PostMessageW(overlay,0x200,0,stale);pause()
+    fresh=screenshot(overlay,"fresh-root.png")
+    if fresh:assert fresh.getpixel((center[0]-rect.left,child_y-rect.top))==(0,0,0),"Previous child fan leaked into the reopened root"
+    keys((0x1b,False),(0x1b,True));wait(lambda:not visible(overlay))
+    mark("reopening an expanded branch presents a fresh root and ignores stale window mouse coordinates")
     c["root"]["children"][1]["children"]=[]
     config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();invoke();wait(lambda:visible(overlay));center=point()
@@ -442,7 +473,8 @@ try:
     click(profiles,611);keys((0x78,False),(0x78,True));pause()
     assert text_at(profiles,603)=="F9",text_at(profiles,603)
     U.SendMessageW(U.GetDlgItem(profiles,604),0x14E,1,0)
-    for child in [605,606]: U.SendMessageW(U.GetDlgItem(profiles,child),0xF1,0,0)
+    U.SendMessageW(U.GetDlgItem(profiles,605),0xF1,0,0)
+    U.SendMessageW(U.GetDlgItem(profiles,606),0x14E,2,0)
     outer=W.RECT();button=W.RECT()
     U.GetWindowRect(profiles,C.byref(outer));U.GetWindowRect(U.GetDlgItem(profiles,610),C.byref(button))
     assert button.bottom < outer.bottom, "Profile actions must fit inside the window"
@@ -451,7 +483,7 @@ try:
     click(window,401)
     saved=json.loads(config_path.read_text())["profiles"]
     assert saved[-1]["id"] > 0
-    assert {k:v for k,v in saved[-1].items() if k!="id"}=={"name":"Recorded hold","binding":"F9","mode":"hold","hover":False,"restore_cursor":False},saved[-1]
+    assert {k:v for k,v in saved[-1].items() if k!="id"}=={"name":"Recorded hold","binding":"F9","mode":"hold","hover":False,"cursor_end":"leave","directional":True},saved[-1]
     mark("keyboard/mouse recording and per-profile options persist through Done and Save")
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause(.25)
     U.SetCursorPos(320,260);keys((0x78,False));wait(lambda:visible(overlay));center=point()
