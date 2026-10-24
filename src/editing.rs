@@ -163,6 +163,7 @@ pub fn star_from_path(root: &Path, path: &Path, id: u64) -> Result<Node, String>
         return Err(format!("Dropped path is unavailable: {}", path.display()));
     };
     Ok(Node {
+        icon: Default::default(),
         id,
         name: if path.is_dir() {
             path.file_name()

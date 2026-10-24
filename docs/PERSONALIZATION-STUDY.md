@@ -2,7 +2,9 @@
 
 2026-10-23 · Feasibility study; proposed direction, not shipped settings.
 
-**Finding:** colors and local icons fit the current native design. Arbitrary image transparency needs a rendering change. Application actions are feasible for programs exposing a documented command line or API; support will be program-specific.
+**Current status (0.1.17):** per-item automatic/custom icons are implemented. The antialiased renderer supports transparent images. Colors/theme controls remain future work.
+
+**Earlier finding:** colors and local icons fit the native design; arbitrary image transparency required a rendering change. Application actions are feasible for programs exposing a documented command line or API; support will be program-specific.
 
 ## Appearance
 
@@ -10,8 +12,8 @@
 |---|---|---|
 | Themes | A small named palette: Star/Constellation fills, highlight, border, text, dots, lines, hub. Built-in presets plus editable colors. | Very small configuration data; no background processing. Use a shared color model so Linux can consume it later. |
 | Item colors | Optional accent on a Star or Constellation, inheriting the theme when unset. | Keep hierarchy/order and hit regions unchanged. Preview changes in configuration. |
-| Custom icons | Choose a local PNG/ICO; copy a normalized thumbnail into `data/assets/` and reference it with a relative path. | Load visible icons into a bounded cache; missing assets fall back to the existing Star/Constellation symbols. |
-| Program icons | Extract an executable's icon in the editor and save a local thumbnail. Resolve `.lnk` icon metadata there too. | Discovery/extraction should not happen during a rapid gesture or on every redraw. Windows provides [ExtractIconExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-extracticonexw); WIC provides native [PNG, ICO and JPEG decoders](https://learn.microsoft.com/en-us/windows/win32/wic/-wic-about-windows-imaging-codec). |
+| Custom icons | Implemented: PNG/JPEG/BMP/ICO imports copied into `data/icons`, referenced relatively. | Normalize to 64 × 64 in a bounded asynchronous cache; unavailable assets use the existing symbols. |
+| Program icons | Implemented: Windows Shell extraction in a background worker, including `.lnk` and file-type associations. | Cache results; no extraction in input/paint handlers. Windows provides [ExtractIconExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-extracticonexw); WIC provides native [PNG, ICO and JPEG decoders](https://learn.microsoft.com/en-us/windows/win32/wic/-wic-about-windows-imaging-codec). |
 | Item/background images | Optional static images, cropped in the editor, with a separate readable label layer. Start with item icons before large backgrounds. | More pixels and blending work. Decode and resize once; do not keep original full-resolution photos in resident memory. |
 
 The current overlay uses black as a transparency key. Windows makes every pixel of that exact color transparent, so arbitrary black artwork would acquire holes. That mechanism also cannot represent a PNG's varying per-pixel alpha. This follows [SetLayeredWindowAttributes](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setlayeredwindowattributes).

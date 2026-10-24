@@ -20,6 +20,10 @@ The sample tree includes Calculator, Notepad, the portable folder, and a GitHub 
 
 ## Configure
 
+Each item has an **Icon** selector: **Automatic** uses its Windows target/file-association icon; **Star symbol** keeps the existing symbol. Click **Image…** to import a PNG, JPEG, BMP or ICO (up to 8 MiB; decoded images up to 4096 × 4096). This selects **Custom image** and copies the file into `data/icons`; **Apply item → Save** persists the choice. Constellations support custom images too. Automatic Constellations retain their three-star radial symbol; the list keeps its hollow star.
+
+Icons appear asynchronously in the radial and full preview; unresolved or unreadable icons retain the symbol. Scripts use the associated file-type icon. URLs use Windows' URL-file association; website favicons are not downloaded. Move the whole app folder, including `data/icons`, to preserve custom images. Configuration JSON export references images but does not bundle them; copy `data/icons` alongside an imported configuration if needed. Imported files are retained when drafts are cancelled or items deleted, so undo and backups do not lose their images.
+
 Right-click the tray icon and choose **Configure / Visualize…**, or double-click it. You can also run:
 
 ```cmd

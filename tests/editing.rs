@@ -165,6 +165,7 @@ fn export_roundtrip_and_failed_import_never_replace_live_data() {
 fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
     use constellation::config::Node;
     let mut node = Node {
+        icon: Default::default(),
         id: 65,
         name: "Deep Star".into(),
         children: None,
@@ -172,6 +173,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
     };
     for id in (1..=64).rev() {
         node = Node {
+            icon: Default::default(),
             id,
             name: format!("Level {id}"),
             children: Some(vec![node]),
@@ -212,6 +214,7 @@ fn ten_thousand_stars_remain_individually_selectable_without_paging() {
     c.root.children = Some(
         (2..10002)
             .map(|id| Node {
+                icon: Default::default(),
                 id,
                 name: format!("Star {id}"),
                 children: None,

@@ -23,6 +23,24 @@ pub struct Node {
     pub children: Option<Vec<Node>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<Target>,
+    #[serde(default, skip_serializing_if = "ItemIcon::is_auto")]
+    pub icon: ItemIcon,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ItemIcon {
+    #[default]
+    Automatic,
+    Symbol,
+    Custom {
+        path: String,
+    },
+}
+impl ItemIcon {
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Automatic)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -229,6 +247,11 @@ impl Config {
             if n.name.trim().is_empty() {
                 return Err("Every node needs a name".into());
             }
+            if let ItemIcon::Custom { path } = &n.icon {
+                if path.trim().is_empty() || path.contains('\0') {
+                    return Err(format!("Invalid custom icon for {}", n.name));
+                }
+            }
             match (&n.children, &n.target) {
                 (Some(children), None) => {
                     for c in children {
@@ -339,6 +362,7 @@ impl Default for Config {
     fn default() -> Self {
         fn star(id: u64, name: &str, target: Target) -> Node {
             Node {
+                icon: Default::default(),
                 id,
                 name: name.into(),
                 children: None,
@@ -348,11 +372,13 @@ impl Default for Config {
         Self {
             version: 1,
             root: Node {
+                icon: Default::default(),
                 id: 1,
                 name: "Your universe".into(),
                 target: None,
                 children: Some(vec![
                     Node {
+                        icon: Default::default(),
                         id: 2,
                         name: "Everyday".into(),
                         target: None,
@@ -376,6 +402,7 @@ impl Default for Config {
                                 },
                             ),
                             Node {
+                                icon: Default::default(),
                                 id: 5,
                                 name: "Explore".into(),
                                 target: None,

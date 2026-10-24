@@ -32,6 +32,79 @@ fn status(value: Status) -> Result<(), String> {
 mod render_tests {
     use super::*;
     use std::path::Path;
+    #[test]
+    #[ignore = "offscreen Windows icon extraction; remote CI only"]
+    fn automatic_and_custom_icons_render_with_transparency_and_missing_fallback() {
+        unsafe {
+            use super::super::item_icons::{self, Source};
+            let com = windows_sys::Win32::System::Com::CoInitializeEx(
+                null(),
+                windows_sys::Win32::System::Com::COINIT_APARTMENTTHREADED as u32,
+            );
+            let _engine = Engine::start().unwrap();
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let png = item_icons::load(root, &Source::Custom("assets/app-icon.png".into()), true)
+                .unwrap();
+            let ico =
+                item_icons::load(root, &Source::Custom("assets/app.ico".into()), true).unwrap();
+            let exe = item_icons::load(
+                root,
+                &Source::File(
+                    std::env::current_exe()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                true,
+            )
+            .unwrap();
+            for image in [&png, &ico, &exe] {
+                assert_eq!(image.bytes.len(), 64 * 64 * 4);
+                assert!(image.bytes.chunks_exact(4).any(|p| p[3] == 0));
+                assert!(image.bytes.chunks_exact(4).any(|p| p[3] > 0));
+                assert!(
+                    image
+                        .bytes
+                        .chunks_exact(4)
+                        .all(|p| p[..3].iter().all(|c| *c <= p[3]))
+                );
+            }
+            assert!(item_icons::load(root, &Source::Custom("missing.png".into()), true).is_none());
+            let mut images = item_icons::Images::new();
+            images.insert(3, std::sync::Arc::new(exe));
+            images.insert(4, std::sync::Arc::new(ico));
+            images.insert(5, std::sync::Arc::new(png));
+            let c = Config::default();
+            let path = [2, 5];
+            let sectors = crate::geometry::visible(&c, &path);
+            let mut surface = Surface::new(800, 800).unwrap();
+            surface
+                .draw_with_icons(
+                    &c,
+                    &sectors,
+                    &path,
+                    Some(7),
+                    Point { x: 400., y: 400. },
+                    1.25,
+                    false,
+                    &images,
+                )
+                .unwrap();
+            let output = Path::new(".local/render-review");
+            std::fs::create_dir_all(output).unwrap();
+            save_png(
+                &composite(&surface, [248, 248, 248]),
+                &output.join("item-icons-light.png"),
+            );
+            save_png(
+                &composite(&surface, [24, 20, 16]),
+                &output.join("item-icons-dark.png"),
+            );
+            if com >= 0 {
+                windows_sys::Win32::System::Com::CoUninitialize();
+            }
+        }
+    }
     unsafe fn bytes(surface: &Surface) -> &[u8] {
         std::slice::from_raw_parts(
             surface.pixels,
@@ -362,6 +435,7 @@ impl Surface {
             height,
         })
     }
+    #[cfg(test)]
     unsafe fn draw(
         &mut self,
         c: &Config,
@@ -371,6 +445,28 @@ impl Surface {
         origin: Point,
         scale: f64,
         cursor_plane: bool,
+    ) -> Result<(), String> {
+        self.draw_with_icons(
+            c,
+            sectors,
+            path,
+            hover,
+            origin,
+            scale,
+            cursor_plane,
+            &super::item_icons::Images::new(),
+        )
+    }
+    unsafe fn draw_with_icons(
+        &mut self,
+        c: &Config,
+        sectors: &[Sector],
+        path: &[u64],
+        hover: Option<u64>,
+        origin: Point,
+        scale: f64,
+        cursor_plane: bool,
+        images: &super::item_icons::Images,
     ) -> Result<(), String> {
         let image = owned(
             |out| {
@@ -398,6 +494,10 @@ impl Surface {
             graphics.pointer,
             PixelOffsetModeHalf,
         ))?;
+        status(GdipSetInterpolationMode(
+            graphics.pointer,
+            InterpolationModeHighQualityBicubic,
+        ))?;
         status(GdipSetTextRenderingHint(
             graphics.pointer,
             TextRenderingHintAntiAliasGridFit,
@@ -410,7 +510,7 @@ impl Surface {
             u32::from(cursor_plane) << 24,
         ))?;
         let mut canvas = Canvas::new(graphics.pointer)?;
-        canvas.scene(c, sectors, path, hover, origin, scale)?;
+        canvas.scene(c, sectors, path, hover, origin, scale, images)?;
         status(GdipFlush(graphics.pointer, FlushIntentionSync))
     }
 }
@@ -429,6 +529,7 @@ pub(super) struct Renderer {
     // Field order releases the surface before the graphics engine.
     surface: Option<Surface>,
     engine: Option<Engine>,
+    icons: Option<super::item_icons::Cache>,
 }
 impl Renderer {
     pub unsafe fn present(
@@ -441,6 +542,7 @@ impl Renderer {
         origin: Point,
         scale: f64,
         cursor_plane: bool,
+        root: &std::path::Path,
     ) -> Result<(), String> {
         if self.engine.is_none() {
             self.engine = Some(Engine::start()?);
@@ -454,8 +556,31 @@ impl Renderer {
         {
             self.surface = Some(Surface::new(rect.right, rect.bottom)?);
         }
+        let cache = self
+            .icons
+            .get_or_insert_with(|| super::item_icons::Cache::new(hwnd, root.to_path_buf()));
+        let images = cache.collect(
+            std::iter::once(&c.root).chain(
+                sectors
+                    .iter()
+                    .filter(|s| {
+                        (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
+                            && (s.outer - s.inner) * scale >= 18.
+                    })
+                    .filter_map(|s| c.find(s.id)),
+            ),
+        );
         let surface = self.surface.as_mut().unwrap();
-        surface.draw(c, sectors, path, hover, origin, scale, cursor_plane)?;
+        surface.draw_with_icons(
+            c,
+            sectors,
+            path,
+            hover,
+            origin,
+            scale,
+            cursor_plane,
+            &images,
+        )?;
         let size = SIZE {
             cx: surface.width,
             cy: surface.height,
@@ -489,6 +614,11 @@ impl Renderer {
     pub fn release_frame(&mut self) {
         self.surface = None;
     }
+    pub fn icons_ready(&self) {
+        if let Some(cache) = &self.icons {
+            cache.acknowledge();
+        }
+    }
 }
 
 struct Canvas {
@@ -503,6 +633,27 @@ fn color(r: u8, g: u8, b: u8, alpha: u8) -> u32 {
     (alpha as u32) << 24 | (r as u32) << 16 | (g as u32) << 8 | b as u32
 }
 impl Canvas {
+    unsafe fn image(
+        &mut self,
+        p: Point,
+        image: &super::item_icons::Pixels,
+        size: f64,
+    ) -> Result<(), String> {
+        let bitmap = owned(
+            |out| {
+                GdipCreateBitmapFromScan0(64, 64, 256, PARGB, image.bytes.as_ptr().cast_mut(), out)
+            },
+            |p: *mut GpBitmap| GdipDisposeImage(p.cast()),
+        )?;
+        status(GdipDrawImageRectI(
+            self.graphics,
+            bitmap.pointer.cast(),
+            (p.x - size / 2.).round() as i32,
+            (p.y - size / 2.).round() as i32,
+            size.round().max(1.) as i32,
+            size.round().max(1.) as i32,
+        ))
+    }
     unsafe fn new(graphics: *mut GpGraphics) -> Result<Self, String> {
         let family = owned(
             |out| GdipCreateFontFamilyFromName(wide("Segoe UI").as_ptr(), null_mut(), out),
@@ -717,6 +868,7 @@ impl Canvas {
         hover: Option<u64>,
         origin: Point,
         scale: f64,
+        images: &super::item_icons::Images,
     ) -> Result<(), String> {
         let map = |p: Point| Point {
             x: origin.x + p.x * scale,
@@ -806,7 +958,9 @@ impl Canvas {
                 x: point.x,
                 y: point.y - 15. * scale,
             };
-            if folder {
+            if let Some(image) = images.get(&node.id) {
+                self.image(symbol, image, 24. * scale)?;
+            } else if folder {
                 self.constellation(symbol, scale)?;
             } else {
                 self.sparkle(symbol, 7.5 * scale, color(142, 226, 205, 255), true, scale)?;
@@ -862,13 +1016,15 @@ impl Canvas {
         }
         let radius = (c.layout.radius * 0.27 * scale).max(3.);
         self.circle(origin, radius, color(18, 25, 39, 255))?;
-        self.constellation(
-            Point {
-                x: origin.x,
-                y: origin.y - 7. * scale,
-            },
-            scale,
-        )?;
+        let center_symbol = Point {
+            x: origin.x,
+            y: origin.y - 7. * scale,
+        };
+        if let Some(image) = images.get(&c.root.id) {
+            self.image(center_symbol, image, 24. * scale)?;
+        } else {
+            self.constellation(center_symbol, scale)?;
+        }
         if radius > 25. * scale {
             self.text(
                 "ROOT",

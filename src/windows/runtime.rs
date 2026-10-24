@@ -440,6 +440,7 @@ impl Runtime {
             self.origin,
             self.scale,
             self.cursor.enabled,
+            &self.root,
         )
     }
     unsafe fn finish_cursor(&self, policy: CursorEnd) {
@@ -618,6 +619,7 @@ unsafe fn defer_runtime_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> O
             | WM_CANCELMODE
             | WM_CAPTURECHANGED
             | RELOAD_CONFIG
+            | super::item_icons::READY
             | TRAY_MENU_DONE
             | FOREGROUND
             | INVOKE
@@ -671,6 +673,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         return 0;
     }
     match msg {
+        super::item_icons::READY => {
+            a.renderer.icons_ready();
+            if a.engine.profile.is_some() {
+                InvalidateRect(hwnd, null(), 0);
+            }
+            0
+        }
         super::input::ERROR => {
             let message = Box::from_raw(l as *mut String);
             a.notice(&message);

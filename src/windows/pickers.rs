@@ -17,6 +17,7 @@ pub enum Pick {
     Import,
     Export,
     Folder,
+    Icon,
 }
 pub unsafe fn choose(hwnd: HWND, root: &Path, pick: Pick) -> Result<Option<PathBuf>, String> {
     unsafe {
@@ -48,7 +49,9 @@ pub unsafe fn choose(hwnd: HWND, root: &Path, pick: Pick) -> Result<Option<PathB
             let default = wide(root.join("constellation-export.json"));
             file[..default.len()].copy_from_slice(&default);
         }
-        let filters = wide(if matches!(pick, Pick::Import | Pick::Export) {
+        let filters = wide(if matches!(pick, Pick::Icon) {
+            "Icon images (PNG, JPEG, BMP, ICO)\0*.png;*.jpg;*.jpeg;*.bmp;*.ico\0All files\0*.*\0"
+        } else if matches!(pick, Pick::Import | Pick::Export) {
             "Constellation configuration (*.json)\0*.json\0All files\0*.*\0"
         } else {
             "Applications, shortcuts and scripts\0*.exe;*.com;*.lnk;*.url;*.ps1;*.py;*.cmd;*.bat\0All files\0*.*\0"

@@ -116,6 +116,7 @@ unsafe fn symbol(dc: HDC, p: Point, folder: bool, scale: f64) {
     DeleteObject(brush);
 }
 
+#[cfg(test)]
 pub unsafe fn draw(
     dc: HDC,
     c: &Config,
@@ -125,6 +126,29 @@ pub unsafe fn draw(
     origin: Point,
     scale: f64,
     preview: bool,
+) {
+    draw_with_icons(
+        dc,
+        c,
+        sectors,
+        path,
+        hover,
+        origin,
+        scale,
+        preview,
+        &super::item_icons::Images::new(),
+    );
+}
+pub unsafe fn draw_with_icons(
+    dc: HDC,
+    c: &Config,
+    sectors: &[Sector],
+    path: &[u64],
+    hover: Option<u64>,
+    origin: Point,
+    scale: f64,
+    preview: bool,
+    images: &super::item_icons::Images,
 ) {
     let map = |p: Point| Point {
         x: origin.x + p.x * scale,
@@ -190,15 +214,26 @@ pub unsafe fn draw(
         let p = map(s.dot);
         let w = (((s.inner + s.outer) * 0.5 * s.sweep * scale) as i32).clamp(12, 125);
         let size = (12. * scale).round().max(7.) as i32;
-        symbol(
-            dc,
-            Point {
-                x: p.x,
-                y: p.y - 15. * scale,
-            },
-            folder,
-            scale,
-        );
+        if let Some(image) = images.get(&node.id) {
+            let size = (24. * scale).round().max(1.) as i32;
+            super::item_icons::draw_gdi(
+                dc,
+                image,
+                p.x.round() as i32 - size / 2,
+                (p.y - 15. * scale).round() as i32 - size / 2,
+                size,
+            );
+        } else {
+            symbol(
+                dc,
+                Point {
+                    x: p.x,
+                    y: p.y - 15. * scale,
+                },
+                folder,
+                scale,
+            );
+        }
         text(
             dc,
             &node.name,
@@ -259,15 +294,26 @@ pub unsafe fn draw(
     }
     let radius = (c.layout.radius * 0.27 * scale).max(3.) as i32;
     dot(dc, origin, radius, rgb(18, 25, 39));
-    symbol(
-        dc,
-        Point {
-            x: origin.x,
-            y: origin.y - 7. * scale,
-        },
-        true,
-        scale,
-    );
+    if let Some(image) = images.get(&c.root.id) {
+        let size = (24. * scale).round().max(1.) as i32;
+        super::item_icons::draw_gdi(
+            dc,
+            image,
+            origin.x.round() as i32 - size / 2,
+            (origin.y - 7. * scale).round() as i32 - size / 2,
+            size,
+        );
+    } else {
+        symbol(
+            dc,
+            Point {
+                x: origin.x,
+                y: origin.y - 7. * scale,
+            },
+            true,
+            scale,
+        );
+    }
     if radius > 25 {
         text(
             dc,

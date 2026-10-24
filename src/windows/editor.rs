@@ -5,7 +5,7 @@ use super::{
     render, wide,
 };
 use crate::{
-    config::{Binding, Config, CursorEnd, Mode, Node, Profile, Target},
+    config::{Binding, Config, CursorEnd, ItemIcon, Mode, Node, Profile, Target},
     editing::{self, History},
     editor_layout::{Layout as FormLayout, Rect as FormRect},
     geometry::{self, Point},
@@ -32,6 +32,8 @@ const BROWSE_TARGET: i32 = 211;
 const BROWSE_RUNNER: i32 = 212;
 const BROWSE_CWD: i32 = 213;
 const ADVICE: i32 = 214;
+const ICON_MODE: i32 = 215;
+const ICON_BROWSE: i32 = 216;
 const UNDO: i32 = 405;
 const REDO: i32 = 406;
 const IMPORT: i32 = 407;
@@ -121,6 +123,8 @@ struct Editor {
     form: FormLayout,
     controls: Vec<PlacedControl>,
     layout_applied: bool,
+    icons: super::item_icons::Cache,
+    icon_draft: ItemIcon,
 }
 struct PreviewCache {
     config: Config,
@@ -378,7 +382,28 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         ] {
             control(hwnd, "BUTTON", "Browse…", id, 592, y, 73, 28, 0);
         }
-        control(hwnd, "STATIC", "", ADVICE, 305, 528, 370, 40, 0);
+        control(hwnd, "STATIC", "", ADVICE, 465, 522, 200, 48, 0);
+        control(
+            hwnd,
+            "COMBOBOX",
+            "",
+            ICON_MODE,
+            305,
+            484,
+            280,
+            180,
+            WS_TABSTOP | CBS_DROPDOWNLIST as u32,
+        );
+        for title in ["Icon: Automatic", "Icon: Star symbol", "Icon: Custom image"] {
+            send(
+                hwnd,
+                ICON_MODE,
+                CB_ADDSTRING,
+                0,
+                wide(title).as_ptr() as isize,
+            );
+        }
+        control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 592, 484, 73, 28, 0);
         control(hwnd, "BUTTON", "Undo", UNDO, 20, 610, 120, 32, 0);
         control(hwnd, "BUTTON", "Redo", REDO, 150, 610, 130, 32, 0);
         control(hwnd, "BUTTON", "Import…", IMPORT, 20, 652, 120, 32, 0);
@@ -394,7 +419,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             75,
             0,
         );
-        control(hwnd, "BUTTON", "Apply item", APPLY, 305, 490, 150, 32, 0);
+        control(hwnd, "BUTTON", "Apply item", APPLY, 305, 522, 150, 32, 0);
         label(
             hwnd,
             "LAYOUT (numeric values; no forced fitting)",
@@ -579,7 +604,7 @@ impl Editor {
         let selected = c.root.id;
         Self {
             hwnd,
-            root,
+            root: root.clone(),
             saved: c.clone(),
             history: History::default(),
             settings_before: None,
@@ -588,6 +613,8 @@ impl Editor {
             measure_preview: std::env::args().any(|s| s == "--measure-preview"),
             preview_cache: None,
             layout_applied: false,
+            icons: super::item_icons::Cache::new(hwnd, root),
+            icon_draft: ItemIcon::Automatic,
             wheel_delta: 0,
             form: FormLayout::new(1380, 870, 17, 17),
             controls: vec![],
@@ -657,7 +684,17 @@ impl Editor {
         SelectObject(dc, oldp);
         SelectObject(dc, oldb);
         DeleteObject(pen);
-        render::draw(dc, &e.c, &all, &[], None, origin, scale, true);
+        let images = e.icons.collect(
+            std::iter::once(&e.c.root).chain(
+                all.iter()
+                    .filter(|s| {
+                        (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
+                            && (s.outer - s.inner) * scale >= 18.
+                    })
+                    .filter_map(|s| e.c.find(s.id)),
+            ),
+        );
+        render::draw_with_icons(dc, &e.c, &all, &[], None, origin, scale, true, &images);
         RestoreDC(dc, saved);
         render::text(
             dc,
@@ -747,12 +784,19 @@ impl Editor {
         self.dirty = self.c != self.saved;
     }
     unsafe fn advice(&self) {
-        let warning = self
+        let mut warning = self
             .c
             .find(self.selected)
             .and_then(|n| n.target.as_ref())
             .map(|t| editing::target_advice(&self.root, t).join(" "))
             .unwrap_or_default();
+        if self
+            .c
+            .find(self.selected)
+            .is_some_and(|n| matches!(n.icon, ItemIcon::Custom { .. }) && self.icons.failed(n))
+        {
+            warning = format!("Icon unavailable; showing symbol. {warning}");
+        }
         set(self.hwnd, ADVICE, &warning);
     }
     unsafe fn enable_fields(&self) {
@@ -1074,6 +1118,13 @@ impl Editor {
             return;
         };
         set(self.hwnd, NAME, &n.name);
+        self.icon_draft = n.icon.clone();
+        let mode = match n.icon {
+            ItemIcon::Automatic => 0,
+            ItemIcon::Symbol => 1,
+            ItemIcon::Custom { .. } => 2,
+        };
+        send(self.hwnd, ICON_MODE, CB_SETCURSEL, mode, 0);
         let (mut kind, mut path, mut args, mut runner, mut cwd) =
             (0, String::new(), vec![], String::new(), String::new());
         if let Some(t) = &n.target {
@@ -1235,6 +1286,15 @@ impl Editor {
             None
         };
         n.target = target;
+        n.icon = match send(self.hwnd, ICON_MODE, CB_GETCURSEL, 0, 0) {
+            0 => ItemIcon::Automatic,
+            1 => ItemIcon::Symbol,
+            2 => match &self.icon_draft {
+                ItemIcon::Custom { .. } => self.icon_draft.clone(),
+                _ => return Err("Choose an image with Image… first.".into()),
+            },
+            _ => return Err("Choose an icon mode.".into()),
+        };
         if self.selected != candidate.root.id {
             let pindex = send(self.hwnd, PARENT, CB_GETCURSEL, 0, 0);
             let parent = *self.parents.get(pindex as usize).ok_or("Choose a parent")?;
@@ -1282,6 +1342,7 @@ impl Editor {
             .checked_add(1)
             .ok_or("Item ID space exhausted")?;
         let n = Node {
+            icon: Default::default(),
             id,
             name: if folder {
                 "New constellation"
@@ -1534,8 +1595,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 "resize.nested.deferred"
             });
         }
-        if matches!(msg, WM_HSCROLL | WM_VSCROLL | WM_DROPFILES)
-            || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
+        if matches!(
+            msg,
+            WM_HSCROLL | WM_VSCROLL | WM_DROPFILES | super::item_icons::READY
+        ) || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
         {
             super::defer_message(hwnd, msg, w, l);
             return 0;
@@ -1551,6 +1614,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     };
     let e = &mut *EDITOR;
     match msg {
+        super::item_icons::READY => {
+            e.icons.acknowledge();
+            e.preview_cache = None;
+            e.advice();
+            InvalidateRect(hwnd, null(), 0);
+            0
+        }
         WM_DROPFILES => {
             let drop = w as _;
             let count = DragQueryFileW(drop, u32::MAX, null_mut(), 0);
@@ -1614,7 +1684,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 InvalidateRect(hwnd, null(), 1);
                 return 0;
             }
-            if matches!(id, KIND | PARENT) && notify == CBN_SELCHANGE as u32 {
+            if matches!(id, KIND | PARENT | ICON_MODE) && notify == CBN_SELCHANGE as u32 {
                 e.item_dirty = true;
                 e.enable_fields();
                 return 0;
@@ -1666,6 +1736,19 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             }
             e.checkpoint_settings();
             let result = match id {
+                ICON_BROWSE => (|| {
+                    if let Some(path) = pickers::choose(hwnd, &e.root, Pick::Icon)? {
+                        let imported = crate::icon_assets::import(&e.root, &path)?;
+                        e.icon_draft = ItemIcon::Custom { path: imported };
+                        send(hwnd, ICON_MODE, CB_SETCURSEL, 2, 0);
+                        e.item_dirty = true;
+                        e.status = format!(
+                            "Icon imported: {}. Apply item, then Save.",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        );
+                    }
+                    Ok(())
+                })(),
                 BROWSE_TARGET | BROWSE_RUNNER | BROWSE_CWD => e.browse(id),
                 UNDO => e.travel(false),
                 REDO => e.travel(true),

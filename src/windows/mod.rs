@@ -5,6 +5,7 @@ mod editor;
 mod editor_theme;
 mod icons;
 mod input;
+mod item_icons;
 mod pickers;
 mod recorder;
 mod render;
