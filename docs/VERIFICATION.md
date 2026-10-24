@@ -4,9 +4,11 @@
 
 ## Current revision and manual review
 
-The current build adds overlapping chimes, three cursor-end choices, optional extended-direction targeting, fresh-frame opening, and native editor styling/scroll buffering with a cached preview. Custom-cursor work is deferred after inconsistent desktop observations.
+Version **0.1.1** addresses the reported scrolling artifacts and crunchy audio. The final buffer copy now restores its drawing origin; controls and panels use one absolute responsive layout; unused scrollbars are removed. Audio uses 48 kHz PCM, four reusable 10 ms buffers, a short idle-device grace period, and linear mixing until the near-clip safety knee instead of compressing every sample.
 
-Desktop automation was stopped at the user's request while they use the PC. Earlier passes and samples below describe their recorded revision/conditions; they do not certify the new editor's visual behavior. The new interaction checks reached extended targeting, center-on-close, opt-out, and fresh-root reopening before the run was stopped. The final styled editor has been compiled but requires [manual review](MANUAL-CHECKS.md). No further local desktop automation should run without arranging an idle period with the user.
+**Current checks:** release compilation and eight headless regression checks passed (three layout checks and five feedback checks). They cover scrollbar thresholds/interdependence, larger preview/list sizing, stable control geometry/dropdown heights, linear overlapping tails, output chunk continuity, voice saturation, profile migration and extended targeting. No windows, cursor/input injection or sound playback occurred in these checks. Native playback quality, driver scheduling, visible scrolling and maximized presentation still need the [manual checklist](MANUAL-CHECKS.md).
+
+Desktop automation remains on hold at the user's request while they use the PC. Earlier passes and samples below describe their recorded revision/conditions; they do not certify the current editor's visual behavior or audio output. Custom-cursor work remains deferred. The running user copy was left untouched while preparing a separate update package.
 
 ## Implemented
 

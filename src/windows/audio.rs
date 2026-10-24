@@ -1,3 +1,4 @@
+#![allow(unsafe_op_in_unsafe_fn)]
 //! Event-driven PCM output. Only the audio worker touches driver buffers.
 use crate::{
     config::Sound,
@@ -74,26 +75,110 @@ impl Drop for Chimes {
         }
     }
 }
+const FRAMES: usize = 480; // 10 ms at the native 48 kHz stream rate.
+const BUFFERS: usize = 4; // Scheduling headroom; the previous stream had only 23 ms.
 struct Buffer {
     header: WAVEHDR,
-    samples: [i16; 256],
+    samples: [i16; FRAMES],
     queued: bool,
+    prepared: bool,
+}
+struct Device {
+    handle: HWAVEOUT,
+    buffers: Box<[Buffer; BUFFERS]>,
+}
+impl Device {
+    unsafe fn open(wake: &Wake) -> Option<Self> {
+        let mut device = Self {
+            handle: null_mut(),
+            buffers: Box::new(std::array::from_fn(|_| Buffer {
+                header: zeroed(),
+                samples: [0; FRAMES],
+                queued: false,
+                prepared: false,
+            })),
+        };
+        let format = WAVEFORMATEX {
+            wFormatTag: 1,
+            nChannels: 1,
+            nSamplesPerSec: RATE,
+            nAvgBytesPerSec: RATE * 2,
+            nBlockAlign: 2,
+            wBitsPerSample: 16,
+            cbSize: 0,
+        };
+        if unsafe {
+            waveOutOpen(
+                &mut device.handle,
+                WAVE_MAPPER,
+                &format,
+                wake.0 as usize,
+                0,
+                CALLBACK_EVENT,
+            )
+        } != 0
+        {
+            return None;
+        }
+        for b in device.buffers.iter_mut() {
+            b.header.lpData = b.samples.as_mut_ptr().cast();
+            b.header.dwBufferLength = (FRAMES * 2) as u32;
+            if unsafe {
+                waveOutPrepareHeader(device.handle, &mut b.header, size_of::<WAVEHDR>() as u32)
+            } != 0
+            {
+                return None;
+            }
+            b.prepared = true;
+        }
+        Some(device)
+    }
+    unsafe fn fill(&mut self, mixer: &mut Mixer) -> Result<bool, ()> {
+        // Prepared headers and sample addresses stay stable for the whole
+        // stream. Reuse only completed buffers; render and submit in the same
+        // order so the PCM timeline stays continuous when completions coalesce.
+        for b in self.buffers.iter_mut() {
+            if b.queued && b.header.dwFlags & WHDR_DONE != 0 {
+                b.queued = false;
+            }
+            if !b.queued && mixer.active() > 0 {
+                mixer.mix(&mut b.samples);
+                if unsafe { waveOutWrite(self.handle, &mut b.header, size_of::<WAVEHDR>() as u32) }
+                    != 0
+                {
+                    return Err(());
+                }
+                b.queued = true;
+            }
+        }
+        Ok(self.buffers.iter().any(|b| b.queued))
+    }
+}
+impl Drop for Device {
+    fn drop(&mut self) {
+        unsafe {
+            if self.handle.is_null() {
+                return;
+            }
+            waveOutReset(self.handle);
+            for b in self.buffers.iter_mut().filter(|b| b.prepared) {
+                waveOutUnprepareHeader(self.handle, &mut b.header, size_of::<WAVEHDR>() as u32);
+            }
+            waveOutClose(self.handle);
+        }
+    }
 }
 fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
     unsafe {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
         let mut mixer = Mixer::default();
         let mut seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos() as u64
             | 1;
-        // Heap addresses stay stable from PrepareHeader until UnprepareHeader.
-        let mut buffers: Box<[Buffer; 2]> = Box::new(std::array::from_fn(|_| Buffer {
-            header: zeroed(),
-            samples: [0; 256],
-            queued: false,
-        }));
-        let mut device: HWAVEOUT = null_mut();
+        let mut device: Option<Device> = None;
+        let mut idle_deadline: Option<std::time::Instant> = None;
         loop {
             let mut disconnected = false;
             loop {
@@ -116,84 +201,37 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
             if disconnected {
                 break;
             }
-            if device.is_null() && mixer.active() > 0 {
-                let format = WAVEFORMATEX {
-                    wFormatTag: 1,
-                    nChannels: 1,
-                    nSamplesPerSec: RATE,
-                    nAvgBytesPerSec: RATE * 2,
-                    nBlockAlign: 2,
-                    wBitsPerSample: 16,
-                    cbSize: 0,
-                };
-                if waveOutOpen(
-                    &mut device,
-                    WAVE_MAPPER,
-                    &format,
-                    wake.0 as usize,
-                    0,
-                    CALLBACK_EVENT,
-                ) != 0
-                {
+            if device.is_none() && mixer.active() > 0 {
+                device = Device::open(&wake);
+                if device.is_none() {
                     break;
                 }
             }
-            if !device.is_null() {
-                let mut failed = false;
-                for b in buffers.iter_mut() {
-                    if b.queued && b.header.dwFlags & WHDR_DONE != 0 {
-                        if waveOutUnprepareHeader(
-                            device,
-                            &mut b.header,
-                            size_of::<WAVEHDR>() as u32,
-                        ) != 0
-                        {
-                            failed = true;
-                            break;
-                        }
-                        b.queued = false;
+            if let Some(d) = &mut device {
+                match d.fill(&mut mixer) {
+                    Ok(false) => {
+                        idle_deadline.get_or_insert_with(|| {
+                            std::time::Instant::now() + std::time::Duration::from_millis(750)
+                        });
                     }
-                    if !b.queued && mixer.active() > 0 {
-                        mixer.mix(&mut b.samples);
-                        b.header = zeroed();
-                        b.header.lpData = b.samples.as_mut_ptr().cast();
-                        b.header.dwBufferLength = (b.samples.len() * 2) as u32;
-                        if waveOutPrepareHeader(device, &mut b.header, size_of::<WAVEHDR>() as u32)
-                            != 0
-                        {
-                            failed = true;
-                            break;
-                        }
-                        if waveOutWrite(device, &mut b.header, size_of::<WAVEHDR>() as u32) != 0 {
-                            waveOutUnprepareHeader(
-                                device,
-                                &mut b.header,
-                                size_of::<WAVEHDR>() as u32,
-                            );
-                            failed = true;
-                            break;
-                        }
-                        b.queued = true;
-                    }
-                }
-                if failed {
-                    break;
-                }
-                if mixer.active() == 0 && buffers.iter().all(|b| !b.queued) {
-                    waveOutClose(device);
-                    device = null_mut();
+                    Ok(true) => idle_deadline = None,
+                    Err(()) => break,
                 }
             }
-            // Commands and driver completion share an auto-reset event. No timer,
-            // polling or silence stream runs while the launcher waits in the tray.
-            WaitForSingleObject(wake.0, INFINITE);
-        }
-        if !device.is_null() {
-            waveOutReset(device);
-            for b in buffers.iter_mut() {
-                waveOutUnprepareHeader(device, &mut b.header, size_of::<WAVEHDR>() as u32);
-            }
-            waveOutClose(device);
+            let wait = if let Some(deadline) = idle_deadline {
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    device = None;
+                    idle_deadline = None;
+                    continue;
+                }
+                (deadline - now).as_millis().max(1) as u32
+            } else {
+                INFINITE
+            };
+            // Events wake for commands/completions. After one short idle grace
+            // period, release the device and wait indefinitely with no polling.
+            WaitForSingleObject(wake.0, wait);
         }
     }
 }

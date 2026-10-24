@@ -7,10 +7,12 @@ use super::{
 use crate::{
     config::{Binding, Config, CursorEnd, Mode, Node, Profile, Target},
     editing::{self, History},
+    editor_layout::{Layout as FormLayout, Rect as FormRect},
     geometry::{self, Point},
     storage,
 };
 use std::{
+    cell::{Cell, RefCell},
     mem::{size_of, zeroed},
     path::PathBuf,
     ptr::{null, null_mut},
@@ -85,6 +87,8 @@ struct Editor {
     measure_preview: bool,
     preview_cache: Option<PreviewCache>,
     wheel_delta: i32,
+    form: FormLayout,
+    controls: Vec<PlacedControl>,
 }
 struct PreviewCache {
     config: Config,
@@ -99,6 +103,24 @@ impl Drop for PreviewCache {
         unsafe {
             DeleteObject(self.bitmap);
         }
+    }
+}
+#[derive(Clone, Copy)]
+struct PlacedControl {
+    hwnd: HWND,
+    id: i32,
+    base: FormRect,
+}
+thread_local! {
+    static ROOT_WINDOW:Cell<HWND>=const {Cell::new(null_mut())};
+    static NEW_CONTROLS:RefCell<Vec<PlacedControl>>=const {RefCell::new(Vec::new())};
+}
+fn native(r: FormRect) -> RECT {
+    RECT {
+        left: r.x,
+        top: r.y,
+        right: r.x + r.w,
+        bottom: r.y + r.h,
     }
 }
 static mut EDITOR: *mut Editor = null_mut();
@@ -133,6 +155,7 @@ unsafe fn control(
     } else {
         style
     };
+    let parent = hwnd;
     let hwnd = CreateWindowExW(
         0,
         wide(class).as_ptr(),
@@ -148,6 +171,15 @@ unsafe fn control(
         null(),
     );
     theme::control(hwnd, class);
+    if ROOT_WINDOW.with(|root| root.get() == parent) {
+        NEW_CONTROLS.with(|items| {
+            items.borrow_mut().push(PlacedControl {
+                hwnd,
+                id,
+                base: FormRect { x, y, w, h },
+            })
+        });
+    }
     hwnd
 }
 unsafe fn get(hwnd: HWND, id: i32) -> String {
@@ -195,7 +227,12 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         let hwnd = CreateWindowExW(
             WS_EX_COMPOSITED,
             class.as_ptr(),
-            wide("Constellation — Configure & Visualize").as_ptr(),
+            wide(concat!(
+                "Constellation ",
+                env!("CARGO_PKG_VERSION"),
+                " — Configure & Visualize"
+            ))
+            .as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_HSCROLL | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -209,6 +246,8 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         if hwnd.is_null() {
             return Err("Cannot create configuration window".into());
         }
+        ROOT_WINDOW.with(|root| root.set(hwnd));
+        NEW_CONTROLS.with(|items| items.borrow_mut().clear());
         theme::window(hwnd);
         let mut displays = vec![];
         EnumDisplayMonitors(
@@ -229,6 +268,8 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             measure_preview: std::env::args().any(|s| s == "--measure-preview"),
             preview_cache: None,
             wheel_delta: 0,
+            form: FormLayout::new(1380, 870, 17, 17),
+            controls: vec![],
             c,
             rows: vec![],
             parents: vec![],
@@ -334,7 +375,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             20,
             702,
             260,
-            55,
+            75,
             0,
         );
         control(hwnd, "BUTTON", "Apply item", APPLY, 305, 490, 150, 32, 0);
@@ -472,6 +513,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         e.refresh();
         e.settings_to_controls();
         e.dirty = false;
+        e.controls = NEW_CONTROLS.with(|items| std::mem::take(&mut *items.borrow_mut()));
         e.resize_view();
         DragAcceptFiles(hwnd, 1);
         drop(startup_guard);
@@ -490,6 +532,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         }
         drop(Box::from_raw(EDITOR));
         EDITOR = null_mut();
+        ROOT_WINDOW.with(|root| root.set(null_mut()));
         theme::shutdown();
         CoUninitialize();
         Ok(())
@@ -785,43 +828,35 @@ impl Editor {
         }
         Ok(())
     }
-    unsafe fn scroll_to(&mut self, x: i32, y: i32) {
-        let (dx, dy) = (self.scroll_x - x, self.scroll_y - y);
-        if dx == 0 && dy == 0 {
-            return;
-        }
-        self.scroll_x = x;
-        self.scroll_y = y;
-        SetScrollPos(self.hwnd, SB_HORZ, x, 0);
-        SetScrollPos(self.hwnd, SB_VERT, y, 0);
-        let mut positions = vec![];
-        let mut child = GetWindow(self.hwnd, GW_CHILD);
-        while !child.is_null() {
-            let mut r: RECT = zeroed();
-            GetWindowRect(child, &mut r);
-            let mut p = POINT {
-                x: r.left,
-                y: r.top,
-            };
-            ScreenToClient(self.hwnd, &mut p);
-            positions.push((child, p.x + dx, p.y + dy));
-            child = GetWindow(child, GW_HWNDNEXT);
-        }
-        let flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW;
+    unsafe fn reposition_controls(&self, resize: bool) {
+        let flags = SWP_NOZORDER
+            | SWP_NOACTIVATE
+            | SWP_NOREDRAW
+            | SWP_NOCOPYBITS
+            | if resize { 0 } else { SWP_NOSIZE };
+        let positions: Vec<_> = self
+            .controls
+            .iter()
+            .map(|c| {
+                let mut r = self.form.control(c.base, c.id);
+                r.x -= self.scroll_x;
+                r.y -= self.scroll_y;
+                (c.hwnd, r)
+            })
+            .collect();
         let mut batch = BeginDeferWindowPos(positions.len() as i32);
-        for &(child, x, y) in &positions {
+        for &(hwnd, r) in &positions {
             if batch.is_null() {
                 break;
             }
-            batch = DeferWindowPos(batch, child, null_mut(), x, y, 0, 0, flags);
+            batch = DeferWindowPos(batch, hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
         }
         let moved = !batch.is_null() && EndDeferWindowPos(batch) != 0;
         if !moved {
-            for (child, x, y) in positions {
-                SetWindowPos(child, null_mut(), x, y, 0, 0, flags);
+            for (hwnd, r) in positions {
+                SetWindowPos(hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
             }
         }
-        // One combined invalidation, no intermediate erase or per-child paint.
         RedrawWindow(
             self.hwnd,
             null(),
@@ -829,48 +864,49 @@ impl Editor {
             RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE,
         );
     }
+    unsafe fn scroll_to(&mut self, x: i32, y: i32) {
+        let (x, y) = self.form.scroll(x, y);
+        if (x, y) == (self.scroll_x, self.scroll_y) {
+            return;
+        }
+        self.scroll_x = x;
+        self.scroll_y = y;
+        SetScrollPos(self.hwnd, SB_HORZ, x, 1);
+        SetScrollPos(self.hwnd, SB_VERT, y, 1);
+        self.reposition_controls(false);
+    }
     unsafe fn resize_view(&mut self) {
         let mut client: RECT = zeroed();
         GetClientRect(self.hwnd, &mut client);
-        let mut positions = [0; 2];
-        for (i, bar, page, max, pos) in [
-            (
-                0,
-                SB_HORZ,
-                client.right,
-                client.right.max(1050),
-                self.scroll_x,
-            ),
-            (
-                1,
-                SB_VERT,
-                client.bottom,
-                client.bottom.max(895),
-                self.scroll_y,
-            ),
+        let dpi = GetDpiForWindow(self.hwnd);
+        let barw = GetSystemMetricsForDpi(SM_CXVSCROLL, dpi);
+        let barh = GetSystemMetricsForDpi(SM_CYHSCROLL, dpi);
+        let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+        // Add back only bars that actually consume client space, then resolve
+        // both axes together so crossing a threshold cannot leave a dead bar.
+        let fullw = client.right + if style & WS_VSCROLL != 0 { barw } else { 0 };
+        let fullh = client.bottom + if style & WS_HSCROLL != 0 { barh } else { 0 };
+        self.form = FormLayout::new(fullw, fullh, barw, barh);
+        let (x, y) = self.form.scroll(self.scroll_x, self.scroll_y);
+        self.scroll_x = x;
+        self.scroll_y = y;
+        for (bar, page, extent, pos) in [
+            (SB_HORZ, self.form.page_width, self.form.width, x),
+            (SB_VERT, self.form.page_height, self.form.height, y),
         ] {
             let info = SCROLLINFO {
                 cbSize: size_of::<SCROLLINFO>() as u32,
-                fMask: SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL,
+                fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
                 nMin: 0,
-                nMax: max - 1,
-                nPage: page.max(1) as u32,
+                nMax: extent - 1,
+                nPage: page as u32,
                 nPos: pos,
                 nTrackPos: 0,
             };
-            positions[i] = SetScrollInfo(self.hwnd, bar, &info, 1);
+            SetScrollInfo(self.hwnd, bar, &info, 1);
         }
-        self.scroll_to(positions[0], positions[1]);
-        self.preview.right = client.right.max(1050) - 30;
-        MoveWindow(
-            GetDlgItem(self.hwnd, MONITOR),
-            self.preview.left - self.scroll_x,
-            40 - self.scroll_y,
-            self.preview.right - self.preview.left,
-            250,
-            1,
-        );
-        InvalidateRect(self.hwnd, null(), 1);
+        self.preview = native(self.form.preview());
+        self.reposition_controls(true);
     }
     unsafe fn scroll(&mut self, vertical: bool, request: i32) {
         let bar = if vertical { SB_VERT } else { SB_HORZ };
@@ -1619,27 +1655,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             let mut sectors = 0;
             render::buffered(hwnd, theme::BACKGROUND, |dc| {
                 SetViewportOrgEx(dc, -e.scroll_x, -e.scroll_y, null_mut());
-                for r in [
-                    RECT {
-                        left: 10,
-                        top: 8,
-                        right: 290,
-                        bottom: 785,
-                    },
-                    RECT {
-                        left: 295,
-                        top: 8,
-                        right: 680,
-                        bottom: 785,
-                    },
-                    RECT {
-                        left: 690,
-                        top: 8,
-                        right: e.preview.right + 10,
-                        bottom: 800,
-                    },
-                ] {
-                    theme::panel(dc, r);
+                for r in e.form.panels() {
+                    theme::panel(dc, native(r));
                 }
                 sectors = e.cached_preview(dc);
                 let mut cr: RECT = zeroed();
@@ -1656,7 +1673,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         e.status
                     ),
                     15,
-                    cr.bottom.max(895) - 32,
+                    e.form.height - 32,
                     cr.right - 30,
                     theme::MUTED,
                     12,

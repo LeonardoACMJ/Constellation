@@ -280,7 +280,11 @@ unsafe fn buffer_into(
     let bitmap = CreateCompatibleBitmap(dc, r.right.max(1), r.bottom.max(1));
     let old = SelectObject(memory, bitmap);
     fill(memory, &r, background);
+    let state = SaveDC(memory);
     paint(memory);
+    // Paint callbacks may translate/clip their content. The final copy uses
+    // device pixels, never the callback's scrolled logical coordinate system.
+    RestoreDC(memory, state);
     BitBlt(dc, 0, 0, r.right, r.bottom, memory, 0, 0, SRCCOPY);
     SelectObject(memory, old);
     DeleteObject(bitmap);

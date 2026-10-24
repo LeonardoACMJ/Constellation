@@ -1,6 +1,6 @@
 //! Small portable bell mixer. Existing notes always finish; saturation drops
 //! new requests rather than stealing a playing voice. No work while silent.
-pub const RATE: u32 = 22050;
+pub const RATE: u32 = 48000;
 pub const VOICES: usize = 32;
 const NOTES: [f64; 5] = [523.25, 587.33, 659.25, 783.99, 880.];
 struct Voice {
@@ -48,8 +48,15 @@ impl Mixer {
                     v.at += 1;
                 }
             }
-            // Soft limiting is continuous; no voice-count-dependent gain jumps.
-            *sample = (32767. * sum / (1. + sum.abs())) as i16;
+            // Preserve normal-level samples exactly. Limit only near full scale;
+            // the previous rational curve compressed/distorted every sample.
+            let magnitude = sum.abs();
+            let output = if magnitude <= 0.95 {
+                sum
+            } else {
+                sum.signum() * (0.95 + 0.05 * (1. - (-(magnitude - 0.95) / 0.05).exp()))
+            };
+            *sample = (32767. * output) as i16;
         }
         self.voices.retain(|v| v.at < self.notes[v.note].len());
     }
@@ -62,7 +69,7 @@ fn bell(frequency: f64) -> Vec<f32> {
             let fade = ((count - i) as f64 / (count as f64 * 0.15)).min(1.);
             let wave = (std::f64::consts::TAU * frequency * t).sin()
                 + 0.25 * (std::f64::consts::TAU * frequency * 2.76 * t).sin() * (-35. * t).exp();
-            (wave * (-27. * t).exp() * (t / 0.003).min(1.) * fade * 0.61) as f32
+            (wave * (-27. * t).exp() * (t / 0.003).min(1.) * fade * 0.35) as f32
         })
         .collect()
 }

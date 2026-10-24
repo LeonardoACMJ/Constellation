@@ -6,8 +6,13 @@ import subprocess
 import json
 import struct
 import zipfile
+import argparse
 
 root=Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--staging-dir",type=Path,default=root/"portable/Constellation",
+                    help="Build a separate package folder while the current app is running")
+args=parser.parse_args()
 exe=root/"target/release/constellation.exe"
 if not exe.is_file(): raise SystemExit("Build first: cargo build --release --locked")
 binary=exe.read_bytes()
@@ -32,7 +37,7 @@ while any(binary[position:position+20]):
     position+=20
 if any(name.lower().startswith(("vcruntime","msvcp")) for name in imports):
     raise SystemExit("Portable packaging requires static CRT; rebuild using .cargo/config.toml")
-folder=root/"portable/Constellation"
+folder=args.staging_dir if args.staging_dir.is_absolute() else root/args.staging_dir
 folder.mkdir(parents=True,exist_ok=True)
 shutil.copy2(exe,folder/"constellation.exe")
 shutil.copy2(root/"docs/USER-GUIDE.md",folder/"README.md")
@@ -50,7 +55,8 @@ for package in sorted(metadata["packages"],key=lambda p:p["name"]):
         if path.is_file():notices.append(f"\n--- {path.name} ---\n{path.read_text(encoding='utf-8',errors='replace')}\n")
 (folder/"THIRD-PARTY-NOTICES.txt").write_text("".join(notices),encoding="utf-8")
 dist=root/"dist";dist.mkdir(exist_ok=True)
-archive=dist/"Constellation-0.1.0-windows-x64.zip"
+version=next(p["version"] for p in metadata["packages"] if p["name"]=="constellation")
+archive=dist/f"Constellation-{version}-windows-x64.zip"
 with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED) as z:
     # Explicit list excludes data/config.json, even when packaging over an older folder.
     for name in ["constellation.exe","README.md","PERSONALIZATION-STUDY.md","MANUAL-CHECKS.md","THIRD-PARTY-NOTICES.txt"]:

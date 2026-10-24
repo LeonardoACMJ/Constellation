@@ -28,3 +28,5 @@ Runtime configuration and other app-managed files belong beside the distributed 
 The editor supports native file/folder pickers, dropped files, quoted argument fields, bounded undo/redo, and validated configuration import/export. Missing targets and layout overflow remain advisory.
 
 For repeatable large-tree measurements, run `cargo run --release --example stress` and `python tests/large_editor_smoke.py`. The first measures the portable core; the second measures a real native full-preview paint. The [personalization study](docs/PERSONALIZATION-STUDY.md) examines themes, custom colors/icons, and future application actions; these are proposals, not implemented settings.
+
+When the current portable copy is running, package an update separately with `python scripts/package.py --staging-dir portable/Constellation-update`. The archive version comes from Cargo metadata. Close the editor and tray app before replacing the installed executable, and preserve its `data` directory.

@@ -21,10 +21,9 @@ fn notes_overlap_without_restarting_or_discarding_the_old_tail() {
     mixed.mix(&mut actual);
     assert_eq!(mixed.active(), 2);
     for ((a, b), actual) in a.into_iter().zip(b).zip(actual) {
-        let inverse = |x: i16| x as f64 / (32767. - (x as f64).abs());
-        let sum = inverse(a) + inverse(b);
-        let expected = 32767. * sum / (1. + sum.abs());
-        assert!((actual as f64 - expected).abs() < 5.);
+        // These notes are below the limiter threshold: no compression or
+        // voice-count-dependent gain is allowed in their overlapping tails.
+        assert!((actual as i32 - (a as i32 + b as i32)).abs() <= 2);
     }
     let mut tail = vec![0; (RATE as usize) / 2];
     mixed.mix(&mut tail);
@@ -39,12 +38,27 @@ fn mixer_saturation_keeps_existing_voices_and_bounds_output() {
     }
     assert!(!m.start(0, 1.));
     assert_eq!(m.active(), VOICES);
-    let mut samples = vec![0; 5000];
+    let mut samples = vec![0; RATE as usize / 2];
     m.mix(&mut samples);
-    assert!(samples.iter().all(|v| v.unsigned_abs() < 32767));
+    assert!(samples.iter().all(|v| v.unsigned_abs() <= 32767));
     assert_eq!(m.active(), 0);
     assert!(!m.start(0, f64::NAN));
     assert!(!m.start(0, 0.));
+}
+#[test]
+fn changing_output_chunk_sizes_cannot_change_the_pcm_stream() {
+    let (mut continuous, mut chunked) = (Mixer::default(), Mixer::default());
+    for note in 0..5 {
+        continuous.start(note, 0.2);
+        chunked.start(note, 0.2);
+    }
+    let mut expected = vec![0i16; RATE as usize / 2];
+    let mut actual = vec![0i16; expected.len()];
+    continuous.mix(&mut expected);
+    for chunk in actual.chunks_mut(480) {
+        chunked.mix(chunk);
+    }
+    assert_eq!(actual, expected);
 }
 #[test]
 fn legacy_restore_preferences_migrate_and_new_profile_options_roundtrip() {
