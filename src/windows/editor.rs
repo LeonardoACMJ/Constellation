@@ -1853,6 +1853,7 @@ const P_RECORD: i32 = 611;
 const P_STATUS: i32 = 612;
 const P_CANCEL: i32 = 613;
 const P_DIRECTIONAL: i32 = 615;
+const P_DOT: i32 = 616;
 struct Profiles {
     hwnd: HWND,
     draft: Vec<Profile>,
@@ -1885,6 +1886,7 @@ impl Profiles {
             P_HOVER,
             P_RESTORE,
             P_DIRECTIONAL,
+            P_DOT,
             P_REMOVE,
             P_APPLY,
             P_RECORD,
@@ -1918,7 +1920,10 @@ impl Profiles {
             }),
             0,
         );
-        for (id, on) in [(P_DIRECTIONAL, p.is_some_and(|p| p.directional))] {
+        for (id, on) in [
+            (P_DIRECTIONAL, p.is_some_and(|p| p.directional)),
+            (P_DOT, p.is_some_and(|p| p.dot_cursor)),
+        ] {
             send(self.hwnd, id, BM_SETCHECK, usize::from(on), 0);
         }
     }
@@ -1956,6 +1961,7 @@ impl Profiles {
                 _ => CursorEnd::Restore,
             },
             directional: send(self.hwnd, P_DIRECTIONAL, BM_GETCHECK, 0, 0) == 1,
+            dot_cursor: send(self.hwnd, P_DOT, BM_GETCHECK, 0, 0) == 1,
         };
         self.refresh();
         Ok(())
@@ -2019,7 +2025,7 @@ unsafe fn profiles(e: &mut Editor) {
         left: 0,
         top: 0,
         right: 810,
-        bottom: 585,
+        bottom: 625,
     };
     AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
     let hwnd = CreateWindowExW(
@@ -2178,10 +2184,21 @@ unsafe fn profiles(e: &mut Editor) {
     control(
         hwnd,
         "BUTTON",
+        "Use white-dot cursor while radial is open",
+        P_DOT,
+        310,
+        416,
+        470,
+        28,
+        WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+    );
+    control(
+        hwnd,
+        "BUTTON",
         "Apply profile",
         P_APPLY,
         310,
-        425,
+        460,
         170,
         32,
         WS_TABSTOP,
@@ -2192,7 +2209,7 @@ unsafe fn profiles(e: &mut Editor) {
         "Edits follow you when switching profiles. Done keeps changes in the main editor; Save writes them to disk.",
         P_STATUS,
         310,
-        465,
+        500,
         470,
         48,
         0,
@@ -2203,13 +2220,13 @@ unsafe fn profiles(e: &mut Editor) {
         "Done",
         P_DONE,
         570,
-        530,
+        570,
         95,
         32,
         WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
     );
     control(
-        hwnd, "BUTTON", "Cancel", P_CANCEL, 675, 530, 95, 32, WS_TABSTOP,
+        hwnd, "BUTTON", "Cancel", P_CANCEL, 675, 570, 95, 32, WS_TABSTOP,
     );
     e.profiles.as_mut().unwrap().refresh();
     EnableWindow(e.hwnd, 0);
@@ -2393,6 +2410,7 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
                         hover: true,
                         cursor_end: CursorEnd::Restore,
                         directional: true,
+                        dot_cursor: true,
                     });
                     p.selected = Some(p.draft.len() - 1);
                     p.refresh();

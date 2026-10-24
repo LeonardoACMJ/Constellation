@@ -59,6 +59,7 @@ struct Runtime {
     menu_open: bool,
     source_foreground: HWND,
     renderer: smooth::Renderer,
+    cursor: super::cursor::DotCursor,
     session_blocked: bool,
     sleeping: bool,
     session_notifications: bool,
@@ -260,6 +261,7 @@ impl Runtime {
                 menu_open: false,
                 source_foreground: null_mut(),
                 renderer: smooth::Renderer::default(),
+                cursor: super::cursor::DotCursor::default(),
                 session_blocked: false,
                 sleeping: false,
                 session_notifications: false,
@@ -415,6 +417,9 @@ impl Runtime {
             self.notice("Another application confines the cursor; invocation cancelled.");
             return;
         }
+        if self.config.profiles[i].dot_cursor {
+            self.cursor.prepare(self.scale);
+        }
         // Submit the fresh root frame while hidden. Per-pixel alpha keeps
         // curved edges smooth without exposing last invocation's cached pixels.
         if let Err(error) = self.paint_radial() {
@@ -423,6 +428,7 @@ impl Runtime {
             return;
         }
         ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+        self.cursor.apply();
     }
     unsafe fn paint_radial(&mut self) -> Result<(), String> {
         self.renderer.present(
@@ -433,6 +439,7 @@ impl Runtime {
             self.engine.hovered,
             self.origin,
             self.scale,
+            self.cursor.enabled,
         )
     }
     unsafe fn finish_cursor(&self, policy: CursorEnd) {
@@ -451,6 +458,7 @@ impl Runtime {
         self.engine.close();
         self.cancel_packets();
         ShowWindow(self.hwnd, SW_HIDE);
+        self.cursor.restore();
         self.renderer.release_frame();
         if let Some(policy) = policy.filter(|_| restore) {
             self.finish_cursor(policy);
@@ -500,6 +508,7 @@ impl Runtime {
             Action::Changed => {
                 if self.engine.profile.is_none() {
                     ShowWindow(self.hwnd, SW_HIDE);
+                    self.cursor.restore();
                     self.renderer.release_frame();
                 }
                 InvalidateRect(self.hwnd, null(), 0);
@@ -672,6 +681,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             }
             0
         }
+        WM_SETCURSOR if a.engine.profile.is_some() && a.cursor.enabled => {
+            a.cursor.apply();
+            1
+        }
+        WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
         WM_ERASEBKGND => 1,
         WM_PAINT => {
             let mut paint: PAINTSTRUCT = zeroed();
@@ -712,6 +726,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 if a.engine.profile.is_none() {
                     a.cancel_packets();
                     ShowWindow(hwnd, SW_HIDE);
+                    a.cursor.restore();
                     a.renderer.release_frame();
                     if !foreground_blocks_launcher(hwnd) {
                         a.finish_cursor(policy);
@@ -1101,6 +1116,29 @@ mod native_modal_tests {
             assert_ne!(IsWindowVisible(hwnd), 0);
             assert_eq!(GetForegroundWindow(), foreground);
             assert!((*APP).selection_allowed());
+            assert!((*APP).cursor.enabled);
+            assert_eq!(
+                SendMessageW(hwnd, WM_SETCURSOR, hwnd as usize, HTCLIENT as isize),
+                1
+            );
+            let dot = GetCursor();
+            let mut icon: ICONINFO = zeroed();
+            assert_ne!(GetIconInfo(dot, &mut icon), 0);
+            assert_eq!(icon.fIcon, 0);
+            assert!(icon.xHotspot > 0 && icon.xHotspot == icon.yHotspot);
+            DeleteObject(icon.hbmMask);
+            DeleteObject(icon.hbmColor);
+            let mut rect: RECT = zeroed();
+            GetWindowRect(hwnd, &mut rect);
+            let blank = POINT {
+                x: rect.left + 5,
+                y: rect.top + 5,
+            };
+            assert_eq!(
+                WindowFromPoint(blank),
+                hwnd,
+                "Blank radial areas must retain native cursor ownership"
+            );
             let sector = (&(*APP).engine.sectors)[0].clone();
             let mut point = POINT {
                 x: ((*APP).origin.x + sector.dot.x * (*APP).scale) as i32,
@@ -1112,6 +1150,27 @@ mod native_modal_tests {
             SendMessageW(hwnd, KEY_ACTION, 0x1b, 0);
             assert!((*APP).engine.profile.is_none());
             assert_eq!(IsWindowVisible(hwnd), 0);
+            assert_eq!(GetForegroundWindow(), foreground);
+            assert!(!(*APP).cursor.enabled);
+            assert_ne!(GetCursor(), dot);
+            // The no-selection Hold exit uses a separate close route.
+            let mut config = (*APP).config.clone();
+            config.profiles[0].mode = Mode::Hold;
+            storage::save(&(*APP).root, &config).unwrap();
+            SendMessageW(hwnd, INVOKE, 0, 0);
+            assert!((*APP).cursor.enabled);
+            SendMessageW(hwnd, RELEASE, 0, pack_point((*APP).center));
+            assert!((*APP).engine.profile.is_none());
+            assert!(!(*APP).cursor.enabled);
+            assert_ne!(GetCursor(), dot);
+            // A profile can keep the native system cursor instead.
+            config.profiles[0].mode = Mode::Click;
+            config.profiles[0].dot_cursor = false;
+            storage::save(&(*APP).root, &config).unwrap();
+            SendMessageW(hwnd, INVOKE, 0, 0);
+            assert!(!(*APP).cursor.enabled);
+            assert_ne!(WindowFromPoint(blank), hwnd);
+            SendMessageW(hwnd, KEY_ACTION, 0x1b, 0);
             assert_eq!(GetForegroundWindow(), foreground);
             DestroyWindow(hwnd);
             drop(Box::from_raw(APP));

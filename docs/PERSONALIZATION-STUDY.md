@@ -39,4 +39,4 @@ Authenticated adapters need a deliberate credential/export design before impleme
 
 Choose preferred palettes, whether accents apply per item or per Constellation subtree, and which program's action should be the first real adapter. These are future customization choices; they do not block the current launcher/editor work.
 
-Custom cursor follow-up: a small native dot cursor was tried during the feedback pass, but desktop checks did not establish consistent behavior over transparent areas. It is not shipped. Keep the normal pointer until an optional replacement works consistently without changing global cursor settings or impairing selection/focus.
+Custom cursor follow-up: a small native dot cursor was tried during the feedback pass, but desktop checks did not establish consistent behavior over transparent areas. That experiment was not shipped. Version 0.1.15 adds an optional native white dot per profile, with a minimal-alpha window plane to retain cursor ownership over gaps, centered hotspot and restoration on close. Native checks run remotely; manual perceived behavior still needs confirmation. Windows cursor settings remain untouched.

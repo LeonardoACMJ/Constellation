@@ -112,7 +112,7 @@ mod render_tests {
             let mut surface = Surface::new(800, 800).unwrap();
             let started = std::time::Instant::now();
             surface
-                .draw(&c, &sectors, &path, Some(7), origin, 1.25)
+                .draw(&c, &sectors, &path, Some(7), origin, 1.25, false)
                 .unwrap();
             let first_ms = started.elapsed().as_secs_f64() * 1000.;
             let first = bytes(&surface).to_vec();
@@ -136,7 +136,7 @@ mod render_tests {
             assert!(transparent > 10000 && partial > 500 && levels.len() > 30);
             let repeat_started = std::time::Instant::now();
             surface
-                .draw(&c, &sectors, &path, Some(7), origin, 1.25)
+                .draw(&c, &sectors, &path, Some(7), origin, 1.25, false)
                 .unwrap();
             let repeat_ms = repeat_started.elapsed().as_secs_f64() * 1000.;
             assert_eq!(
@@ -220,7 +220,7 @@ mod render_tests {
                 };
                 let mut surface = Surface::new(size, size).unwrap();
                 surface
-                    .draw(&c, &sectors, &[], None, origin, scale)
+                    .draw(&c, &sectors, &[], None, origin, scale, false)
                     .unwrap();
                 let alpha = |radius: f64| {
                     let x = (origin.x + radius * scale) as usize;
@@ -234,6 +234,23 @@ mod render_tests {
                     alpha(147.),
                     0,
                     "Saved radius must not expand with smoothing"
+                );
+                surface
+                    .draw(&c, &sectors, &[], None, origin, scale, true)
+                    .unwrap();
+                let corner = &bytes(&surface)[..4];
+                assert_eq!(
+                    corner,
+                    &[0, 0, 0, 1],
+                    "Custom cursor plane uses minimal nonzero alpha"
+                );
+                surface
+                    .draw(&c, &sectors, &[], None, origin, scale, false)
+                    .unwrap();
+                assert_eq!(
+                    &bytes(&surface)[..4],
+                    &[0, 0, 0, 0],
+                    "System cursor restores fully transparent gaps"
                 );
             }
         }
@@ -353,6 +370,7 @@ impl Surface {
         hover: Option<u64>,
         origin: Point,
         scale: f64,
+        cursor_plane: bool,
     ) -> Result<(), String> {
         let image = owned(
             |out| {
@@ -384,7 +402,13 @@ impl Surface {
             graphics.pointer,
             TextRenderingHintAntiAliasGridFit,
         ))?;
-        status(GdipGraphicsClear(graphics.pointer, 0))?;
+        // Alpha 1 retains native cursor ownership over gaps while the radial is
+        // open. The 1/255 black backing is only used for the custom cursor;
+        // it does not change radial hit geometry or activate the overlay.
+        status(GdipGraphicsClear(
+            graphics.pointer,
+            u32::from(cursor_plane) << 24,
+        ))?;
         let mut canvas = Canvas::new(graphics.pointer)?;
         canvas.scene(c, sectors, path, hover, origin, scale)?;
         status(GdipFlush(graphics.pointer, FlushIntentionSync))
@@ -416,6 +440,7 @@ impl Renderer {
         hover: Option<u64>,
         origin: Point,
         scale: f64,
+        cursor_plane: bool,
     ) -> Result<(), String> {
         if self.engine.is_none() {
             self.engine = Some(Engine::start()?);
@@ -430,7 +455,7 @@ impl Renderer {
             self.surface = Some(Surface::new(rect.right, rect.bottom)?);
         }
         let surface = self.surface.as_mut().unwrap();
-        surface.draw(c, sectors, path, hover, origin, scale)?;
+        surface.draw(c, sectors, path, hover, origin, scale, cursor_plane)?;
         let size = SIZE {
             cx: surface.width,
             cy: surface.height,

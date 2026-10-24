@@ -68,9 +68,12 @@ fn legacy_restore_preferences_migrate_and_new_profile_options_roundtrip() {
     p.remove("cursor_end");
     p.insert("restore_cursor".into(), false.into());
     p.remove("directional");
+    p.remove("dot_cursor");
     let mut migrated = storage::parse_config(&serde_json::to_vec(&value).unwrap()).unwrap();
     assert_eq!(migrated.profiles[0].cursor_end, CursorEnd::Leave);
     assert!(migrated.profiles[0].directional);
+    assert!(migrated.profiles[0].dot_cursor);
+    migrated.profiles[0].dot_cursor = false;
     migrated.profiles[0].cursor_end = CursorEnd::Center;
     assert_eq!(
         storage::parse_config(&serde_json::to_vec(&migrated).unwrap()).unwrap(),

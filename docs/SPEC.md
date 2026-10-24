@@ -39,7 +39,7 @@ Each row is authoritative for its setting. Bindings are invocations; Star target
 | CFG-04 | Opening position | Always centered, with cursor moved to center | Centered | Agreed; fixed for the first release |
 | CFG-05 | Cursor on close | Restore original / Return to menu center / Leave at selection | Restore original | Restore and center agreed; leave retained as a compatibility option |
 | CFG-06 | Hover timing | No intentional opening or ancestor-collapse delay | 0 ms | Agreed |
-| CFG-07 | Cursor appearance | System cursor now; optional custom cursor later | System | Requested conditionally; deferred after inconsistent native cursor checks |
+| CFG-07 | Cursor appearance | White dot / system cursor, per shortcut profile | White dot (initial implementation default) | Agreed optional custom pointer; white-dot design selected |
 | CFG-08 | Outside targeting | Exact painted sectors / Extend direction beyond outer edge | Extend direction | Requested behavior; initial default proposed |
 
 **Agreed:** CFG-01–03, CFG-05, and CFG-08 apply independently to each shortcut profile. CFG-04 and CFG-06 are shared requirements, not per-profile choices. Hold mode must support an appropriate mouse binding as well as keyboard input.
@@ -47,7 +47,7 @@ Each row is authoritative for its setting. Bindings are invocations; Star target
 | ID | Centered opening rule | Status |
 |---|---|---|
 | CUR-01 | On invocation, select the monitor containing the pointer before moving it, save the original cursor position once, and center the cursor and root radial within that monitor's usable work area excluding the taskbar before enabling selection. | Agreed |
-| CUR-02 | Keep a visible navigation pointer while open. CFG-07 records the deferred custom-cursor option. On launch or dismissal, apply CFG-05 once. Return to center uses the invocation monitor's saved work-area center. Restore the normal cursor when closing; FS-02 forbids moving it during fullscreen takeover. | Agreed |
+| CUR-02 | Keep a visible navigation pointer while open. Use the profile's CFG-07 appearance over the invocation work area; the white dot has a centered selection hotspot and a subtle dark outline. On launch or dismissal, apply CFG-05 once. Return to center uses the invocation monitor's saved work-area center. Restore the normal cursor when closing; FS-02 forbids moving it during fullscreen takeover. | Agreed |
 | CUR-03 | All shortcut profiles use centered opening. Move the cursor to the root center on invocation, not on each child expansion; navigation leaves the cursor under user control. | Agreed |
 | CUR-04 | For a successful launch, close the overlay and apply CFG-05 before handing the launch request to the target. If cursor movement fails, cancel centered invocation and report it. | Proposed |
 

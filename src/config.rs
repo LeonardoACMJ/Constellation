@@ -65,6 +65,7 @@ pub struct Profile {
     pub hover: bool,
     pub cursor_end: CursorEnd,
     pub directional: bool,
+    pub dot_cursor: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,6 +84,8 @@ struct ProfileInput {
     restore_cursor: Option<bool>,
     #[serde(default = "yes")]
     directional: bool,
+    #[serde(default = "yes")]
+    dot_cursor: bool,
 }
 impl From<ProfileInput> for Profile {
     fn from(p: ProfileInput) -> Self {
@@ -98,6 +101,7 @@ impl From<ProfileInput> for Profile {
                 CursorEnd::Leave
             }),
             directional: p.directional,
+            dot_cursor: p.dot_cursor,
         }
     }
 }
@@ -409,6 +413,7 @@ impl Default for Config {
                 hover: true,
                 cursor_end: CursorEnd::Restore,
                 directional: true,
+                dot_cursor: true,
             }],
             layout: Layout::default(),
             sound: Sound::default(),

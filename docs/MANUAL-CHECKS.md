@@ -1,10 +1,10 @@
-# Constellation 0.1.14 — manual checks
+# Constellation 0.1.15 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.14**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.15**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -25,6 +25,7 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 | Preview updates | Change each spacing slider, then type a value. Switch the monitor preview, resize the window and scroll. | Layout/warnings update when values change; scrolling alone reuses the same preview. Save remains available with advisory overflow warnings. |
 | Intermittent chime crackle | At comfortable low volume, try an isolated selection after several seconds of silence, quick sweeps through nested branches, and another burst after a short pause. Repeat while ordinary apps are busy. | Notes/tails remain clean without isolated pops or a lagging-stream sound. Report whether a problem affects the first note after silence, a rapid sequence, or other apps' audio too. This remains a subjective device check; automated PCM tests cannot certify it. |
 | Chime overlap | Enable Chimes, set a comfortable low volume, Save, then sweep across several Stars quickly. Stop moving; test mute afterward. | Single notes and overlapping tails sound clean, without the reported crunch/crackle, clipping or obvious volume pumping. A new note does not cut off the preceding note; staying on one item does not repeatedly chime. |
+| White-dot cursor | Open Ctrl+Q over light/dark apps. Move through sectors, gaps and beyond the outer edge within the invocation work area. Cancel with Escape/right click; test a launch, empty Hold release and switching to another app. Disable the profile checkbox → Apply profile → Done → Save and repeat. | White dot stays smooth and stable across blank areas; its center selects. No focus takeover or persistent pointer change after closing. The unchecked profile keeps the system cursor. Check DPI scaling and cursor-end choices too. Outside the invocation work area, Windows controls the pointer normally. |
 | Cursor end | In Shortcut profiles, try each **Cursor on close** choice: Restore original, Return to menu center, Leave at selection. Test launch and Escape; optionally repeat with Hold. | Original position, invocation monitor's usable center, or selection position respectively. Cursor does not recenter during branch navigation. |
 | Opening without focus takeover | Focus an ordinary app and invoke Ctrl+Q. Hover a Star, then cancel with Esc; repeat with click/Space and any configured Hold profile. Open again, then switch to another app before selecting. | Radial opens without the focus-denied notification; the original app keeps focus; selection/cancel inputs do not activate its controls. Switching apps closes the radial and a late Hold release cannot launch. Fullscreen still blocks invocation. |
 | Reopening | Hover Everyday → Calculator, launch it, then Ctrl+Q again. Repeat after closing an expanded branch with Escape. | The newly opened menu starts at the root with no flash of the previous expanded branch. |
@@ -36,6 +37,6 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 
 To create a branch: select **Your universe** → **+ Constellation**, name it → **Apply item**. With it selected, add a **+ Star**, choose its target kind and Browse to a program; Apply. Select the Constellation again to add a nested Constellation. **Parent constellation** moves existing items. **Save** before testing Ctrl+Q.
 
-Custom cursors are deferred; this build deliberately uses the normal Windows cursor. Subjective audio quality and actual display flicker still require these manual checks.
+The white-dot cursor can be disabled per shortcut profile. Subjective audio quality and actual display flicker still require these manual checks.
 
 If maximize → restore still stalls, close Configure and launch the same installed executable with `--configure --trace-editor`. Manually maximize/restore once and inspect `data/editor-trace.log` in the app folder. It records elapsed timestamps around resize, scrollbar, control placement and preview painting, capped at 4,096 entries. No configuration values or target paths are recorded. This mode is optional and creates no hooks or input automation; ordinary launches do not open the trace file. A missing `.end` identifies the last unfinished stage; repeated resize events suggest queue churn. Timing under diagnostics includes log-write overhead and is not a latency benchmark.
