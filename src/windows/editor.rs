@@ -1442,7 +1442,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 GetScrollInfo(hwnd, SB_VERT, &mut info);
                 info.fMask = SIF_POS;
                 info.nPos -= steps * 72;
-                let y = SetScrollInfo(hwnd, SB_VERT, &info, 0);
+                // Redraw the scrollbar thumb; only the form's intermediate
+                // control/background paints are suppressed during batching.
+                let y = SetScrollInfo(hwnd, SB_VERT, &info, 1);
                 e.scroll_to(e.scroll_x, y);
             }
             0
