@@ -13,6 +13,7 @@ use crate::{
 };
 use std::{
     cell::{Cell, RefCell},
+    io::Write,
     mem::{size_of, zeroed},
     path::PathBuf,
     ptr::{null, null_mut},
@@ -61,6 +62,34 @@ const GAP: i32 = 504;
 const SOUND: i32 = 505;
 const VOLUME: i32 = 506;
 const MONITOR: i32 = 507;
+// Opt-in diagnostics live only in the separate configuration process. Each
+// stage is written before the next native call, so a stall leaves its location.
+struct EditorTrace {
+    file: std::fs::File,
+    started: std::time::Instant,
+    remaining: usize,
+}
+thread_local! {
+    static TRACE: RefCell<Option<EditorTrace>> = const { RefCell::new(None) };
+}
+fn trace(stage: &str) {
+    TRACE.with(|slot| {
+        if let Some(t) = slot.borrow_mut().as_mut() {
+            if t.remaining > 0 {
+                t.remaining -= 1;
+                let _ = writeln!(
+                    t.file,
+                    "{:.3}ms {}",
+                    t.started.elapsed().as_secs_f64() * 1000.,
+                    stage
+                );
+                if t.remaining == 0 {
+                    let _ = writeln!(t.file, "Trace limit reached; recording stopped.");
+                }
+            }
+        }
+    });
+}
 struct Display {
     handle: HMONITOR,
     work: RECT,
@@ -204,6 +233,19 @@ unsafe fn label(hwnd: HWND, text: &str, x: i32, y: i32, w: i32) {
 }
 
 pub fn run(root: PathBuf) -> Result<(), String> {
+    if std::env::args().any(|s| s == "--trace-editor") {
+        std::fs::create_dir_all(root.join("data")).map_err(|e| e.to_string())?;
+        let file = std::fs::File::create(root.join("data/editor-trace.log"))
+            .map_err(|e| format!("Cannot create editor trace: {e}"))?;
+        TRACE.with(|slot| {
+            *slot.borrow_mut() = Some(EditorTrace {
+                file,
+                started: std::time::Instant::now(),
+                remaining: 4096,
+            })
+        });
+        trace(concat!("editor.start version=", env!("CARGO_PKG_VERSION")));
+    }
     unsafe {
         let controls = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -540,6 +582,8 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         ROOT_WINDOW.with(|root| root.set(null_mut()));
         theme::shutdown();
         CoUninitialize();
+        trace("editor.exit");
+        TRACE.with(|slot| slot.borrow_mut().take());
         Ok(())
     }
 }
@@ -650,6 +694,7 @@ impl Editor {
                 && v.height == height
         });
         if !valid {
+            trace("preview.rebuild.begin");
             let memory = CreateCompatibleDC(dc);
             let bitmap = CreateCompatibleBitmap(dc, width, height);
             let old = SelectObject(memory, bitmap);
@@ -675,6 +720,7 @@ impl Editor {
                 bitmap,
                 sectors,
             });
+            trace("preview.rebuild.end");
         }
         let cache = self.preview_cache.as_ref().unwrap();
         let memory = CreateCompatibleDC(dc);
@@ -881,6 +927,7 @@ impl Editor {
         self.reposition_controls(false);
     }
     unsafe fn resize_view(&mut self) {
+        trace("layout.begin");
         let mut client: RECT = zeroed();
         GetClientRect(self.hwnd, &mut client);
         let dpi = GetDpiForWindow(self.hwnd);
@@ -893,6 +940,7 @@ impl Editor {
         let fullh = client.bottom + if style & WS_HSCROLL != 0 { barh } else { 0 };
         let next = FormLayout::new(fullw, fullh, barw, barh);
         if self.layout_applied && self.form == next {
+            trace("layout.unchanged");
             return;
         }
         self.form = next;
@@ -916,12 +964,21 @@ impl Editor {
                 nPos: pos,
                 nTrackPos: 0,
             };
+            trace(if bar == SB_HORZ {
+                "layout.scrollbar.horizontal.begin"
+            } else {
+                "layout.scrollbar.vertical.begin"
+            });
             SetScrollInfo(self.hwnd, bar, &info, 1);
+            trace("layout.scrollbar.end");
         }
         self.preview = native(self.form.preview());
+        trace("layout.controls.begin");
         self.reposition_controls(true);
+        trace("layout.controls.end");
         self.layout_applied = true;
         RESIZING.with(|active| active.set(false));
+        trace("layout.end");
     }
     unsafe fn scroll(&mut self, vertical: bool, request: i32) {
         let bar = if vertical { SB_VERT } else { SB_HORZ };
@@ -1443,6 +1500,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
+        if msg == WM_SIZE {
+            trace(if RESIZING.with(Cell::get) {
+                "resize.nested.ignored"
+            } else {
+                "resize.nested.deferred"
+            });
+        }
         if matches!(msg, WM_HSCROLL | WM_VSCROLL | WM_DROPFILES)
             || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
         {
@@ -1661,12 +1725,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_SIZE => {
+            trace(match w as u32 {
+                SIZE_MAXIMIZED => "resize.maximized",
+                SIZE_MINIMIZED => "resize.minimized",
+                _ => "resize.restored",
+            });
             if w != SIZE_MINIMIZED as usize {
                 e.resize_view();
             }
             0
         }
         WM_PAINT => {
+            trace("paint.begin");
             let measured = std::time::Instant::now();
             let mut sectors = 0;
             render::buffered(hwnd, theme::BACKGROUND, |dc| {
@@ -1695,6 +1765,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     12,
                 );
             });
+            trace("paint.end");
             if e.measure_preview {
                 e.measure_preview = false;
                 let report = serde_json::json!({"sectors":sectors,"paint_ms":measured.elapsed().as_secs_f64()*1000.,

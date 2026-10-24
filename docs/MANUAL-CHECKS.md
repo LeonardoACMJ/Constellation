@@ -1,10 +1,10 @@
-# Constellation 0.1.4 — manual checks
+# Constellation 0.1.5 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.4**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.5**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -27,3 +27,5 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 To create a branch: select **Your universe** → **+ Constellation**, name it → **Apply item**. With it selected, add a **+ Star**, choose its target kind and Browse to a program; Apply. Select the Constellation again to add a nested Constellation. **Parent constellation** moves existing items. **Save** before testing Ctrl+Q.
 
 Custom cursors are deferred; this build deliberately uses the normal Windows cursor. Subjective audio quality and actual display flicker still require these manual checks.
+
+If maximize → restore still stalls, close Configure and launch the same installed executable with `--configure --trace-editor`. Manually maximize/restore once and inspect `data/editor-trace.log` in the app folder. It records elapsed timestamps around resize, scrollbar, control placement and preview painting, capped at 4,096 entries. No configuration values or target paths are recorded. This mode is optional and creates no hooks or input automation; ordinary launches do not open the trace file. A missing `.end` identifies the last unfinished stage; repeated resize events suggest queue churn. Timing under diagnostics includes log-write overhead and is not a latency benchmark.

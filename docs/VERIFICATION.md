@@ -4,6 +4,8 @@
 
 ## Current revision and manual review
 
+Investigation **0.1.5**: the previous resize path re-posted synchronous `WM_SIZE` notifications while changing scrollbar visibility and laying out controls. These posted messages receive priority over paint/input in the normal queue, so repeated layout is a plausible source of apparent freezing. Version 0.1.3+ suppresses layout-owned notifications and skips unchanged geometry, but the user's specific stall has not been reproduced. Preview rendering is synchronous and is a second possible delay for large trees. `--configure --trace-editor` optionally writes a bounded local stage/timestamp trace to distinguish native layout churn from expensive painting during manual reproduction. No interactive tests were run and no running user app was stopped or replaced.
+
 Version **0.1.4** draws native trackbars through an editor-only buffered paint path with dark background, channel, progress and thumb; native mouse/keyboard behavior remains intact. Unchanged slider positions are no longer resent for redraw. Shortcut profiles now explain that opening always centers the menu/cursor. Visual checks remain manual.
 
 User review of **0.1.2** (corrected): tray Quit/restart, editor scrolling and clean radial reopening passed; fullscreen exclusion confirmed and audio improved. Directional targeting passed; preview updates look good, but sliders flash white while dragged. Cursor-end choices need retesting on close (opening always centers). Maximizing then restoring the editor still caused an apparent stall, not yet classified as temporary lag or a persistent hang.
