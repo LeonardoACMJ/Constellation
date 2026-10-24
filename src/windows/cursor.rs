@@ -6,6 +6,20 @@ use std::{
     ptr::null_mut,
 };
 use windows_sys::Win32::{Graphics::Gdi::*, UI::WindowsAndMessaging::*};
+thread_local! {
+    static ACTIVE: std::cell::Cell<HCURSOR> = const { std::cell::Cell::new(null_mut()) };
+}
+
+// WM_SETCURSOR can arrive synchronously during drawing/window operations.
+// Serve it without borrowing the Runtime again or falling back to an arrow.
+pub unsafe fn set_current() -> bool {
+    let handle = ACTIVE.with(std::cell::Cell::get);
+    if handle.is_null() {
+        return false;
+    }
+    SetCursor(handle);
+    true
+}
 
 fn pixels(size: usize, scale: f64) -> Vec<u8> {
     let center = (size / 2) as f64;
@@ -103,10 +117,16 @@ impl DotCursor {
             if self.previous.is_none() {
                 self.previous = Some(previous);
             }
+            ACTIVE.with(|value| value.set(self.handle));
         }
     }
     pub unsafe fn restore(&mut self) {
         self.enabled = false;
+        ACTIVE.with(|value| {
+            if value.get() == self.handle {
+                value.set(null_mut());
+            }
+        });
         if let Some(previous) = self.previous.take() {
             // Another app may already have installed its own pointer during
             // cancellation. Never overwrite that newer cursor.

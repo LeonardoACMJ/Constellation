@@ -655,6 +655,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
     if APP.is_null() {
         return DefWindowProcW(hwnd, msg, w, l);
     }
+    if msg == WM_SETCURSOR && super::cursor::set_current() {
+        return 1;
+    }
     if msg == TRAY && matches!(l as u32, WM_RBUTTONUP | WM_CONTEXTMENU) {
         return show_tray_menu(hwnd, w, l);
     }
@@ -680,10 +683,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 a.reload();
             }
             0
-        }
-        WM_SETCURSOR if a.engine.profile.is_some() && a.cursor.enabled => {
-            a.cursor.apply();
-            1
         }
         WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
         WM_ERASEBKGND => 1,
@@ -1122,6 +1121,17 @@ mod native_modal_tests {
                 1
             );
             let dot = GetCursor();
+            let guard = super::super::DispatchGuard::enter().unwrap();
+            assert_eq!(
+                SendMessageW(hwnd, WM_SETCURSOR, hwnd as usize, HTCLIENT as isize),
+                1
+            );
+            assert_eq!(
+                GetCursor(),
+                dot,
+                "Reentrant cursor messages must not flash an arrow"
+            );
+            drop(guard);
             let mut icon: ICONINFO = zeroed();
             assert_ne!(GetIconInfo(dot, &mut icon), 0);
             assert_eq!(icon.fIcon, 0);
