@@ -24,6 +24,8 @@ use windows_sys::Win32::{
     UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
 };
 
+// windows-sys omits the TBM_GETPOS alias (WM_USER + 0).
+const TBM_GETPOS: u32 = WM_USER;
 const TREE: i32 = 100;
 const BROWSE_TARGET: i32 = 211;
 const BROWSE_RUNNER: i32 = 212;
@@ -1073,13 +1075,10 @@ impl Editor {
             (SPREAD, self.c.layout.spread),
             (GAP, self.c.layout.gap),
         ] {
-            send(
-                self.hwnd,
-                id + 10,
-                TBM_SETPOS,
-                1,
-                value.round().clamp(0., i32::MAX as f64) as isize,
-            );
+            let position = value.round().clamp(0., i32::MAX as f64) as isize;
+            if send(self.hwnd, id + 10, TBM_GETPOS, 0, 0) != position {
+                send(self.hwnd, id + 10, TBM_SETPOS, 1, position);
+            }
         }
     }
     unsafe fn settings_to_controls(&mut self) {
@@ -2016,6 +2015,13 @@ unsafe fn profiles(e: &mut Editor) {
         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
     );
     label(hwnd, "Cursor on close", 310, 308, 140);
+    label(
+        hwnd,
+        "Opening always centers the menu and cursor.",
+        310,
+        345,
+        470,
+    );
     control(
         hwnd,
         "COMBOBOX",

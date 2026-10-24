@@ -1,10 +1,10 @@
-# Constellation 0.1.3 — manual checks
+# Constellation 0.1.4 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.3**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.4**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -15,6 +15,7 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 | Maximize/restore responsiveness | Repeatedly maximize → restore, including after scrolling. Then click a field, type, scroll and close Configure. | The restored window responds immediately; no persistent stall. |
 | Maximized layout | Maximize the editor after scrolling a small window. Restore it, then maximize again. | Unneeded scrollbars disappear, scroll offsets reset to zero, and the tree, item column and preview use the available width/height. |
 | Editor appearance | Inspect the main editor, Shortcut profiles and Advanced JSON. Tab between controls and open dropdowns. | Related navy/teal/lavender styling, readable text, visible focus, usable fields/buttons and no clipped bottom actions. Some system-owned dialogs/chrome retain Windows styling. |
+| Slider drawing | Drag each spacing slider rapidly; use arrows and Tab too. | No white flashing; dark background, readable thumb and visible keyboard focus. |
 | Preview updates | Change each spacing slider, then type a value. Switch the monitor preview, resize the window and scroll. | Layout/warnings update when values change; scrolling alone reuses the same preview. Save remains available with advisory overflow warnings. |
 | Chime overlap | Enable Chimes, set a comfortable low volume, Save, then sweep across several Stars quickly. Stop moving; test mute afterward. | Single notes and overlapping tails sound clean, without the reported crunch/crackle, clipping or obvious volume pumping. A new note does not cut off the preceding note; staying on one item does not repeatedly chime. |
 | Cursor end | In Shortcut profiles, try each **Cursor on close** choice: Restore original, Return to menu center, Leave at selection. Test launch and Escape; optionally repeat with Hold. | Original position, invocation monitor's usable center, or selection position respectively. Cursor does not recenter during branch navigation. |

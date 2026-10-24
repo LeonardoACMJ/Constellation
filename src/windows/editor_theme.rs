@@ -5,7 +5,12 @@ use std::cell::RefCell;
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{Dwm::*, Gdi::*},
-    UI::{Controls::*, WindowsAndMessaging::*},
+    UI::{
+        Controls::*,
+        Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled},
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        WindowsAndMessaging::*,
+    },
 };
 pub const BACKGROUND: u32 = render::rgb(15, 22, 36);
 pub const TEXT: u32 = render::rgb(233, 237, 250);
@@ -69,6 +74,10 @@ pub unsafe fn control(hwnd: HWND, class: &str) {
             SendMessageW(hwnd, WM_SETFONT, t.font as usize, 0);
         }
     });
+    if class == "msctls_trackbar32" {
+        // Preserve native input/accessibility; replace only the paint path.
+        SetWindowSubclass(hwnd, Some(slider_proc), 1, 0);
+    }
     // Use documented classic control painting so our palette is respected.
     if matches!(
         class,
@@ -171,4 +180,68 @@ pub unsafe fn panel(dc: HDC, r: RECT) {
     SelectObject(dc, old);
     SelectObject(dc, brush);
     DeleteObject(pen);
+}
+
+unsafe extern "system" fn slider_proc(
+    hwnd: HWND,
+    msg: u32,
+    w: WPARAM,
+    l: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    match msg {
+        WM_ERASEBKGND => 1,
+        WM_PAINT => {
+            render::buffered(hwnd, BACKGROUND, |dc| draw_slider(hwnd, dc));
+            0
+        }
+        WM_PRINTCLIENT => {
+            let mut bounds: RECT = std::mem::zeroed();
+            GetClientRect(hwnd, &mut bounds);
+            render::fill(w as HDC, &bounds, BACKGROUND);
+            draw_slider(hwnd, w as HDC);
+            0
+        }
+        WM_NCDESTROY => {
+            RemoveWindowSubclass(hwnd, Some(slider_proc), id);
+            DefSubclassProc(hwnd, msg, w, l)
+        }
+        _ => DefSubclassProc(hwnd, msg, w, l),
+    }
+}
+unsafe fn draw_slider(hwnd: HWND, dc: HDC) {
+    let mut channel: RECT = std::mem::zeroed();
+    let mut thumb: RECT = std::mem::zeroed();
+    SendMessageW(
+        hwnd,
+        TBM_GETCHANNELRECT,
+        0,
+        &mut channel as *mut RECT as isize,
+    );
+    SendMessageW(hwnd, TBM_GETTHUMBRECT, 0, &mut thumb as *mut RECT as isize);
+    render::fill(dc, &channel, render::rgb(65, 81, 105));
+    let progress = RECT {
+        right: (thumb.left + thumb.right) / 2,
+        ..channel
+    };
+    render::fill(dc, &progress, render::rgb(115, 191, 182));
+    let color = if IsWindowEnabled(hwnd) == 0 {
+        MUTED
+    } else {
+        TEXT
+    };
+    let brush = CreateSolidBrush(color);
+    let old_brush = SelectObject(dc, brush);
+    let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    RoundRect(dc, thumb.left, thumb.top, thumb.right, thumb.bottom, 5, 5);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    DeleteObject(brush);
+    if GetFocus() == hwnd {
+        let mut bounds: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut bounds);
+        InflateRect(&mut bounds, -1, -1);
+        DrawFocusRect(dc, &bounds);
+    }
 }

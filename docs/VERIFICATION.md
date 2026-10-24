@@ -4,7 +4,9 @@
 
 ## Current revision and manual review
 
-User review of **0.1.2**: tray Quit/restart, editor scrolling, maximized presentation and clean radial reopening passed; fullscreen exclusion confirmed and audio improved. Maximizing then restoring the editor still caused an apparent stall, not yet classified as temporary lag or a persistent hang.
+Version **0.1.4** draws native trackbars through an editor-only buffered paint path with dark background, channel, progress and thumb; native mouse/keyboard behavior remains intact. Unchanged slider positions are no longer resent for redraw. Shortcut profiles now explain that opening always centers the menu/cursor. Visual checks remain manual.
+
+User review of **0.1.2** (corrected): tray Quit/restart, editor scrolling and clean radial reopening passed; fullscreen exclusion confirmed and audio improved. Directional targeting passed; preview updates look good, but sliders flash white while dragged. Cursor-end choices need retesting on close (opening always centers). Maximizing then restoring the editor still caused an apparent stall, not yet classified as temporary lag or a persistent hang.
 
 Version **0.1.3** suppresses intermediate resize notifications caused by its own scrollbar/control layout, skips unchanged layouts and ignores minimized dimensions. This removes a source of repeated native layout work. The three headless layout tests and `cargo check --tests` pass. The reported maximize/restore symptom still requires manual verification; no desktop automation is authorized.
 
