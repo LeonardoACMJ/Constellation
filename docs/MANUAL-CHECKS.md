@@ -1,10 +1,10 @@
-# Constellation 0.1.7 — manual checks
+# Constellation 0.1.8 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.7**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.8**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -14,6 +14,7 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 | Editor scrolling | Make the editor short enough to scroll. Wheel up/down slowly, then quickly; drag the vertical/horizontal scrollbars. | No whole-form flash, overlapping/duplicated fields or preview-header jumps; the painted panel outlines move with their contents. Resize small → maximize → restore and repeat. |
 | Isolate first-restore click pause | Start a fresh Configure session. Quit the tray process while leaving Configure open, then maximize → restore once. Compare against a fresh session with the tray active. | Report whether the pause needs the tray process. Pointer smoothness alone does not distinguish slow input delivery from mouse capture. |
 | Fullscreen after input change | With the tray active and a fullscreen program focused, press Ctrl+Q. Exit fullscreen and retry. | Fullscreen gets the input; the radial stays closed. Afterward Ctrl+Q opens normally and selection works. |
+| First drag from maximized | Start a fresh Configure session, maximize it, then drag its titlebar to restore and move it. Release the mouse; click a field and another app. Repeat from a fresh session and once with the tray quit. | No several-second click blackout; normal pointer capture ends when the drag finishes, and fields/other apps accept clicks immediately. Test dragging specifically, not only the Restore button. Also resize by dragging each edge/corner; releasing a border must immediately restore normal clicks. |
 | Maximize/restore responsiveness | Repeatedly maximize → restore, including after scrolling. Then click a field, type, scroll and close Configure. | The restored window responds immediately; no persistent stall. |
 | Maximized layout | Maximize the editor after scrolling a small window. Restore it, then maximize again. | Unneeded scrollbars disappear, scroll offsets reset to zero, and the tree, item column and preview use the available width/height. |
 | Editor appearance | Inspect the main editor, Shortcut profiles and Advanced JSON. Tab between controls and open dropdowns. | Related navy/teal/lavender styling, readable text, visible focus, usable fields/buttons and no clipped bottom actions. Some system-owned dialogs/chrome retain Windows styling. |

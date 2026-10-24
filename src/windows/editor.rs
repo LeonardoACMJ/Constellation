@@ -1490,7 +1490,13 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             super::focus_window(e.hwnd);
             0
         }
-        _ => DefWindowProcW(hwnd, msg, w, l),
+        _ => {
+            // Default non-client handling can run Windows' modal move/size
+            // loop. No application-state borrow may span that native loop:
+            // its nested events must be able to enter our normal handlers.
+            drop(_guard);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
     }
 }
 
@@ -1811,7 +1817,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             PostQuitMessage(0);
             0
         }
-        _ => DefWindowProcW(hwnd, msg, w, l),
+        _ => {
+            // Default non-client handling can run Windows' modal move/size
+            // loop. No application-state borrow may span that native loop:
+            // its nested events must be able to enter our normal handlers.
+            drop(_guard);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
     }
 }
 // The owned profile dialog edits a private draft; Done transfers it to the main
@@ -2216,6 +2228,7 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
     };
     let e = &mut *EDITOR;
     let Some(p) = e.profiles.as_mut() else {
+        drop(_guard);
         return DefWindowProcW(hwnd, msg, w, l);
     };
     if msg == super::recorder::CAPTURE {
@@ -2424,7 +2437,13 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
             InvalidateRect(e.hwnd, null(), 1);
             0
         }
-        _ => DefWindowProcW(hwnd, msg, w, l),
+        _ => {
+            // Default non-client handling can run Windows' modal move/size
+            // loop. No application-state borrow may span that native loop:
+            // its nested events must be able to enter our normal handlers.
+            drop(_guard);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
     }
 }
 
@@ -2435,7 +2454,7 @@ mod lifecycle_tests {
     // mouse/keyboard synthesis or user configuration are involved.
     #[test]
     #[ignore = "hidden native window lifecycle; run on Windows CI"]
-    fn titlebar_close_reenables_owner_and_discards_only_the_profile_draft() {
+    fn default_native_resize_and_close_deliver_layout_and_reenable_owner() {
         std::thread::spawn(|| unsafe {
             let module = GetModuleHandleW(null());
             let owner_class = wide("Constellation.Test.OwnerClose");
@@ -2480,6 +2499,35 @@ mod lifecycle_tests {
                 original.clone(),
                 vec![],
             )));
+            // WM_WINDOWPOSCHANGED's default processing synchronously sends
+            // WM_SIZE, just as native drag/restore processing does. It must
+            // reach the actual layout handler immediately, before pumping any
+            // posted queue. Holding DispatchGuard across DefWindowProc leaves
+            // layout_applied false and defers the size instead.
+            assert!(!(*EDITOR).layout_applied);
+            let position = WINDOWPOS {
+                hwnd: owner,
+                hwndInsertAfter: null_mut(),
+                x: 0,
+                y: 0,
+                cx: 600,
+                cy: 400,
+                flags: SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            };
+            SendMessageW(
+                owner,
+                WM_WINDOWPOSCHANGED,
+                0,
+                &position as *const WINDOWPOS as isize,
+            );
+            assert!(
+                (*EDITOR).layout_applied,
+                "native nested resize was deferred"
+            );
+            let mut client: RECT = zeroed();
+            GetClientRect(owner, &mut client);
+            assert_eq!((*EDITOR).form.page_width, client.right);
+            assert_eq!((*EDITOR).form.page_height, client.bottom);
             let child = CreateWindowExW(
                 0,
                 profile_class.as_ptr(),

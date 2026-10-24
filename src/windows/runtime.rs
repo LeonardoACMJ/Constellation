@@ -838,7 +838,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             PostQuitMessage(0);
             0
         }
-        _ => DefWindowProcW(hwnd, msg, w, l),
+        _ => {
+            // Default non-client handling can run Windows' modal move/size
+            // loop. No application-state borrow may span that native loop:
+            // its nested events must be able to enter our normal handlers.
+            drop(_guard);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
     }
 }
 
