@@ -4,6 +4,10 @@
 
 ## Current revision and manual review
 
+User review of **0.1.2**: tray Quit/restart, editor scrolling, maximized presentation and clean radial reopening passed; fullscreen exclusion confirmed and audio improved. Maximizing then restoring the editor still caused an apparent stall, not yet classified as temporary lag or a persistent hang.
+
+Version **0.1.3** suppresses intermediate resize notifications caused by its own scrollbar/control layout, skips unchanged layouts and ignores minimized dimensions. This removes a source of repeated native layout work. The three headless layout tests and `cargo check --tests` pass. The reported maximize/restore symptom still requires manual verification; no desktop automation is authorized.
+
 Version **0.1.2** preserves `WM_QUIT` while discarding stale gesture packets. Windows returns this message even outside the requested filter; a cancellation/foreground notification after the tray menu could previously discard it. Two isolated-thread Windows message-queue regression tests pass: Quit/exit-code preservation and packet removal without losing unrelated notifications. These checks create no windows, hooks, input or sound. Actual tray-menu interaction and restart remain manual checks.
 
 Version **0.1.1** addresses the reported scrolling artifacts and crunchy audio. The final buffer copy now restores its drawing origin; controls and panels use one absolute responsive layout; unused scrollbars are removed. Audio uses 48 kHz PCM, four reusable 10 ms buffers, a short idle-device grace period, and linear mixing until the near-clip safety knee instead of compressing every sample.

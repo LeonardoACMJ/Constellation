@@ -89,6 +89,7 @@ struct Editor {
     wheel_delta: i32,
     form: FormLayout,
     controls: Vec<PlacedControl>,
+    layout_applied: bool,
 }
 struct PreviewCache {
     config: Config,
@@ -112,6 +113,7 @@ struct PlacedControl {
     base: FormRect,
 }
 thread_local! {
+    static RESIZING: Cell<bool> = const { Cell::new(false) };
     static ROOT_WINDOW:Cell<HWND>=const {Cell::new(null_mut())};
     static NEW_CONTROLS:RefCell<Vec<PlacedControl>>=const {RefCell::new(Vec::new())};
 }
@@ -267,6 +269,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             settings_invalid: false,
             measure_preview: std::env::args().any(|s| s == "--measure-preview"),
             preview_cache: None,
+            layout_applied: false,
             wheel_delta: 0,
             form: FormLayout::new(1380, 870, 17, 17),
             controls: vec![],
@@ -886,7 +889,15 @@ impl Editor {
         // both axes together so crossing a threshold cannot leave a dead bar.
         let fullw = client.right + if style & WS_VSCROLL != 0 { barw } else { 0 };
         let fullh = client.bottom + if style & WS_HSCROLL != 0 { barh } else { 0 };
-        self.form = FormLayout::new(fullw, fullh, barw, barh);
+        let next = FormLayout::new(fullw, fullh, barw, barh);
+        if self.layout_applied && self.form == next {
+            return;
+        }
+        self.form = next;
+        // Scrollbar visibility changes synchronously send WM_SIZE. Both axes
+        // are already resolved above; replaying those intermediate sizes can
+        // recursively schedule more layout/scrollbar work on restore.
+        RESIZING.with(|active| active.set(true));
         let (x, y) = self.form.scroll(self.scroll_x, self.scroll_y);
         self.scroll_x = x;
         self.scroll_y = y;
@@ -907,6 +918,8 @@ impl Editor {
         }
         self.preview = native(self.form.preview());
         self.reposition_controls(true);
+        self.layout_applied = true;
+        RESIZING.with(|active| active.set(false));
     }
     unsafe fn scroll(&mut self, vertical: bool, request: i32) {
         let bar = if vertical { SB_VERT } else { SB_HORZ };
@@ -1431,7 +1444,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         return DefWindowProcW(hwnd, msg, w, l);
     }
     let Some(_guard) = super::DispatchGuard::enter() else {
-        if matches!(msg, WM_SIZE | WM_HSCROLL | WM_VSCROLL | WM_DROPFILES) {
+        if matches!(msg, WM_HSCROLL | WM_VSCROLL | WM_DROPFILES)
+            || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
+        {
             PostMessageW(hwnd, msg, w, l);
         }
         if msg == WM_COMMAND
@@ -1647,7 +1662,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_SIZE => {
-            e.resize_view();
+            if w != SIZE_MINIMIZED as usize {
+                e.resize_view();
+            }
             0
         }
         WM_PAINT => {

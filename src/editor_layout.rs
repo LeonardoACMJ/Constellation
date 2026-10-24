@@ -8,7 +8,7 @@ pub struct Rect {
     pub w: i32,
     pub h: i32,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub page_width: i32,
     pub page_height: i32,
