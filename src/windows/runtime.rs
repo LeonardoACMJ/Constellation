@@ -1,5 +1,5 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use super::{audio::Chimes, editor, input::Worker, render, target, wide};
+use super::{audio::Chimes, editor, input::Worker, smooth, target, wide};
 use crate::{
     config::{Binding, Config, CursorEnd, Mode},
     engine::{Action, Engine},
@@ -58,6 +58,7 @@ struct Runtime {
     paused: bool,
     menu_open: bool,
     source_foreground: HWND,
+    renderer: smooth::Renderer,
     session_blocked: bool,
     sleeping: bool,
     session_notifications: bool,
@@ -125,7 +126,6 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
         if hwnd.is_null() {
             return Err("Cannot create native overlay".into());
         }
-        SetLayeredWindowAttributes(hwnd, 0, 255, LWA_COLORKEY);
         let bindings = config
             .profiles
             .iter()
@@ -257,6 +257,7 @@ impl Runtime {
                 paused: false,
                 menu_open: false,
                 source_foreground: null_mut(),
+                renderer: smooth::Renderer::default(),
                 session_blocked: false,
                 sleeping: false,
                 session_notifications: false,
@@ -412,28 +413,25 @@ impl Runtime {
             self.notice("Another application confines the cursor; invocation cancelled.");
             return;
         }
-        // The layered window retains its last presented pixels while hidden.
-        // Keep it transparent until the new root frame has been drawn, so a
-        // previously expanded branch can never be presented on reopening.
-        SetLayeredWindowAttributes(self.hwnd, 0, 0, LWA_COLORKEY | LWA_ALPHA);
-        // Input is routed by the resident hooks; the overlay does not need to
-        // become the foreground window. Keep the invocation's original app
-        // active and cancel if that foreground changes during the gesture.
+        // Submit the fresh root frame while hidden. Per-pixel alpha keeps
+        // curved edges smooth without exposing last invocation's cached pixels.
+        if let Err(error) = self.paint_radial() {
+            self.dismiss(true);
+            self.notice(&error);
+            return;
+        }
         ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
-        render::present(self.hwnd, 0, |dc| {
-            render::draw(
-                dc,
-                &self.config,
-                &self.engine.sectors,
-                &self.engine.path,
-                self.engine.hovered,
-                self.origin,
-                self.scale,
-                false,
-            )
-        });
-        SetLayeredWindowAttributes(self.hwnd, 0, 255, LWA_COLORKEY | LWA_ALPHA);
-        InvalidateRect(self.hwnd, null(), 0);
+    }
+    unsafe fn paint_radial(&mut self) -> Result<(), String> {
+        self.renderer.present(
+            self.hwnd,
+            &self.config,
+            &self.engine.sectors,
+            &self.engine.path,
+            self.engine.hovered,
+            self.origin,
+            self.scale,
+        )
     }
     unsafe fn finish_cursor(&self, policy: CursorEnd) {
         let p = match policy {
@@ -451,6 +449,7 @@ impl Runtime {
         self.engine.close();
         self.cancel_packets();
         ShowWindow(self.hwnd, SW_HIDE);
+        self.renderer.release_frame();
         if let Some(policy) = policy.filter(|_| restore) {
             self.finish_cursor(policy);
         }
@@ -499,6 +498,7 @@ impl Runtime {
             Action::Changed => {
                 if self.engine.profile.is_none() {
                     ShowWindow(self.hwnd, SW_HIDE);
+                    self.renderer.release_frame();
                 }
                 InvalidateRect(self.hwnd, null(), 0);
             }
@@ -672,18 +672,15 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         }
         WM_ERASEBKGND => 1,
         WM_PAINT => {
-            render::buffered(hwnd, 0, |dc| {
-                render::draw(
-                    dc,
-                    &a.config,
-                    &a.engine.sectors,
-                    &a.engine.path,
-                    a.engine.hovered,
-                    a.origin,
-                    a.scale,
-                    false,
-                )
-            });
+            let mut paint: PAINTSTRUCT = zeroed();
+            BeginPaint(hwnd, &mut paint);
+            EndPaint(hwnd, &paint);
+            if a.engine.profile.is_some() {
+                if let Err(error) = a.paint_radial() {
+                    a.dismiss(true);
+                    a.notice(&error);
+                }
+            }
             0
         }
         INVOKE => {
@@ -713,6 +710,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 if a.engine.profile.is_none() {
                     a.cancel_packets();
                     ShowWindow(hwnd, SW_HIDE);
+                    a.renderer.release_frame();
                     if !foreground_blocks_launcher(hwnd) {
                         a.finish_cursor(policy);
                     }
@@ -1070,7 +1068,6 @@ mod native_modal_tests {
                 null(),
             );
             assert!(!hwnd.is_null());
-            SetLayeredWindowAttributes(hwnd, 0, 255, LWA_COLORKEY);
             let root = std::env::temp_dir().join(format!(
                 "constellation-overlay-{}-{}",
                 std::process::id(),

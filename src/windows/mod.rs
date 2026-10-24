@@ -7,6 +7,7 @@ mod pickers;
 mod recorder;
 mod render;
 mod runtime;
+mod smooth;
 mod target;
 
 use std::cell::{Cell, RefCell};

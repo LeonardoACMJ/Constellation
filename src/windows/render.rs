@@ -258,16 +258,6 @@ pub unsafe fn buffered(
     buffer_into(hwnd, dc, background, paint);
     EndPaint(hwnd, &ps);
 }
-/// Present a fresh frame synchronously, including during transparent opening.
-pub unsafe fn present(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-    background: u32,
-    paint: impl FnOnce(HDC),
-) {
-    let dc = GetDC(hwnd);
-    buffer_into(hwnd, dc, background, paint);
-    ReleaseDC(hwnd, dc);
-}
 unsafe fn buffer_into(
     hwnd: windows_sys::Win32::Foundation::HWND,
     dc: HDC,

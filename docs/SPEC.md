@@ -191,6 +191,8 @@ The prototype switches to Previous/More sectors above its capacity thresholds; t
 
 | ID | Requirement |
 |---|---|
+| LOOK-01 | **Agreed:** smooth radial curves/diagonals and symbols with antialiasing and transparent edges. Preserve selection geometry. |
+| LOOK-02 | **Agreed:** subtle soft outlines, darker and slightly shifted toward blue; tiny semitransparent white star specks with slightly varied sizes. **Initial implementation:** static, deterministic decoration kept away from names/icons; no continuous animation. |
 | UI-01 | Configuration should visually belong to Constellation. Initial styling uses the radial palette, readable Segoe UI text, grouped panels and clear primary actions. User-selectable themes remain future work. |
 | UI-02 | Scrolling must not visibly erase/flash the whole form, duplicate/overlap controls, or move panel outlines differently from their contents. Use one coordinate system for painted content and native controls; reuse an unchanged preview. Edit and monitor/viewport changes invalidate the relevant cache. |
 | UI-03 | Resizing/maximizing expands the item list, editor column and preview into available space. Show each scrollbar only when content exceeds that axis; account for the other scrollbar’s space and clamp stale scroll offsets after resizing. |
