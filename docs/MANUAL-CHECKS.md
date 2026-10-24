@@ -1,10 +1,10 @@
-# Constellation 0.1.11 — manual checks
+# Constellation 0.1.12 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.11**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.12**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 

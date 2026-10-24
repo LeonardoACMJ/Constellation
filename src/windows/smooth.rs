@@ -723,12 +723,12 @@ impl Canvas {
             let shape = self.sector_path(sector, origin, scale)?;
             let halo = self.pen(
                 (edges[palette] & 0x00ffffff) | 0x46000000,
-                (3. * scale) as f32,
+                (5. * scale) as f32,
             )?;
             status(GdipDrawPath(self.graphics, halo, shape.pointer))?;
             let fill = self.brush(fills[palette])?;
             status(GdipFillPath(self.graphics, fill, shape.pointer))?;
-            let edge = self.pen(edges[palette], scale.max(0.8) as f32)?;
+            let edge = self.pen(edges[palette], (3. * scale) as f32)?;
             status(GdipDrawPath(self.graphics, edge, shape.pointer))?;
             // A small deterministic field: never animate or move it on hover.
             let area = 0.5 * (sector.outer.powi(2) - sector.inner.powi(2)) * sector.sweep;
@@ -746,8 +746,8 @@ impl Canvas {
                 let radius =
                     sector.inner + (sector.outer - sector.inner) * (0.15 + 0.70 * unit(&mut seed));
                 let point = sector.center.polar(radius, angle);
-                let dot_size = 0.45 + 0.65 * unit(&mut seed);
-                let alpha = [40, 58, 78][(unit(&mut seed) * 3.) as usize % 3];
+                let dot_size = 0.9 + 0.75 * unit(&mut seed);
+                let alpha = [100, 150, 200][(unit(&mut seed) * 3.) as usize % 3];
                 if (point.x - sector.dot.x).abs() < 65. && (point.y - sector.dot.y).abs() < 32. {
                     continue;
                 }
