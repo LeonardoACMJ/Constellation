@@ -2161,11 +2161,55 @@ const P_STATUS: i32 = 612;
 const P_CANCEL: i32 = 613;
 const P_DIRECTIONAL: i32 = 615;
 const P_DOT: i32 = 616;
+const P_UNIVERSE: i32 = 617;
+const P_ENTRY: i32 = 618;
 struct Profiles {
     hwnd: HWND,
     draft: Vec<Profile>,
     selected: Option<usize>,
     recording: bool,
+    trees: Vec<UniverseInfo>,
+}
+/// A universe and the constellations a profile may open at, the root first.
+struct UniverseInfo {
+    id: u64,
+    name: String,
+    entries: Vec<(u64, String)>,
+}
+fn collect_entries(n: &Node, depth: usize, out: &mut Vec<(u64, String)>) {
+    if n.children.is_none() {
+        return;
+    }
+    out.push((n.id, format!("{}{}", "    ".repeat(depth), n.name)));
+    for c in n.children.as_deref().unwrap_or_default() {
+        collect_entries(c, depth + 1, out);
+    }
+}
+/// `universe == 0` means the first one, which is how pre-universe profiles read.
+fn universe_index(trees: &[UniverseInfo], id: u64) -> usize {
+    if id == 0 {
+        return 0;
+    }
+    trees.iter().position(|t| t.id == id).unwrap_or(0)
+}
+unsafe fn fill_entries(hwnd: HWND, tree: Option<&UniverseInfo>, entry: Option<u64>) {
+    unsafe {
+        send(hwnd, P_ENTRY, CB_RESETCONTENT, 0, 0);
+        let Some(tree) = tree else { return };
+        for (i, (_, label)) in tree.entries.iter().enumerate() {
+            // Index 0 is the universe root, which is the same as "no entry node".
+            let text = if i == 0 {
+                format!("{} — whole universe", label.trim())
+            } else {
+                label.clone()
+            };
+            send(hwnd, P_ENTRY, CB_ADDSTRING, 0, wide(text).as_ptr() as isize);
+        }
+        let selected = entry
+            .and_then(|id| tree.entries.iter().position(|(e, _)| *e == id))
+            .unwrap_or(0);
+        send(hwnd, P_ENTRY, CB_SETCURSEL, selected, 0);
+    }
 }
 impl Profiles {
     unsafe fn refresh(&mut self) {
@@ -2197,6 +2241,8 @@ impl Profiles {
             P_REMOVE,
             P_APPLY,
             P_RECORD,
+            P_UNIVERSE,
+            P_ENTRY,
         ] {
             EnableWindow(GetDlgItem(self.hwnd, id), p.is_some() as i32);
         }
@@ -2233,6 +2279,24 @@ impl Profiles {
         ] {
             send(self.hwnd, id, BM_SETCHECK, usize::from(on), 0);
         }
+        let choice = p.map(|p| (p.universe, p.root_id));
+        send(self.hwnd, P_UNIVERSE, CB_RESETCONTENT, 0, 0);
+        for u in &self.trees {
+            send(
+                self.hwnd,
+                P_UNIVERSE,
+                CB_ADDSTRING,
+                0,
+                wide(&u.name).as_ptr() as isize,
+            );
+        }
+        let index = universe_index(&self.trees, choice.map_or(0, |(u, _)| u));
+        send(self.hwnd, P_UNIVERSE, CB_SETCURSEL, index, 0);
+        fill_entries(
+            self.hwnd,
+            self.trees.get(index),
+            choice.and_then(|(_, entry)| entry),
+        );
     }
     unsafe fn apply(&mut self) -> Result<(), String> {
         let Some(i) = self.selected else {
@@ -2252,10 +2316,23 @@ impl Profiles {
         {
             return Err("That shortcut is already used by another profile.".into());
         }
+        let chosen = send(self.hwnd, P_UNIVERSE, CB_GETCURSEL, 0, 0).max(0) as usize;
+        let tree = self.trees.get(chosen);
+        let entry = send(self.hwnd, P_ENTRY, CB_GETCURSEL, 0, 0).max(0) as usize;
         self.draft[i] = Profile {
             id: self.draft[i].id,
-            universe: self.draft[i].universe,
-            root_id: self.draft[i].root_id,
+            // Keep the first universe as 0: that is the default, and writing its
+            // real id would add a key to profiles that never carried one.
+            universe: if chosen == 0 {
+                0
+            } else {
+                tree.map_or(0, |t| t.id)
+            },
+            // Index 0 of the entry list is the universe root, which is no entry.
+            root_id: tree
+                .filter(|_| entry > 0)
+                .and_then(|t| t.entries.get(entry))
+                .map(|(id, _)| *id),
             name,
             binding,
             mode: if send(self.hwnd, P_MODE, CB_GETCURSEL, 0, 0) == 1 {
@@ -2334,7 +2411,7 @@ unsafe fn profiles(e: &mut Editor) {
         left: 0,
         top: 0,
         right: 810,
-        bottom: 625,
+        bottom: 705,
     };
     AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
     let hwnd = CreateWindowExW(
@@ -2357,8 +2434,23 @@ unsafe fn profiles(e: &mut Editor) {
         return;
     }
     theme::window(hwnd);
+    let trees = e
+        .c
+        .universes
+        .iter()
+        .map(|u| {
+            let mut entries = vec![];
+            collect_entries(u, 0, &mut entries);
+            UniverseInfo {
+                id: u.id,
+                name: u.name.clone(),
+                entries,
+            }
+        })
+        .collect();
     e.profiles = Some(Profiles {
         hwnd,
+        trees,
         draft: e.c.profiles.clone(),
         selected: if e.c.profiles.is_empty() {
             None
@@ -2501,13 +2593,37 @@ unsafe fn profiles(e: &mut Editor) {
         28,
         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
     );
+    label(hwnd, "Opens universe", 310, 452, 150);
+    control(
+        hwnd,
+        "COMBOBOX",
+        "",
+        P_UNIVERSE,
+        465,
+        446,
+        305,
+        180,
+        WS_TABSTOP | CBS_DROPDOWNLIST as u32,
+    );
+    label(hwnd, "Opens at", 310, 492, 150);
+    control(
+        hwnd,
+        "COMBOBOX",
+        "",
+        P_ENTRY,
+        465,
+        486,
+        305,
+        180,
+        WS_TABSTOP | CBS_DROPDOWNLIST as u32,
+    );
     control(
         hwnd,
         "BUTTON",
         "Apply profile",
         P_APPLY,
         310,
-        460,
+        540,
         170,
         32,
         WS_TABSTOP,
@@ -2518,7 +2634,7 @@ unsafe fn profiles(e: &mut Editor) {
         "Edits follow you when switching profiles. Done keeps changes in the main editor; Save writes them to disk.",
         P_STATUS,
         310,
-        500,
+        580,
         470,
         48,
         0,
@@ -2529,13 +2645,13 @@ unsafe fn profiles(e: &mut Editor) {
         "Done",
         P_DONE,
         570,
-        570,
+        650,
         95,
         32,
         WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
     );
     control(
-        hwnd, "BUTTON", "Cancel", P_CANCEL, 675, 570, 95, 32, WS_TABSTOP,
+        hwnd, "BUTTON", "Cancel", P_CANCEL, 675, 650, 95, 32, WS_TABSTOP,
     );
     e.profiles.as_mut().unwrap().refresh();
     EnableWindow(e.hwnd, 0);
@@ -2653,6 +2769,13 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
     match msg {
         WM_COMMAND => {
             let id = (w & 0xffff) as i32;
+            // The entry list belongs to the chosen universe, so switching
+            // universe rebuilds it and falls back to that universe's root.
+            if id == P_UNIVERSE && w >> 16 == CBN_SELCHANGE as usize {
+                let chosen = send(hwnd, P_UNIVERSE, CB_GETCURSEL, 0, 0).max(0) as usize;
+                fill_entries(hwnd, p.trees.get(chosen), None);
+                return 0;
+            }
             if id == P_LIST && w >> 16 == LBN_SELCHANGE as usize {
                 let next = usize::try_from(send(hwnd, P_LIST, LB_GETCURSEL, 0, 0)).ok();
                 match p.apply() {
@@ -2891,6 +3014,7 @@ mod lifecycle_tests {
                 draft: original.profiles.clone(),
                 selected: None,
                 recording: false,
+                trees: vec![],
             });
             EnableWindow(owner, 0);
             // This is the real titlebar X / Alt+F4 path, including Windows'
