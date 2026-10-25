@@ -623,7 +623,7 @@ impl Default for Config {
                                         7,
                                         "GitHub",
                                         Target::Url {
-                                            url: "https://github.com/CorynBunnydeer/Constellation"
+                                            url: "https://github.com/LeonardoACMJ/Constellation"
                                                 .into(),
                                         },
                                     ),
@@ -632,12 +632,16 @@ impl Default for Config {
                         ]),
                     },
                     star(8, "Files", Target::Folder { path: ".".into() }),
+                    // The same action as the tray's "Configure / Visualize…": the
+                    // editor is a separate process, so this takes no mutex. The
+                    // leading "./" matters — a bare name would be looked up on
+                    // PATH instead of beside the portable executable.
                     star(
                         9,
-                        "Calculator",
+                        "Settings",
                         Target::Program {
-                            path: "calc.exe".into(),
-                            args: vec![],
+                            path: "./constellation.exe".into(),
+                            args: vec!["--configure".into()],
                             cwd: None,
                         },
                     ),

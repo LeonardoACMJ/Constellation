@@ -566,3 +566,27 @@ fn an_item_may_share_its_parents_name() {
     assert!(c.find(10).unwrap().children.is_some());
     assert!(c.find(25).unwrap().children.is_none());
 }
+
+/// A new installation should be able to reach the editor from the radial, not
+/// only from the tray icon, which nothing on screen points at.
+#[test]
+fn the_default_configuration_can_open_its_own_editor() {
+    let c = Config::default();
+    assert!(c.validate().is_ok());
+    let settings = c
+        .universes
+        .iter()
+        .flat_map(|u| u.children.as_deref().unwrap_or_default())
+        .find(|n| n.name == "Settings")
+        .expect("the default offers Settings");
+    let Some(Target::Program { path, args, .. }) = &settings.target else {
+        panic!("Settings launches a program");
+    };
+    assert_eq!(args, &["--configure"], "the flag the tray itself uses");
+    // Without a separator this would resolve through PATH, not the portable folder.
+    assert!(
+        path.contains('/') || path.contains('\\'),
+        "{path} must resolve beside the executable"
+    );
+    assert!(path.ends_with("constellation.exe"), "{path}");
+}
