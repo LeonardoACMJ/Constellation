@@ -123,3 +123,5 @@ This is the first native build. The configuration UI is functional and deliberat
 Customization feasibility and the proposed later app-action adapters are described in [the personalization study](PERSONALIZATION-STUDY.md). Themes and action adapters remain future work; item icons are available in Configure.
 
 Use [the feedback-build manual checklist](MANUAL-CHECKS.md) to review scrolling, styling, overlapping chimes, cursor-end options, fresh opening and outside targeting. Local desktop automation is on hold while the user uses the PC.
+
+Read [A small manifesto for portable software / Um pequeno manifesto por aplicações portáteis](PORTABLE-MANIFESTO.md) for the principles behind the portable folder.

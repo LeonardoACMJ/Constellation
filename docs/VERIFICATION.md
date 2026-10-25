@@ -4,7 +4,7 @@ Windows native preview · current documentation review: 2026-10-25. Earlier buil
 
 ## Current status — 0.1.32, reviewed 2026-10-25
 
-This review inspected source, documentation, Git state and the installed binary; it did not run tests or drive the desktop. The installed executable matches the local release build. Older measurements below belong to their recorded revisions and do not certify 0.1.31.
+This review inspected source, documentation, Git state and the installed binary; it did not run tests or drive the desktop. The installed executable matches the local release build. Older measurements below belong to their recorded revisions and do not certify 0.1.32.
 
 | Area | Implemented now | Evidence and remaining review |
 |---|---|---|
@@ -21,6 +21,8 @@ This review inspected source, documentation, Git state and the installed binary;
 **0.1.31 verification:** local compile checks and seven device-free layout checks passed. A native COM fixture created two actual links under target/, verified that the menu link carries its own launch argument, and removed it without changing the Startup fixture; the real Startup and Programs folders were not modified. No local UI/input automation, application launches through those links, or audio playback was used. The Start menu launch flow and Windows indexing remain manual checks in MANUAL-CHECKS.md.
 
 **0.1.32 action buttons:** replaces integration checkboxes with Add/Remove from Start menu and Enable/Disable Windows startup. Source inspection found no Save dependency in 0.1.31; the reported perceived dependency was not reproduced through local desktop automation. The new handlers route before draft/history checkpointing, derive the action from the actual shortcut, update the next-action label even after failure, and state that success applies immediately without Save. Layout and isolated-link regressions passed locally without desktop interaction; actual button clicks and Windows indexing remain manual checks.
+
+**Public beta preparation (2026-10-25):** 0.1.32 code CI [40215464800](https://github.com/LeonardoACMJ/Constellation/actions/runs/40215464800) passed on Windows and Linux, including native modal/render regressions. The user confirmed that Start menu removal works after Windows refreshes its displayed results. Multiple-universe/entry/visibility checks remain pending, not silently marked passed; release notes list them explicitly. Publication adds the bilingual portable-software manifesto to the package and does not change runtime code.
 
 ## Historical implementation and verification records
 

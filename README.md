@@ -2,6 +2,8 @@
 
 A portable system-tray radial launcher. Stars launch programs, shortcuts, URLs, folders, and scripts; nested Constellations organize them.
 
+**0.1.32 is the first public beta for Windows x64.** See the [release notes](docs/releases/0.1.32.md) for known limits and pending manual checks.
+
 The first Windows native application is implemented. The [product and behavior spec](docs/SPEC.md) defines intended behavior and acceptance checks; [the user guide](docs/USER-GUIDE.md) explains this preview's controls and limits. The [verification record](docs/VERIFICATION.md) separates automated evidence from checks still needing hands-on review. Linux portability is a design constraint; a Linux desktop adapter is not implemented yet.
 
 The [browser interaction prototype](prototype/README.md) is an experiment, not the native app. Its paging, edge fitting, and delay controls are superseded by the current spec.
@@ -26,6 +28,8 @@ Hover a Constellation to open it, click a Star or press Space over it to launch.
 A **shortcut profile** is a binding with its own behaviour: Click opens and stays open, Hold selects on release. Each profile opens one **universe** — configurations can hold several independent trees — and may start at any Constellation inside it instead of at the root, which is a view of that tree rather than a copy of it. An item can also name the profiles that show it, so two bindings can share one tree and still differ by an item or two.
 
 [The user guide](docs/USER-GUIDE.md) covers the editor, every target type, the configuration files and the compatibility notes that matter before downgrading.
+
+Read [our small manifesto for portable software / manifesto por aplicações portáteis](docs/PORTABLE-MANIFESTO.md).
 
 ## License
 
