@@ -11,6 +11,7 @@ mod recorder;
 mod render;
 mod runtime;
 mod smooth;
+mod startup;
 mod target;
 
 use std::cell::{Cell, RefCell};

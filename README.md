@@ -8,7 +8,7 @@ The [browser interaction prototype](prototype/README.md) is an experiment, not t
 
 ## Install and first run
 
-Constellation is portable: there is no installer, no registry entry, no AppData fallback and no PATH change.
+Constellation is portable: there is no installer, no AppData fallback and no PATH change. It writes nothing outside its own folder unless you tick **Start with Windows**, which puts a shortcut in your own Startup folder and nothing in the registry.
 
 1. Download the ZIP from [Releases](https://github.com/LeonardoACMJ/Constellation/releases) and extract the whole folder somewhere writable.
 2. Run `constellation.exe`. It lives in the notification area and shows no permanent window.

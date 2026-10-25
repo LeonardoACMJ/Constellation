@@ -49,6 +49,7 @@ const CWD: i32 = 206;
 const PARENT: i32 = 207;
 const UNIVERSE: i32 = 219;
 const VISIBLE: i32 = 220;
+const STARTUP: i32 = 221;
 const ADD_UNIVERSE: i32 = 307;
 const APPLY: i32 = 301;
 const ADD_STAR: i32 = 302;
@@ -499,6 +500,24 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             );
         }
         control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 490, 484, 73, 28, 0);
+        control(
+            hwnd,
+            "BUTTON",
+            "Start with Windows",
+            STARTUP,
+            20,
+            790,
+            260,
+            28,
+            WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+        );
+        send(
+            hwnd,
+            STARTUP,
+            BM_SETCHECK,
+            usize::from(super::startup::enabled()),
+            0,
+        );
         control(hwnd, "BUTTON", "Undo", UNDO, 20, 610, 120, 32, 0);
         control(hwnd, "BUTTON", "Redo", REDO, 150, 610, 130, 32, 0);
         control(hwnd, "BUTTON", "Import…", IMPORT, 20, 652, 120, 32, 0);
@@ -2049,6 +2068,20 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 IMPORT => e.transfer(false),
                 EXPORT => e.transfer(true),
                 APPLY => e.apply(),
+                STARTUP => (|| {
+                    let on = send(hwnd, STARTUP, BM_GETCHECK, 0, 0) == 1;
+                    super::startup::set(on)?;
+                    // Report what Windows actually has, not what was clicked.
+                    let now = super::startup::enabled();
+                    send(hwnd, STARTUP, BM_SETCHECK, usize::from(now), 0);
+                    e.status = if now {
+                        "Constellation will start with Windows. The shortcut is in your Startup folder."
+                    } else {
+                        "Constellation will no longer start with Windows."
+                    }
+                    .into();
+                    Ok(())
+                })(),
                 ADD_STAR => e.add(false),
                 ADD_FOLDER => e.add(true),
                 ADD_UNIVERSE => (|| {
