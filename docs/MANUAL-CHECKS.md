@@ -1,15 +1,16 @@
-# Constellation 0.1.36 — manual checks
+# Constellation 0.1.37 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.36**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.37**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
 | Check | Steps | Expected |
 |---|---|---|
+| Configuration opening size | Open Configure through the tray, a Settings Star or --configure. Restore its size, then open it again through another route. | Opens maximized; reuses and maximizes the existing editor, with its draft preserved. Restore and resize remain available. |
 | Universe preview refresh | Switch between two universes with different content, then back, without Save or changing spacing. | The right-hand preview and advisory warnings immediately follow the selected universe; switching does not modify the draft or require a reload. |
 | Universes and entry points | Create a second universe; in Shortcut profiles choose Opens universe and a nested Constellation under Opens at. Save/reopen and invoke each binding. Try deleting a referenced universe. | Independent trees persist, each binding opens its chosen entry without copying items, and referenced/last universes cannot be deleted. |
 | Profile visibility | Show a sibling only in one of two profiles of the same universe; Save and compare both radials. Include a branch whose children are all filtered out. | Correct names/targets remain paired with sectors, hidden parents hide descendants, filtered-empty populated branches disappear, and deliberately empty branches remain. |

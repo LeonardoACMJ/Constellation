@@ -276,7 +276,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         // Raising the existing window beats refusing: the user asked to edit.
         let existing = FindWindowW(wide("Constellation.Config").as_ptr(), null());
         if !existing.is_null() {
-            ShowWindow(existing, SW_RESTORE);
+            ShowWindow(existing, SW_SHOWMAXIMIZED);
             SetForegroundWindow(existing);
             return Ok(());
         }
@@ -705,7 +705,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         e.resize_view();
         DragAcceptFiles(hwnd, 1);
         drop(startup_guard);
-        ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, SW_SHOWMAXIMIZED);
         UpdateWindow(hwnd);
         super::focus_window(hwnd);
         let mut msg: MSG = zeroed();

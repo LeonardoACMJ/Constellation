@@ -20,6 +20,8 @@ The sample tree includes Calculator, Notepad, the portable folder, a GitHub URL,
 
 ## Configure
 
+The configuration window opens maximized. Opening it again brings the existing window forward and maximizes it; you can still restore or resize it normally.
+
 Every item, including root and nested Constellations, has a **Note** field below Name. Use it for short prerequisites or consequences (for example, “needs ssh-agent running” or “deletes the source”). The live counter caps typing/paste at 140 Unicode characters; pasted line breaks become spaces. **Apply item → Save** persists it. Notes participate in undo/redo and configuration import/export; clearing a note removes its JSON field.
 
 Notes are internal configuration metadata. They appear only in the configuration editor and config.json, never in the radial or full fan-out preview. They do not add panels/tooltips or replace missing-target advice.
