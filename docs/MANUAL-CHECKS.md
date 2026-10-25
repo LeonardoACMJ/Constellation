@@ -1,10 +1,10 @@
-# Constellation 0.1.30 — manual checks
+# Constellation 0.1.31 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.30**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.31**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
@@ -12,6 +12,7 @@ Start `constellation.exe`; right-click its tray icon → **Configure / Visualize
 |---|---|---|
 | Universes and entry points | Create a second universe; in Shortcut profiles choose Opens universe and a nested Constellation under Opens at. Save/reopen and invoke each binding. Try deleting a referenced universe. | Independent trees persist, each binding opens its chosen entry without copying items, and referenced/last universes cannot be deleted. |
 | Profile visibility | Show a sibling only in one of two profiles of the same universe; Save and compare both radials. Include a branch whose children are all filtered out. | Correct names/targets remain paired with sectors, hidden parents hide descendants, filtered-empty populated branches disappear, and deliberately empty branches remain. |
+| Start menu | Toggle Add to Start menu below Start with Windows. Find Constellation in the Start menu; open it with the tray app running and stopped. Toggle off. | Creates/removes only the user Start menu link, immediately without Save or changes to Startup. Existing resident opens Configure; otherwise one tray instance starts. Windows search indexing may take time. |
 | Start with Windows | Scroll down the left configuration column, below Import/Export, and toggle Start with Windows manually. | Applies immediately without Save; the current user's Startup shortcut appears/disappears. This is automatic login startup, not a Start menu shortcut. After moving the portable folder, turn it off and on to update its path. |
 | Smooth radial appearance | Open over light and dark windows; inspect arcs, diagonals, text and symbols. Repeat at available display scaling settings. | Smooth transparent edges without a black/white matte. Subtle darker blue-shifted outlines and tiny white stars; decorations remain stationary while hovering. Geometry and selection remain unchanged. |
 | Item icons | Select a program/shortcut/script/folder and use Icon: Automatic → Apply item → Save. Open the radial and preview. Then use Image… to choose a PNG/ICO; Apply item → Save. Try Symbol, switch items, reopen Configure, and test undo/redo. | Automatic Windows icons load without blocking navigation. Custom image persists and is stored inside data/icons. Symbol restores the Star/Constellation symbol. Missing/bad images fall back safely; custom failures have a small inline warning. Existing selection geometry, dots/chimes and list symbols remain usable. |

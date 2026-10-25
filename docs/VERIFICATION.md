@@ -2,25 +2,27 @@
 
 Windows native preview · current documentation review: 2026-10-25. Earlier build records used Rust 1.96 and the existing portable MSVC/Windows SDK in `E:\_DevTools`.
 
-## Current status — 0.1.30, reviewed 2026-10-25
+## Current status — 0.1.31, reviewed 2026-10-25
 
-This review inspected source, documentation, Git state and the installed binary; it did not run tests or drive the desktop. The installed executable matches the local release build. Older measurements below belong to their recorded revisions and do not certify 0.1.30.
+This review inspected source, documentation, Git state and the installed binary; it did not run tests or drive the desktop. The installed executable matches the local release build. Older measurements below belong to their recorded revisions and do not certify 0.1.31.
 
 | Area | Implemented now | Evidence and remaining review |
 |---|---|---|
 | Universes | Independent trees, global node IDs, editor selector/create/rename/delete guards | Source and named core regressions exist; manually verify save/reopen and multiple real bindings. |
 | Entry and visibility | Per-profile universe/nested entry, per-node Visible in; shared runtime/preview filtering | Regressions include `single_universe_round_trips_in_the_legacy_root_shape` and `hiding_a_child_does_not_shift_sectors_onto_the_wrong_item`. Their presence is not a new test run. |
 | Feedback and icons | Four synthesized sounds plus None, white-dot option, antialiased radial, Automatic/Symbol/Custom/From Software icons, configuration-only notes | Earlier evidence below; new subjective listening/appearance checks are manual. |
-| Startup and packaging | Opt-in Startup-folder link, GPL-3.0-or-later LICENSE in package, one configuration window | Startup COM fixture targets a temporary link, not the real Startup folder. No Start menu application-shortcut button. No installer. |
+| Startup and packaging | Opt-in Startup-folder link, GPL-3.0-or-later LICENSE in package, one configuration window | Startup COM fixture targets a temporary link, not the real Startup folder. Independent Add to Start menu checkbox added in 0.1.31. No installer. |
 | Verification inherited from handoff | Handoff reports 90 passing tests and clean formatting | Reported evidence, not rerun in this documentation review. Follow the no-window skill before any future process-launch test. |
 
 **Known intermittent editor issue:** same-name parent/child selection/save failure was reported but not reproduced consistently. Duplicate names are covered by `an_item_may_share_its_parents_name`; an invalid edit can restore the prior selection and report an error in the bottom status bar. An emptied parent combo is a hypothesis, not a confirmed cause. User decision: wait for reproduction before investigating further.
 
 **Remaining implementation:** editable themes/palettes and per-item colors; optional larger background artwork and program-specific action adapters are proposals. Linux desktop integration and an automatic updater do not exist. Code signing remains future distribution work. The installer is deliberately excluded.
 
+**0.1.31 verification:** local compile checks and seven device-free layout checks passed. A native COM fixture created two actual links under target/, verified that the menu link carries its own launch argument, and removed it without changing the Startup fixture; the real Startup and Programs folders were not modified. No local UI/input automation, application launches through those links, or audio playback was used. The Start menu launch flow and Windows indexing remain manual checks in MANUAL-CHECKS.md.
+
 ## Historical implementation and verification records
 
-The records below retain their original version and test scope. References to a build being current or left running apply to that historical session, not the installed 0.1.30.
+The records below retain their original version and test scope. References to a build being current or left running apply to that historical session, not the installed 0.1.31.
 
 **Interactive script input 0.1.25:** Sleep in X uses `set /p` and `timeout`, while the launcher supplied NUL stdin. On EOF its empty-input branch can repeatedly clear and repaint the prompt. This cause was identified by source inspection; the real suspension script was never executed. Script runners now use CreateProcessW with CREATE_NEW_CONSOLE, no STARTF_USESTDHANDLES and no inherited handles, so Windows supplies real console input/output independently of the GUI resident. Arguments, batch metacharacter rejection, working directories and PowerShell policy remain intact. No input hooks, focus forcing or process-wide console attachment were added. Native harmless console regressions run remotely only. Windows CI confirmed real stdin/stdout/stderr console handles, injected input into that isolated console, and read `17` through a batch `set /p` under a path with spaces and parentheses. Existing batch/PowerShell arguments, working-directory, shortcut and native UI regressions also passed; Linux core tests passed. Local checks ran only device-free tests and release/package/icon validation.
 
@@ -139,11 +141,11 @@ Local generated evidence is under `.local/native-smoke`, `.local/idle-check`, `.
 - Program, URL, folder, shortcut, and script targets using real user configurations. Automated launches cover controlled programs, Python/batch/PowerShell scripts, and a generated Windows shortcut; URL/folder routing is checked without opening user handlers.
 - Direct portable-folder write behavior under additional policies/filesystems. Checks cover relocation, foreign working directory, redirected alternate-storage sentinels, malformed data, and a real NTFS write denial. Sentinel checks detect writes to the tested environment paths; they are not a system-wide filesystem trace.
 
-## Current limits — reviewed for 0.1.30
+## Current limits — reviewed for 0.1.31
 
 - Supported bindings are documented in the user guide. Modifier+mouse combinations and primary-button invocation are not included.
 - Extremely dense full previews still incur native drawing cost (about half a second for 10,000 sectors in this sample); warnings do not change the saved geometry or remove targets.
 - Themes, editable colors, larger background images and compatible-program action adapters remain future work in [the personalization study](PERSONALIZATION-STUDY.md). Per-item automatic/custom/From Software icons are implemented.
 - The configuration window uses styled native controls. Updated scrolling, cached preview rendering, small-window reachability, mixed-DPI behavior, contrast and keyboard focus require manual review in this revision.
 - Script runners must already be installed. Batch metacharacters are rejected to avoid unintended shell interpretation; a shortcut wrapper can handle advanced cases.
-- No installer is planned. Start with Windows is implemented as an explicit opt-in Startup link; a Start menu application-shortcut button, automatic updater and Linux desktop adapter are not implemented.
+- No installer is planned. Start with Windows is implemented as an explicit opt-in Startup link; automatic updater and Linux desktop adapter are not implemented.

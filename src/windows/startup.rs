@@ -1,4 +1,4 @@
-//! Opt-in "start with Windows", as a shortcut in the user's own Startup folder.
+//! Independent opt-in shortcuts in the user Startup and Start menu Programs folders.
 //!
 //! A file the user can see, move and delete suits a portable app better than a
 //! registry value they cannot; it also appears in Task Manager's Startup tab,
@@ -18,7 +18,7 @@ use windows_sys::Win32::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
         CoTaskMemFree, CoUninitialize,
     },
-    UI::Shell::{FOLDERID_Startup, SHGetKnownFolderPath, ShellLink},
+    UI::Shell::{FOLDERID_Programs, FOLDERID_Startup, SHGetKnownFolderPath, ShellLink},
 };
 use windows_sys::core::{GUID, HRESULT, PCWSTR};
 
@@ -41,7 +41,7 @@ struct ShellLinkVtbl {
     get_working_directory: Unused,
     set_working_directory: unsafe extern "system" fn(*mut Link, PCWSTR) -> HRESULT,
     get_arguments: Unused,
-    set_arguments: Unused,
+    set_arguments: unsafe extern "system" fn(*mut Link, PCWSTR) -> HRESULT,
     get_hotkey: Unused,
     set_hotkey: Unused,
     get_show_cmd: Unused,
@@ -79,9 +79,17 @@ use std::ffi::c_void;
 
 /// Where the shortcut lives, or None when Windows will not name the folder.
 pub fn shortcut() -> Option<PathBuf> {
+    shortcut_in(&FOLDERID_Startup)
+}
+
+pub fn start_menu_shortcut() -> Option<PathBuf> {
+    shortcut_in(&FOLDERID_Programs)
+}
+
+fn shortcut_in(folder_id: &GUID) -> Option<PathBuf> {
     unsafe {
         let mut raw = std::ptr::null_mut();
-        if SHGetKnownFolderPath(&FOLDERID_Startup, 0, std::ptr::null_mut(), &mut raw) != S_OK {
+        if SHGetKnownFolderPath(folder_id, 0, std::ptr::null_mut(), &mut raw) != S_OK {
             return None;
         }
         let mut len = 0;
@@ -98,27 +106,46 @@ pub fn enabled() -> bool {
     shortcut().is_some_and(|p| p.is_file())
 }
 
+pub fn start_menu_enabled() -> bool {
+    start_menu_shortcut().is_some_and(|p| p.is_file())
+}
+
+pub fn set_start_menu(on: bool) -> Result<(), String> {
+    let path =
+        start_menu_shortcut().ok_or("Windows did not provide a Start menu Programs folder")?;
+    set_at(&path, on, "--start-menu")
+}
+
 /// Removing is a file deletion; creating needs COM.
 pub fn set(on: bool) -> Result<(), String> {
     let path = shortcut().ok_or("Windows did not provide a Startup folder")?;
+    set_at(&path, on, "")
+}
+
+fn set_at(path: &Path, on: bool, args: &str) -> Result<(), String> {
     if !on {
-        return match std::fs::remove_file(&path) {
+        return match std::fs::remove_file(path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                Err(format!("Cannot remove the Startup shortcut: {e}"))
+                Err(format!("Cannot remove {}: {e}", path.display()))
             }
             _ => Ok(()),
         };
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let folder = exe.parent().ok_or("The executable has no folder")?;
-    unsafe { write(&path, &exe, folder) }
+    unsafe { write(path, &exe, folder, args) }
 }
 
-unsafe fn write(link_path: &Path, exe: &Path, folder: &Path) -> Result<(), String> {
+unsafe fn write(link_path: &Path, exe: &Path, folder: &Path, args: &str) -> Result<(), String> {
     unsafe {
         // The editor is a separate process that uses COM nowhere else, so it
         // initialises and tears down around this one call.
         let started = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        if started < 0 {
+            return Err(format!(
+                "Cannot initialize shortcut support (HRESULT {started:#x})"
+            ));
+        }
         let mut link: *mut Link = std::ptr::null_mut();
         let created = CoCreateInstance(
             &ShellLink,
@@ -134,6 +161,9 @@ unsafe fn write(link_path: &Path, exe: &Path, folder: &Path) -> Result<(), Strin
             let v = &*(*link).vtbl;
             if (v.set_path)(link, wide(&*exe.to_string_lossy()).as_ptr()) != S_OK {
                 return Err("Cannot point the shortcut at this executable".into());
+            }
+            if (v.set_arguments)(link, wide(args).as_ptr()) != S_OK {
+                return Err("Cannot set shortcut arguments".into());
             }
             // A relative target resolves from the working directory, so the
             // shortcut must start the app in its own folder.
@@ -160,7 +190,7 @@ unsafe fn write(link_path: &Path, exe: &Path, folder: &Path) -> Result<(), Strin
         if !link.is_null() {
             ((*(*link).vtbl).release)(link);
         }
-        if started == S_OK {
+        if started >= 0 {
             CoUninitialize();
         }
         result
@@ -170,6 +200,42 @@ unsafe fn write(link_path: &Path, exe: &Path, folder: &Path) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn start_menu_and_startup_shortcuts_are_independent() {
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("integration-links-{}", std::process::id()));
+        let startup = dir.join("Startup").join(NAME);
+        let menu = dir.join("Programs").join(NAME);
+        std::fs::create_dir_all(startup.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(menu.parent().unwrap()).unwrap();
+        set_at(&startup, true, "").unwrap();
+        let startup_bytes = std::fs::read(&startup).unwrap();
+        set_at(&menu, true, "--start-menu").unwrap();
+        assert_eq!(&std::fs::read(&menu).unwrap()[..4], &[0x4c, 0, 0, 0]);
+        let menu_bytes = std::fs::read(&menu).unwrap();
+        let flags = u32::from_le_bytes(menu_bytes[20..24].try_into().unwrap());
+        assert_ne!(flags & 0x20, 0, "Start menu link carries its launch mode");
+        let startup_flags = u32::from_le_bytes(startup_bytes[20..24].try_into().unwrap());
+        assert_eq!(
+            startup_flags & 0x20,
+            0,
+            "Startup has no interactive launch argument"
+        );
+        assert_eq!(std::fs::read(&startup).unwrap(), startup_bytes);
+        set_at(&menu, false, "--start-menu").unwrap();
+        assert!(!menu.exists());
+        assert_eq!(std::fs::read(&startup).unwrap(), startup_bytes);
+        set_at(&menu, false, "--start-menu").unwrap(); // Already absent is a successful disable.
+        set_at(&startup, false, "").unwrap();
+        assert!(!startup.exists());
+        if let (Some(actual_startup), Some(actual_menu)) = (shortcut(), start_menu_shortcut()) {
+            assert_ne!(actual_startup, actual_menu);
+            assert_eq!(actual_menu.file_name().unwrap(), NAME);
+        }
+    }
+
     /// Exercises the real vtables against a throwaway path. A wrong slot index
     /// would call another method here, in a test, rather than inside the
     /// resident app — and the user's own Startup folder is never touched.
@@ -180,7 +246,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let link = dir.join(NAME);
         let exe = std::env::current_exe().unwrap();
-        unsafe { write(&link, &exe, exe.parent().unwrap()) }.unwrap();
+        unsafe { write(&link, &exe, exe.parent().unwrap(), "") }.unwrap();
         let bytes = std::fs::read(&link).expect("the shortcut exists");
         // Every .lnk opens with a 76-byte header whose first field is its size.
         assert_eq!(bytes[0..4], [0x4c, 0, 0, 0], "not a shell link header");

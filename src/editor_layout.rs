@@ -8,6 +8,20 @@ pub struct Rect {
     pub w: i32,
     pub h: i32,
 }
+/// Shared with the native editor and layout checks.
+pub const STARTUP_CONTROL: Rect = Rect {
+    x: 20,
+    y: 766,
+    w: 260,
+    h: 28,
+};
+pub const START_MENU_CONTROL: Rect = Rect {
+    x: 20,
+    y: 802,
+    w: 260,
+    h: 28,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub page_width: i32,

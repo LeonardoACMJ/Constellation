@@ -50,6 +50,7 @@ const PARENT: i32 = 207;
 const UNIVERSE: i32 = 219;
 const VISIBLE: i32 = 220;
 const STARTUP: i32 = 221;
+const START_MENU: i32 = 222;
 const ADD_UNIVERSE: i32 = 307;
 const APPLY: i32 = 301;
 const ADD_STAR: i32 = 302;
@@ -500,24 +501,33 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             );
         }
         control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 490, 484, 73, 28, 0);
-        control(
-            hwnd,
-            "BUTTON",
-            "Start with Windows",
-            STARTUP,
-            20,
-            790,
-            260,
-            28,
-            WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-        );
-        send(
-            hwnd,
-            STARTUP,
-            BM_SETCHECK,
-            usize::from(super::startup::enabled()),
-            0,
-        );
+        for (id, title, rect, checked) in [
+            (
+                STARTUP,
+                "Start with Windows",
+                crate::editor_layout::STARTUP_CONTROL,
+                super::startup::enabled(),
+            ),
+            (
+                START_MENU,
+                "Add to Start menu",
+                crate::editor_layout::START_MENU_CONTROL,
+                super::startup::start_menu_enabled(),
+            ),
+        ] {
+            control(
+                hwnd,
+                "BUTTON",
+                title,
+                id,
+                rect.x,
+                rect.y,
+                rect.w,
+                rect.h,
+                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+            );
+            send(hwnd, id, BM_SETCHECK, usize::from(checked), 0);
+        }
         control(hwnd, "BUTTON", "Undo", UNDO, 20, 610, 120, 32, 0);
         control(hwnd, "BUTTON", "Redo", REDO, 150, 610, 130, 32, 0);
         control(hwnd, "BUTTON", "Import…", IMPORT, 20, 652, 120, 32, 0);
@@ -530,7 +540,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             20,
             702,
             260,
-            75,
+            56,
             0,
         );
         control(hwnd, "BUTTON", "Apply item", APPLY, 305, 585, 150, 32, 0);
@@ -2068,16 +2078,26 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 IMPORT => e.transfer(false),
                 EXPORT => e.transfer(true),
                 APPLY => e.apply(),
-                STARTUP => (|| {
-                    let on = send(hwnd, STARTUP, BM_GETCHECK, 0, 0) == 1;
-                    super::startup::set(on)?;
-                    // Report what Windows actually has, not what was clicked.
-                    let now = super::startup::enabled();
-                    send(hwnd, STARTUP, BM_SETCHECK, usize::from(now), 0);
-                    e.status = if now {
-                        "Constellation will start with Windows. The shortcut is in your Startup folder."
+                STARTUP | START_MENU => (|| {
+                    let on = send(hwnd, id, BM_GETCHECK, 0, 0) == 1;
+                    let result = if id == STARTUP {
+                        super::startup::set(on)
                     } else {
-                        "Constellation will no longer start with Windows."
+                        super::startup::set_start_menu(on)
+                    };
+                    // Re-read even on failure so the checkbox reflects the actual file.
+                    let now = if id == STARTUP {
+                        super::startup::enabled()
+                    } else {
+                        super::startup::start_menu_enabled()
+                    };
+                    send(hwnd, id, BM_SETCHECK, usize::from(now), 0);
+                    result?;
+                    e.status = match (id == STARTUP, now) {
+                        (true, true) => "Constellation will start with Windows.",
+                        (true, false) => "Constellation will no longer start with Windows.",
+                        (false, true) => "Constellation was added to your Start menu.",
+                        (false, false) => "Constellation was removed from your Start menu.",
                     }
                     .into();
                     Ok(())

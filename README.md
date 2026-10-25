@@ -8,16 +8,16 @@ The [browser interaction prototype](prototype/README.md) is an experiment, not t
 
 ## Install and first run
 
-Constellation is portable: there is no installer, no AppData fallback and no PATH change. App-managed data stays in its own folder. Explicit configuration exports go to the destination you choose; **Start with Windows** optionally puts a shortcut in your own Startup folder and writes no registry setting.
+Constellation is portable: there is no installer, no AppData fallback and no PATH change. App-managed data stays in its own folder. Explicit configuration exports go to the destination you choose; **Start with Windows** and **Add to Start menu** optionally create user shortcuts and write no registry settings.
 
 1. Download the ZIP from [Releases](https://github.com/LeonardoACMJ/Constellation/releases) and extract the whole folder somewhere writable.
 2. Run `constellation.exe`. It lives in the notification area and shows no permanent window.
 3. Press **Ctrl+Q**. The radial opens centred on the monitor under the cursor.
 4. Open **Settings** in the sample menu, or right-click the tray icon, to edit your own items.
 
-Configuration, icons and logs stay beside the executable, in `data`; explicit exports and the optional Startup link are the exceptions described above. Move the folder and it keeps working; its relative paths resolve from the executable, not from where it was launched. To update, close the app, replace `constellation.exe` and keep `data`.
+Configuration, icons and logs stay beside the executable, in `data`; explicit exports and the optional Windows shortcuts are the exceptions described above. Move the folder and it keeps working; its relative paths resolve from the executable, not from where it was launched. To update, close the app, replace `constellation.exe` and keep `data`.
 
-**Start with Windows** is a checkbox in Configure, below Import/Export in the left column; scroll down if needed. It enables automatic startup when you sign in, immediately, without Save. There is no Add to Start menu button. After moving the portable folder, turn the checkbox off and on to update the link.
+**Start with Windows** is a checkbox in Configure, below Import/Export in the left column; scroll down if needed. It enables automatic startup when you sign in, immediately, without Save. **Add to Start menu**, just below it, independently creates/removes a Constellation entry in your Start menu. Opening that entry starts the tray app, or opens Configure if it is already running. After moving the portable folder, turn each enabled checkbox off and on to update its link.
 
 ## Using it
 

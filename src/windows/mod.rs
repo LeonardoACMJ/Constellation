@@ -154,7 +154,17 @@ pub fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         return Ok(());
     }
-    if args.iter().any(|a| a == "--configure") {
+    // A Start menu launch opens settings when the resident is already available.
+    // Otherwise it starts the tray app just like launching the portable executable.
+    let menu_with_resident = args.iter().any(|a| a == "--start-menu")
+        && unsafe {
+            !FindWindowW(
+                wide("Constellation.Native.Radial").as_ptr(),
+                std::ptr::null(),
+            )
+            .is_null()
+        };
+    if args.iter().any(|a| a == "--configure") || menu_with_resident {
         editor::run(root)
     } else {
         runtime::run(root, args.iter().any(|a| a == "--smoke-test"))

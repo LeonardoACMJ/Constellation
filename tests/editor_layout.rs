@@ -166,6 +166,32 @@ fn the_universe_row_stays_above_a_growing_tree() {
     }
 }
 
+#[test]
+fn integration_controls_clear_help_text_and_stay_inside_sidebar() {
+    use constellation::editor_layout::{START_MENU_CONTROL, STARTUP_CONTROL};
+    for (width, height) in [(1050, 996), (2451, 1080), (3840, 2160)] {
+        let layout = Layout::new(width, height, 17, 17);
+        let startup = layout.control(STARTUP_CONTROL, 221);
+        let menu = layout.control(START_MENU_CONTROL, 222);
+        let help = layout.control(
+            Rect {
+                x: 20,
+                y: 702,
+                w: 260,
+                h: 56,
+            },
+            0,
+        );
+        let panel = layout.panels()[0];
+        assert!(help.y + help.h < startup.y);
+        assert!(startup.y + startup.h < menu.y);
+        assert!(menu.y + menu.h <= panel.y + panel.h);
+        assert!(menu.x + menu.w <= panel.x + panel.w);
+        let (_, max_scroll) = layout.scroll(i32::MAX, i32::MAX);
+        assert!(menu.y + menu.h - max_scroll <= layout.page_height);
+    }
+}
+
 /// Name/Kind and Parent/Icon share a row each. They must not overlap, must stay
 /// inside the item column, and must leave the visibility list clear of Apply.
 #[test]
