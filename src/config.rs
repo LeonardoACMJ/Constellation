@@ -8,15 +8,76 @@ pub fn note_break(c: char) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "ConfigInput", into = "ConfigOutput")]
 pub struct Config {
     pub version: u32,
-    pub root: Node,
+    /// Independent trees. A shortcut profile opens exactly one of them, so node
+    /// IDs stay unique across all of them and `find` never needs a tree argument.
+    pub universes: Vec<Node>,
     pub profiles: Vec<Profile>,
-    #[serde(default)]
     pub layout: Layout,
-    #[serde(default)]
     pub sound: Sound,
+}
+
+/// Reads both shapes: `root` (every version through 0.1.25) and `universes`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfigInput {
+    version: u32,
+    #[serde(default)]
+    root: Option<Node>,
+    #[serde(default)]
+    universes: Option<Vec<Node>>,
+    profiles: Vec<Profile>,
+    #[serde(default)]
+    layout: Layout,
+    #[serde(default)]
+    sound: Sound,
+}
+impl From<ConfigInput> for Config {
+    fn from(c: ConfigInput) -> Self {
+        // `universes` wins if a hand-edited file carries both; an empty list is
+        // left for validate() to reject with a readable message.
+        let universes = c
+            .universes
+            .or_else(|| c.root.map(|r| vec![r]))
+            .unwrap_or_default();
+        Self {
+            version: c.version,
+            universes,
+            profiles: c.profiles,
+            layout: c.layout,
+            sound: c.sound,
+        }
+    }
+}
+
+/// Writes a single-universe configuration back in the original `root` shape, so a
+/// file only changes form once a second universe actually exists.
+#[derive(Serialize)]
+struct ConfigOutput {
+    version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root: Option<Node>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    universes: Option<Vec<Node>>,
+    profiles: Vec<Profile>,
+    layout: Layout,
+    sound: Sound,
+}
+impl From<Config> for ConfigOutput {
+    fn from(c: Config) -> Self {
+        let mut universes = c.universes;
+        let single = universes.len() == 1;
+        Self {
+            version: c.version,
+            root: single.then(|| universes.remove(0)),
+            universes: (!single).then_some(universes),
+            profiles: c.profiles,
+            layout: c.layout,
+            sound: c.sound,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +156,17 @@ pub struct Profile {
     pub cursor_end: CursorEnd,
     pub directional: bool,
     pub dot_cursor: bool,
+    /// Universe this binding opens. 0 means the first one, so a configuration
+    /// that never used universes keeps its original profile shape on disk.
+    #[serde(default, skip_serializing_if = "is_first_universe")]
+    pub universe: u64,
+    /// Open at this node instead of at the universe root. The node must be a
+    /// constellation inside `universe`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<u64>,
+}
+fn is_first_universe(id: &u64) -> bool {
+    *id == 0
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,6 +187,10 @@ struct ProfileInput {
     directional: bool,
     #[serde(default = "yes")]
     dot_cursor: bool,
+    #[serde(default)]
+    universe: u64,
+    #[serde(default)]
+    root_id: Option<u64>,
 }
 impl From<ProfileInput> for Profile {
     fn from(p: ProfileInput) -> Self {
@@ -131,6 +207,8 @@ impl From<ProfileInput> for Profile {
             }),
             directional: p.directional,
             dot_cursor: p.dot_cursor,
+            universe: p.universe,
+            root_id: p.root_id,
         }
     }
 }
@@ -274,8 +352,11 @@ impl Config {
         if self.version != 1 {
             return Err("Unsupported configuration version".into());
         }
-        if self.root.children.is_none() {
-            return Err("Root must be a constellation".into());
+        if self.universes.is_empty() {
+            return Err("A configuration needs at least one universe".into());
+        }
+        if self.universes.iter().any(|u| u.children.is_none()) {
+            return Err("Every universe root must be a constellation".into());
         }
         let mut ids = HashSet::new();
         fn walk(n: &Node, ids: &mut HashSet<u64>, depth: usize) -> Result<(), String> {
@@ -331,7 +412,11 @@ impl Config {
             }
             Ok(())
         }
-        walk(&self.root, &mut ids, 0)?;
+        // One ID space across every universe: that is what lets find() and the
+        // navigation path stay free of a tree argument.
+        for universe in &self.universes {
+            walk(universe, &mut ids, 0)?;
+        }
         let l = self.layout;
         if ![l.radius, l.distance, l.spread, l.gap, self.sound.volume]
             .iter()
@@ -363,8 +448,46 @@ impl Config {
             if p.name.trim().is_empty() {
                 return Err("Every shortcut profile needs a name".into());
             }
+            let Some(universe) = self.universe_of(p) else {
+                return Err(format!("{} opens a universe that does not exist", p.name));
+            };
+            // An entry point has to be a constellation of that same universe:
+            // a Star has nothing to fan out, and a node borrowed from another
+            // universe would open a tree the profile does not own.
+            if let Some(entry) = p.root_id {
+                match universe.find(entry) {
+                    None => {
+                        return Err(format!("{} opens a node outside its universe", p.name));
+                    }
+                    Some(n) if n.children.is_none() => {
+                        return Err(format!("{} must open a constellation, not a Star", p.name));
+                    }
+                    Some(_) => {}
+                }
+            }
         }
         Ok(())
+    }
+    /// The universe a profile opens. `universe == 0` means the first one, which
+    /// keeps every pre-universe configuration working untouched.
+    pub fn universe_of(&self, p: &Profile) -> Option<&Node> {
+        if p.universe == 0 {
+            return self.universes.first();
+        }
+        self.universes.iter().find(|u| u.id == p.universe)
+    }
+    /// Where this profile's radial opens: its entry node, or the universe root.
+    pub fn entry_of(&self, p: &Profile) -> Option<&Node> {
+        let universe = self.universe_of(p)?;
+        match p.root_id {
+            Some(id) => universe.find(id),
+            None => Some(universe),
+        }
+    }
+    /// Highest node ID anywhere. New nodes take the next one so an ID is never
+    /// reused while a copy of it still exists in another universe.
+    pub fn max_node_id(&self) -> u64 {
+        self.universes.iter().map(Node::max_id).max().unwrap_or(0)
     }
     /// Upgrade legacy profiles without IDs. Explicit IDs are never rewritten.
     pub fn assign_profile_ids(&mut self) -> Result<(), String> {
@@ -378,7 +501,7 @@ impl Config {
         Ok(())
     }
     pub fn find(&self, id: u64) -> Option<&Node> {
-        self.root.find(id)
+        self.universes.iter().find_map(|u| u.find(id))
     }
 }
 impl Node {
@@ -419,7 +542,7 @@ impl Default for Config {
         }
         Self {
             version: 1,
-            root: Node {
+            universes: vec![Node {
                 note: String::new(),
                 icon: Default::default(),
                 id: 1,
@@ -482,7 +605,7 @@ impl Default for Config {
                         },
                     ),
                 ]),
-            },
+            }],
             profiles: vec![Profile {
                 id: 1,
                 name: "Default".into(),
@@ -492,6 +615,8 @@ impl Default for Config {
                 cursor_end: CursorEnd::Restore,
                 directional: true,
                 dot_cursor: true,
+                universe: 0,
+                root_id: None,
             }],
             layout: Layout::default(),
             sound: Sound::default(),

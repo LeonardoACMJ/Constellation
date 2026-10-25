@@ -120,6 +120,7 @@ unsafe fn symbol(dc: HDC, p: Point, folder: bool, scale: f64) {
 pub unsafe fn draw(
     dc: HDC,
     c: &Config,
+    start: &crate::config::Node,
     sectors: &[Sector],
     path: &[u64],
     hover: Option<u64>,
@@ -130,6 +131,7 @@ pub unsafe fn draw(
     draw_with_icons(
         dc,
         c,
+        start,
         sectors,
         path,
         hover,
@@ -139,9 +141,12 @@ pub unsafe fn draw(
         &super::item_icons::Images::new(),
     );
 }
+/// `start` is the node the radial opened at: a universe root, or a shortcut
+/// profile's own entry node.
 pub unsafe fn draw_with_icons(
     dc: HDC,
     c: &Config,
+    start: &crate::config::Node,
     sectors: &[Sector],
     path: &[u64],
     hover: Option<u64>,
@@ -169,7 +174,7 @@ pub unsafe fn draw_with_icons(
     }
     let mut nodes = std::collections::HashMap::new();
     let mut parents = std::collections::HashMap::new();
-    index(&c.root, &mut nodes, &mut parents);
+    index(start, &mut nodes, &mut parents);
     let brushes = [
         rgb(28, 43, 59),
         rgb(43, 38, 67),
@@ -275,7 +280,7 @@ pub unsafe fn draw_with_icons(
         dot(dc, p, 6, rgb(76, 98, 142));
         dot(dc, p, 3, rgb(235, 250, 255));
     }
-    let current = path.last().and_then(|id| c.find(*id)).unwrap_or(&c.root);
+    let current = path.last().and_then(|id| c.find(*id)).unwrap_or(start);
     if !preview
         && current
             .children
@@ -294,7 +299,7 @@ pub unsafe fn draw_with_icons(
     }
     let radius = (c.layout.radius * 0.27 * scale).max(3.) as i32;
     dot(dc, origin, radius, rgb(18, 25, 39));
-    if let Some(image) = images.get(&c.root.id) {
+    if let Some(image) = images.get(&start.id) {
         let size = (24. * scale).round().max(1.) as i32;
         super::item_icons::draw_gdi(
             dc,

@@ -81,6 +81,7 @@ mod render_tests {
             surface
                 .draw_with_icons(
                     &c,
+                    &c.universes[0],
                     &sectors,
                     &path,
                     Some(7),
@@ -120,7 +121,7 @@ mod render_tests {
                     }
                 }
             }
-            annotate(&mut noted.root);
+            annotate(&mut noted.universes[0]);
             let path = [2, 5];
             let sectors = crate::geometry::visible(&plain, &path);
             let origin = Point { x: 450., y: 450. };
@@ -128,11 +129,11 @@ mod render_tests {
             for scale in [1., 1.5] {
                 for hover in [None, Some(2), Some(5), Some(6)] {
                     surface
-                        .draw(&plain, &sectors, &path, hover, origin, scale, false)
+                        .draw(&plain, &plain.universes[0], &sectors, &path, hover, origin, scale, false)
                         .unwrap();
                     let expected = bytes(&surface).to_vec();
                     surface
-                        .draw(&noted, &sectors, &path, hover, origin, scale, false)
+                        .draw(&noted, &noted.universes[0], &sectors, &path, hover, origin, scale, false)
                         .unwrap();
                     assert_eq!(
                         expected,
@@ -223,7 +224,7 @@ mod render_tests {
             let mut surface = Surface::new(800, 800).unwrap();
             let started = std::time::Instant::now();
             surface
-                .draw(&c, &sectors, &path, Some(7), origin, 1.25, false)
+                .draw(&c, &c.universes[0], &sectors, &path, Some(7), origin, 1.25, false)
                 .unwrap();
             let first_ms = started.elapsed().as_secs_f64() * 1000.;
             let first = bytes(&surface).to_vec();
@@ -247,7 +248,7 @@ mod render_tests {
             assert!(transparent > 10000 && partial > 500 && levels.len() > 30);
             let repeat_started = std::time::Instant::now();
             surface
-                .draw(&c, &sectors, &path, Some(7), origin, 1.25, false)
+                .draw(&c, &c.universes[0], &sectors, &path, Some(7), origin, 1.25, false)
                 .unwrap();
             let repeat_ms = repeat_started.elapsed().as_secs_f64() * 1000.;
             assert_eq!(
@@ -282,6 +283,7 @@ mod render_tests {
             super::super::render::draw(
                 legacy.dc,
                 &c,
+                &c.universes[0],
                 &sectors,
                 &path,
                 Some(7),
@@ -320,7 +322,7 @@ mod render_tests {
         unsafe {
             let _engine = Engine::start().unwrap();
             let mut c = Config::default();
-            c.root.children.as_mut().unwrap().truncate(1);
+            c.universes[0].children.as_mut().unwrap().truncate(1);
             c.layout.gap = 0.;
             let sectors = crate::geometry::visible(&c, &[]);
             for scale in [1., 1.5, 2.] {
@@ -331,7 +333,7 @@ mod render_tests {
                 };
                 let mut surface = Surface::new(size, size).unwrap();
                 surface
-                    .draw(&c, &sectors, &[], None, origin, scale, false)
+                    .draw(&c, &c.universes[0], &sectors, &[], None, origin, scale, false)
                     .unwrap();
                 let alpha = |radius: f64| {
                     let x = (origin.x + radius * scale) as usize;
@@ -347,7 +349,7 @@ mod render_tests {
                     "Saved radius must not expand with smoothing"
                 );
                 surface
-                    .draw(&c, &sectors, &[], None, origin, scale, true)
+                    .draw(&c, &c.universes[0], &sectors, &[], None, origin, scale, true)
                     .unwrap();
                 let corner = &bytes(&surface)[..4];
                 assert_eq!(
@@ -356,7 +358,7 @@ mod render_tests {
                     "Custom cursor plane uses minimal nonzero alpha"
                 );
                 surface
-                    .draw(&c, &sectors, &[], None, origin, scale, false)
+                    .draw(&c, &c.universes[0], &sectors, &[], None, origin, scale, false)
                     .unwrap();
                 assert_eq!(
                     &bytes(&surface)[..4],
@@ -477,6 +479,7 @@ impl Surface {
     unsafe fn draw(
         &mut self,
         c: &Config,
+        start: &crate::config::Node,
         sectors: &[Sector],
         path: &[u64],
         hover: Option<u64>,
@@ -486,6 +489,7 @@ impl Surface {
     ) -> Result<(), String> {
         self.draw_with_icons(
             c,
+            start,
             sectors,
             path,
             hover,
@@ -498,6 +502,7 @@ impl Surface {
     unsafe fn draw_with_icons(
         &mut self,
         c: &Config,
+        start: &crate::config::Node,
         sectors: &[Sector],
         path: &[u64],
         hover: Option<u64>,
@@ -548,7 +553,7 @@ impl Surface {
             u32::from(cursor_plane) << 24,
         ))?;
         let mut canvas = Canvas::new(graphics.pointer)?;
-        canvas.scene(c, sectors, path, hover, origin, scale, images)?;
+        canvas.scene(c, start, sectors, path, hover, origin, scale, images)?;
         status(GdipFlush(graphics.pointer, FlushIntentionSync))
     }
 }
@@ -574,6 +579,7 @@ impl Renderer {
         &mut self,
         hwnd: HWND,
         c: &Config,
+        start: &crate::config::Node,
         sectors: &[Sector],
         path: &[u64],
         hover: Option<u64>,
@@ -598,7 +604,7 @@ impl Renderer {
             .icons
             .get_or_insert_with(|| super::item_icons::Cache::new(hwnd, root.to_path_buf()));
         let images = cache.collect(
-            std::iter::once(&c.root).chain(
+            std::iter::once(start).chain(
                 sectors
                     .iter()
                     .filter(|s| {
@@ -611,6 +617,7 @@ impl Renderer {
         let surface = self.surface.as_mut().unwrap();
         surface.draw_with_icons(
             c,
+            start,
             sectors,
             path,
             hover,
@@ -901,6 +908,7 @@ impl Canvas {
     unsafe fn scene(
         &mut self,
         c: &Config,
+        start: &crate::config::Node,
         sectors: &[Sector],
         path: &[u64],
         hover: Option<u64>,
@@ -927,7 +935,7 @@ impl Canvas {
                 }
             }
         }
-        index(&c.root, &mut nodes, &mut parents);
+        index(start, &mut nodes, &mut parents);
         let fills = [
             color(28, 43, 59, 255),
             color(43, 38, 67, 255),
@@ -1037,7 +1045,7 @@ impl Canvas {
             self.circle(point, 6. * scale, color(76, 98, 142, 150))?;
             self.circle(point, 3. * scale, color(235, 250, 255, 255))?;
         }
-        let current = path.last().and_then(|id| c.find(*id)).unwrap_or(&c.root);
+        let current = path.last().and_then(|id| c.find(*id)).unwrap_or(start);
         if current
             .children
             .as_ref()
@@ -1058,7 +1066,7 @@ impl Canvas {
             x: origin.x,
             y: origin.y - 7. * scale,
         };
-        if let Some(image) = images.get(&c.root.id) {
+        if let Some(image) = images.get(&start.id) {
             self.image(center_symbol, image, 24. * scale)?;
         } else {
             self.constellation(center_symbol, scale)?;

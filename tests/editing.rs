@@ -70,10 +70,10 @@ fn undo_redo_retains_valid_snapshots_and_a_new_edit_replaces_redo() {
     let original = Config::default();
     let mut history = History::default();
     let mut changed = original.clone();
-    changed.root.name = "Renamed".into();
+    changed.universes[0].name = "Renamed".into();
     history.record(&original, &changed);
     let mut removed = changed.clone();
-    removed.root.children.as_mut().unwrap().clear();
+    removed.universes[0].children.as_mut().unwrap().clear();
     history.record(&changed, &removed);
     let undo = history.undo(&removed).unwrap();
     assert_eq!(undo, changed);
@@ -183,7 +183,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
         };
     }
     let mut c = Config::default();
-    c.root = node;
+    c.universes[0] = node;
     c.validate().unwrap();
     let root = sandbox();
     constellation::storage::save(&root, &c).unwrap();
@@ -200,7 +200,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
             .unwrap_err()
             .contains("safety limit")
     );
-    c.root.name = format!("{}\\\"{}", "[".repeat(1000), "]".repeat(1000));
+    c.universes[0].name = format!("{}\\\"{}", "[".repeat(1000), "]".repeat(1000));
     let json = serde_json::to_vec(&c).unwrap();
     assert_eq!(constellation::storage::parse_config(&json).unwrap(), c);
     let mut trailing = json;
@@ -213,7 +213,7 @@ fn ten_thousand_stars_remain_individually_selectable_without_paging() {
     use constellation::{config::Node, engine::Engine, geometry};
     let mut c = Config::default();
     c.layout.gap = 0.;
-    c.root.children = Some(
+    c.universes[0].children = Some(
         (2..10002)
             .map(|id| Node {
                 note: String::new(),

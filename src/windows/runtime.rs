@@ -431,9 +431,13 @@ impl Runtime {
         self.cursor.apply();
     }
     unsafe fn paint_radial(&mut self) -> Result<(), String> {
+        let Some(start) = self.engine.entry(&self.config) else {
+            return Ok(());
+        };
         self.renderer.present(
             self.hwnd,
             &self.config,
+            start,
             &self.engine.sectors,
             &self.engine.path,
             self.engine.hovered,

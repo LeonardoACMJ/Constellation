@@ -22,7 +22,7 @@ fn old_config_omits_empty_notes_and_all_node_kinds_roundtrip() {
     let mut loaded = storage::parse_config(&bytes).unwrap();
     assert_eq!(loaded, old);
     let version = loaded.version;
-    add_notes(&mut loaded.root, 0);
+    add_notes(&mut loaded.universes[0], 0);
     let exported = serde_json::to_vec_pretty(&loaded).unwrap();
     let imported = storage::parse_config(&exported).unwrap();
     assert_eq!(imported, loaded);
@@ -35,9 +35,9 @@ fn old_config_omits_empty_notes_and_all_node_kinds_roundtrip() {
 #[test]
 fn note_limit_counts_unicode_characters_and_rejects_line_breaks() {
     let mut config = Config::default();
-    config.root.note = "🐇".repeat(NOTE_MAX_CHARS);
+    config.universes[0].note = "🐇".repeat(NOTE_MAX_CHARS);
     assert!(config.validate().is_ok());
-    config.root.note.push('é');
+    config.universes[0].note.push('é');
     assert!(config.validate().unwrap_err().contains("140"));
     for bad in [
         "two\nlines",
@@ -47,8 +47,8 @@ fn note_limit_counts_unicode_characters_and_rejects_line_breaks() {
         "line\u{2028}break",
         "line\u{2029}break",
     ] {
-        config.root.find_mut(6).unwrap().note = bad.into();
-        config.root.note.clear();
+        config.universes[0].find_mut(6).unwrap().note = bad.into();
+        config.universes[0].note.clear();
         assert!(storage::parse_config(&serde_json::to_vec(&config).unwrap()).is_err());
     }
     let input = format!("needs\r\nssh-agent\t{}", "🐇".repeat(200));
@@ -64,7 +64,7 @@ fn note_edits_are_undoable_on_stars_constellations_and_root() {
     let mut history = History::default();
     for id in [1, 5, 6] {
         let before = config.clone();
-        config.root.find_mut(id).unwrap().note = "needs elevation and Codex closed".into();
+        config.universes[0].find_mut(id).unwrap().note = "needs elevation and Codex closed".into();
         history.record(&before, &config);
         let after = config.clone();
         config = history.undo(&config).unwrap();
@@ -73,7 +73,7 @@ fn note_edits_are_undoable_on_stars_constellations_and_root() {
         assert_eq!(config, after);
         // Clearing an existing note is a real edit too.
         let mut cleared = config.clone();
-        cleared.root.find_mut(id).unwrap().note.clear();
+        cleared.universes[0].find_mut(id).unwrap().note.clear();
         history.record(&config, &cleared);
         assert_eq!(history.undo(&cleared).unwrap(), config);
     }
@@ -85,7 +85,7 @@ fn notes_do_not_change_immediate_hover_or_click_and_hold_launches() {
         let mut plain = Config::default();
         plain.profiles[0].mode = mode;
         let mut noted = plain.clone();
-        add_notes(&mut noted.root, 0);
+        add_notes(&mut noted.universes[0], 0);
         let (mut a, mut b) = (Engine::default(), Engine::default());
         assert!(a.open(0, &plain) && b.open(0, &noted));
         for id in [2, 5, 6] {
@@ -129,7 +129,7 @@ fn disk_save_and_backup_preserve_notes_without_another_index() {
     let old = Config::default();
     storage::save(&root, &old).unwrap();
     let mut noted = old.clone();
-    add_notes(&mut noted.root, 0);
+    add_notes(&mut noted.universes[0], 0);
     storage::save(&root, &noted).unwrap();
     assert_eq!(storage::read(&root).unwrap(), noted);
     let backup = std::fs::read(root.join("data/config.backup.json")).unwrap();

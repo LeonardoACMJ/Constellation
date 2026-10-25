@@ -102,6 +102,8 @@ struct Editor {
     hwnd: HWND,
     root: PathBuf,
     c: Config,
+    /// Index into `c.universes` of the tree being edited.
+    universe: usize,
     rows: Vec<u64>,
     parents: Vec<u64>,
     selected: u64,
@@ -646,9 +648,10 @@ unsafe extern "system" fn monitor_callback(
 
 impl Editor {
     fn new(hwnd: HWND, root: PathBuf, c: Config, displays: Vec<Display>) -> Self {
-        let selected = c.root.id;
+        let selected = c.universes.first().map_or(0, |u| u.id);
         Self {
             hwnd,
+            universe: 0,
             root: root.clone(),
             saved: c.clone(),
             history: History::default(),
@@ -686,7 +689,8 @@ impl Editor {
     unsafe fn paint_preview(&self, dc: HDC) -> usize {
         let e = self;
         render::fill(dc, &e.preview, render::rgb(15, 22, 36));
-        let all = geometry::full(&e.c);
+        let tree = &e.c.universes[e.universe];
+        let all = geometry::full_from(&e.c, tree);
         let (workw, workh) = if let Some(d) = e.displays.get(e.monitor) {
             let (mut x, mut y) = (96, 96);
             GetDpiForMonitor(d.handle, MDT_EFFECTIVE_DPI, &mut x, &mut y);
@@ -730,7 +734,7 @@ impl Editor {
         SelectObject(dc, oldb);
         DeleteObject(pen);
         let images = e.icons.collect(
-            std::iter::once(&e.c.root).chain(
+            std::iter::once(&e.c.universes[e.universe]).chain(
                 all.iter()
                     .filter(|s| {
                         (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
@@ -739,7 +743,7 @@ impl Editor {
                     .filter_map(|s| e.c.find(s.id)),
             ),
         );
-        render::draw_with_icons(dc, &e.c, &all, &[], None, origin, scale, true, &images);
+        render::draw_with_icons(dc, &e.c, tree, &all, &[], None, origin, scale, true, &images);
         RestoreDC(dc, saved);
         render::text(
             dc,
@@ -928,10 +932,12 @@ impl Editor {
         {
             self.selected
         } else {
-            find_parent(&self.c.root, self.selected).unwrap_or(self.c.root.id)
+            let tree = &self.c.universes[self.universe];
+            find_parent(tree, self.selected).unwrap_or(tree.id)
         };
         let mut candidate = self.c.clone();
-        let mut id = candidate.root.max_id();
+        // Next ID comes from every universe, never just the edited one.
+        let mut id = candidate.max_node_id();
         let mut added = vec![];
         for path in paths {
             id = id.checked_add(1).ok_or("Item ID space exhausted")?;
@@ -941,8 +947,7 @@ impl Editor {
             return Ok(());
         }
         let count = added.len();
-        candidate
-            .root
+        candidate.universes[self.universe]
             .find_mut(parent)
             .and_then(|n| n.children.as_mut())
             .ok_or("Choose a parent")?
@@ -1005,7 +1010,7 @@ impl Editor {
             } else {
                 let c = editing::read_import(&path)?;
                 self.commit(c);
-                self.selected = self.c.root.id;
+                self.selected = self.c.universes[self.universe].id;
                 self.refresh();
                 self.settings_to_controls();
                 self.status="Imported into the draft. Undo restores the previous tree; Save applies the import.".into();
@@ -1167,7 +1172,7 @@ impl Editor {
         }
         let mut rows = vec![];
         let mut parents = vec![];
-        walk(&self.c.root, 0, &mut rows, &mut parents);
+        walk(&self.c.universes[self.universe], 0, &mut rows, &mut parents);
         for (id, text) in rows {
             self.rows.push(id);
             send(
@@ -1258,7 +1263,7 @@ impl Editor {
         set(self.hwnd, ARGS, &editing::format_arguments(&args));
         set(self.hwnd, RUNNER, &runner);
         set(self.hwnd, CWD, &cwd);
-        let parent = find_parent(&self.c.root, self.selected).unwrap_or(self.c.root.id);
+        let parent = find_parent(&self.c.universes[self.universe], self.selected).unwrap_or(self.c.universes[self.universe].id);
         let idx = self
             .parents
             .iter()
@@ -1380,7 +1385,7 @@ impl Editor {
                 "Move/remove this constellation's children before converting it to a Star".into(),
             );
         }
-        let n = candidate.root.find_mut(self.selected).unwrap();
+        let n = candidate.universes[self.universe].find_mut(self.selected).unwrap();
         n.name = get(self.hwnd, NAME);
         n.note = get(self.hwnd, NOTE);
         n.children = if target.is_none() {
@@ -1402,7 +1407,7 @@ impl Editor {
             },
             _ => return Err("Choose an icon mode.".into()),
         };
-        if self.selected != candidate.root.id {
+        if self.selected != candidate.universes[self.universe].id {
             let pindex = send(self.hwnd, PARENT, CB_GETCURSEL, 0, 0);
             let parent = *self.parents.get(pindex as usize).ok_or("Choose a parent")?;
             if candidate
@@ -1413,11 +1418,10 @@ impl Editor {
             {
                 return Err("A constellation cannot be moved into itself or a descendant".into());
             }
-            if find_parent(&candidate.root, self.selected) != Some(parent) {
+            if find_parent(&candidate.universes[self.universe], self.selected) != Some(parent) {
                 let node =
-                    remove(&mut candidate.root, self.selected).ok_or("Cannot move this item")?;
-                candidate
-                    .root
+                    remove(&mut candidate.universes[self.universe], self.selected).ok_or("Cannot move this item")?;
+                candidate.universes[self.universe]
                     .find_mut(parent)
                     .and_then(|p| p.children.as_mut())
                     .ok_or("Parent is not a constellation")?
@@ -1440,12 +1444,11 @@ impl Editor {
         {
             self.selected
         } else {
-            find_parent(&self.c.root, self.selected).unwrap_or(self.c.root.id)
+            find_parent(&self.c.universes[self.universe], self.selected).unwrap_or(self.c.universes[self.universe].id)
         };
         let id = self
             .c
-            .root
-            .max_id()
+            .max_node_id()
             .checked_add(1)
             .ok_or("Item ID space exhausted")?;
         let n = Node {
@@ -1469,8 +1472,7 @@ impl Editor {
                 })
             },
         };
-        self.c
-            .root
+        self.c.universes[self.universe]
             .find_mut(parent)
             .unwrap()
             .children
@@ -1486,10 +1488,10 @@ impl Editor {
     unsafe fn reorder(&mut self, down: bool) -> Result<(), String> {
         self.apply()?;
         let before = self.c.clone();
-        if let Some(parent) = find_parent(&self.c.root, self.selected) {
+        if let Some(parent) = find_parent(&self.c.universes[self.universe], self.selected) {
             let cs = self
                 .c
-                .root
+                .universes[self.universe]
                 .find_mut(parent)
                 .unwrap()
                 .children
@@ -1897,13 +1899,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 ADD_FOLDER => e.add(true),
                 DELETE => (|| {
                     e.apply()?;
-                    if e.selected == e.c.root.id {
+                    if e.selected == e.c.universes[e.universe].id {
                         return Err("The root constellation cannot be deleted".into());
                     }
                     let mut c = e.c.clone();
-                    remove(&mut c.root, e.selected);
+                    remove(&mut c.universes[e.universe], e.selected);
                     e.commit(c);
-                    e.selected = e.c.root.id;
+                    e.selected = e.c.universes[e.universe].id;
                     e.refresh();
                     e.status =
                         "Deleted from draft. Undo restores the item and its children.".into();
@@ -2159,6 +2161,8 @@ impl Profiles {
         }
         self.draft[i] = Profile {
             id: self.draft[i].id,
+            universe: self.draft[i].universe,
+            root_id: self.draft[i].root_id,
             name,
             binding,
             mode: if send(self.hwnd, P_MODE, CB_GETCURSEL, 0, 0) == 1 {
@@ -2623,6 +2627,8 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
                         cursor_end: CursorEnd::Restore,
                         directional: true,
                         dot_cursor: true,
+                        universe: 0,
+                        root_id: None,
                     });
                     p.selected = Some(p.draft.len() - 1);
                     p.refresh();

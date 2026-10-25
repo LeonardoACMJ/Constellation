@@ -1,5 +1,5 @@
 use crate::{
-    config::{Config, Mode},
+    config::{Config, Mode, Node},
     geometry::{self, Point, Sector},
 };
 
@@ -33,8 +33,16 @@ impl Engine {
         self.hovered = None;
         self.sectors.clear();
     }
+    /// Where the open profile's radial starts: its universe root, or its own
+    /// entry node. None while nothing is open.
+    pub fn entry<'a>(&self, c: &'a Config) -> Option<&'a Node> {
+        c.entry_of(c.profiles.get(self.profile?)?)
+    }
     fn rebuild(&mut self, c: &Config) {
-        self.sectors = geometry::visible(c, &self.path);
+        self.sectors = match self.entry(c) {
+            Some(start) => geometry::visible_from(c, start, &self.path),
+            None => vec![],
+        };
     }
     pub fn motion(&mut self, c: &Config, p: Point) -> Action {
         self.motion_with_feedback(c, p).0

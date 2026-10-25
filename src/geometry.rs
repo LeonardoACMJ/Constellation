@@ -89,9 +89,17 @@ fn fan(node: &Node, depth: usize, center: Point, direction: f64, l: Layout, out:
     }
 }
 
+/// Lays out the first universe. Callers that know which shortcut profile is
+/// open use `visible_from` with that profile's entry node instead.
 pub fn visible(config: &Config, path: &[u64]) -> Vec<Sector> {
+    match config.universes.first() {
+        Some(start) => visible_from(config, start, path),
+        None => vec![],
+    }
+}
+pub fn visible_from(config: &Config, start: &Node, path: &[u64]) -> Vec<Sector> {
     let mut out = vec![];
-    let mut node = &config.root;
+    let mut node = start;
     let mut center = Point::default();
     let mut direction = -PI / 2.;
     fan(node, 0, center, direction, config.layout, &mut out);
@@ -121,6 +129,12 @@ pub fn visible(config: &Config, path: &[u64]) -> Vec<Sector> {
     out
 }
 pub fn full(config: &Config) -> Vec<Sector> {
+    match config.universes.first() {
+        Some(start) => full_from(config, start),
+        None => vec![],
+    }
+}
+pub fn full_from(config: &Config, start: &Node) -> Vec<Sector> {
     fn walk(
         node: &Node,
         depth: usize,
@@ -149,14 +163,7 @@ pub fn full(config: &Config) -> Vec<Sector> {
         }
     }
     let mut out = vec![];
-    walk(
-        &config.root,
-        0,
-        Point::default(),
-        -PI / 2.,
-        config.layout,
-        &mut out,
-    );
+    walk(start, 0, Point::default(), -PI / 2., config.layout, &mut out);
     out
 }
 pub fn hit(sectors: &[Sector], p: Point) -> Option<&Sector> {
@@ -216,7 +223,9 @@ fn preview_overlap(config: &Config, sectors: &[Sector]) -> bool {
         }
     }
     let mut links = HashMap::new();
-    parents(&config.root, &mut links);
+    for universe in &config.universes {
+        parents(universe, &mut links);
+    }
     let ancestor = |a: u64, mut b: u64| {
         while let Some(parent) = links.get(&b) {
             if *parent == a {

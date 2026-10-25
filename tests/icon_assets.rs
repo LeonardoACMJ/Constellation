@@ -23,16 +23,16 @@ fn old_configuration_defaults_to_automatic_and_modes_roundtrip() {
     let bytes = serde_json::to_vec(&config).unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("\"icon\""));
     let loaded = storage::parse_config(&bytes).unwrap();
-    assert_eq!(loaded.root.icon, ItemIcon::Automatic);
-    config.root.icon = ItemIcon::Custom {
+    assert_eq!(loaded.universes[0].icon, ItemIcon::Automatic);
+    config.universes[0].icon = ItemIcon::Custom {
         path: "data/icons/group.png".into(),
     };
-    config.root.children.as_mut().unwrap()[0].icon = ItemIcon::Symbol;
+    config.universes[0].children.as_mut().unwrap()[0].icon = ItemIcon::Symbol;
     assert_eq!(
         storage::parse_config(&serde_json::to_vec(&config).unwrap()).unwrap(),
         config
     );
-    config.root.icon = ItemIcon::Custom { path: "\0".into() };
+    config.universes[0].icon = ItemIcon::Custom { path: "\0".into() };
     assert!(config.validate().is_err());
 }
 #[test]
@@ -84,7 +84,7 @@ fn invalid_or_oversize_import_does_not_overwrite_existing_asset() {
 fn software_icon_roundtrip_preserves_script_launch_definition() {
     use constellation::config::Target;
     let mut config = Config::default();
-    let item = &mut config.root.children.as_mut().unwrap()[0];
+    let item = &mut config.universes[0].children.as_mut().unwrap()[0];
     item.children = None;
     let target = Target::Script {
         path: "instances/hydrus-one.cmd".into(),
@@ -99,11 +99,11 @@ fn software_icon_roundtrip_preserves_script_launch_definition() {
     let loaded = storage::parse_config(&serde_json::to_vec(&config).unwrap()).unwrap();
     assert_eq!(loaded, config);
     assert_eq!(
-        loaded.root.children.as_ref().unwrap()[0].target,
+        loaded.universes[0].children.as_ref().unwrap()[0].target,
         Some(target)
     );
     for path in ["", " ", "bad\0.exe"] {
-        config.root.icon = ItemIcon::Software { path: path.into() };
+        config.universes[0].icon = ItemIcon::Software { path: path.into() };
         assert!(config.validate().is_err());
     }
 }
