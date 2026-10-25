@@ -106,6 +106,12 @@ fn spawn(root: &Path, path: &str, args: &[String], cwd: Option<&str>) -> Result<
                 .unwrap_or_else(|| root.to_path_buf()),
         )
         .stdin(Stdio::null());
+    #[cfg(test)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
     c.spawn()
         .map_err(|e| format!("Could not launch {}: {e}", command.display()))?;
     Ok(())
@@ -162,6 +168,13 @@ fn spawn_console(
     unsafe {
         let mut startup: STARTUPINFOW = std::mem::zeroed();
         startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        #[cfg(test)]
+        {
+            use windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
+            use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE;
+            startup.dwFlags |= STARTF_USESHOWWINDOW;
+            startup.wShowWindow = SW_SHOWMINNOACTIVE as u16;
+        }
         let mut process: PROCESS_INFORMATION = std::mem::zeroed();
         // No STARTF_USESTDHANDLES: Windows supplies the new console's handles.
         // No handle inheritance: never pass the tray app's handles to scripts.
@@ -239,6 +252,12 @@ mod tests {
         time::{Duration, Instant},
     };
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+    /// Serialises the tests that create a real console. Run in parallel they
+    /// contend for console input and fail on a different test each time.
+    static CONSOLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn only_one_console() -> std::sync::MutexGuard<'static, ()> {
+        CONSOLE.lock().unwrap_or_else(|e| e.into_inner())
+    }
     fn sandbox() -> std::path::PathBuf {
         let p = std::env::current_dir()
             .unwrap()
@@ -251,10 +270,16 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         p
     }
+    /// Waits for content, not just for the file. A redirection like `> f echo x`
+    /// creates the file before it writes, so waiting on existence alone reads an
+    /// empty string under load; that was the suite's intermittent failure.
     fn wait(path: &Path) {
         let until = Instant::now() + Duration::from_secs(15);
-        while !path.exists() {
-            assert!(Instant::now() < until, "Missing {}", path.display());
+        loop {
+            if fs::metadata(path).is_ok_and(|m| m.len() > 0) {
+                return;
+            }
+            assert!(Instant::now() < until, "Missing or empty {}", path.display());
             std::thread::sleep(Duration::from_millis(25));
         }
     }
@@ -270,6 +295,7 @@ mod tests {
     // Remote Windows CI only: no real user script or power-management action.
     #[test]
     fn interactive_batch_has_real_console_input_and_output() {
+        let _console = only_one_console();
         let root = sandbox().join("folder (with spaces)");
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -346,6 +372,7 @@ public static class InputProbe {
     }
     #[test]
     fn batch_and_powershell_scripts_run_from_portable_root() {
+        let _console = only_one_console();
         let root = sandbox();
         fs::write(
             root.join("mark.cmd"),
