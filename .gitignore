@@ -1,11 +1,41 @@
+# Rust builds, portable runtime data, packages and local evidence
 /target/
 /portable/
 /dist/
 /.local/
 /data/
+
+# Personal working notes, handoffs and superseded experiments
+/working.md
+/handoff.md
+/handoff-*.md
+/prototype/
+/docs/PERSONALIZATION-STUDY.md
+/docs/shortcut-research.md
+/docs/VERIFICATION.md
+
+# Local credentials; keep sanitized configuration templates shareable
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Generated Python caches and local virtual environments
+__pycache__/
+*.py[cod]
+/.venv/
+/venv/
+
+# Logs, temporary files and backups
 *.log
 *.tmp
 *.bak
-__pycache__/
+*~
 
-/working.md
+# OS and machine-specific editor state (shared editor settings stay trackable)
+.DS_Store
+Thumbs.db
+desktop.ini
+/.vs/
+/.idea/workspace.xml
+/.vscode/*.local.*

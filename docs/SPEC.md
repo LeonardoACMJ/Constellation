@@ -246,11 +246,11 @@ The initial RAM reference is the user's approximate recollection of KROW's tray 
 | Opening latency | Binding event → first usable radial frame | Responsive interaction; no numerical gate |
 | Navigation latency | Eligible hover/click → usable child fan | PERF-02; no intentional delay or numerical gate |
 
-Browser prototype resource use is not evidence of native launcher performance. A native idle sample and automated interaction checks are recorded in [verification](VERIFICATION.md); perceived responsiveness still requires hands-on review.
+Browser prototype resource use is not evidence of native launcher performance. Record native measurements with their revision and conditions; perceived responsiveness still requires hands-on review.
 
 ## 7. Acceptance checks
 
-These describe acceptance criteria; the [verification record](VERIFICATION.md) states actual native coverage and remaining checks. Checks involving proposals become release criteria only when those proposals are agreed.
+These describe acceptance criteria; the [manual checklist](MANUAL-CHECKS.md) identifies hands-on scenarios and release notes state known limits. Checks involving proposals become release criteria only when those proposals are agreed.
 
 | Check | Covers | Observable pass condition |
 |---|---|---|
@@ -275,12 +275,10 @@ These describe acceptance criteria; the [verification record](VERIFICATION.md) s
 | A-19 | PORT-07 | Click Enable Windows startup / Disable Windows startup. The button reflects the reverse action for the actual Startup link; the operation applies immediately and does not create a Start menu application shortcut or alter exported JSON. |
 | A-20 | PORT-08 | Click Add to Start menu / Remove from Start menu without saving; verify only the user Programs link changes, independently of Start with Windows and JSON. Open the entry with the resident stopped and running; expect one tray instance or the configuration window, respectively. |
 
-## 8. Evidence & prototype boundary
+## 8. Implementation and validation boundary
 
-A first Windows native preview now implements the main interaction, tray, configuration, and feedback features. See the [user guide](USER-GUIDE.md) for controls/limits and [verification record](VERIFICATION.md) for measured evidence and checks still requiring hands-on review. Proposed details implemented as initial defaults remain subject to product review.
+The native preview implements the main interaction, tray, configuration and feedback features. See the [user guide](USER-GUIDE.md) for controls and limits, the [manual checklist](MANUAL-CHECKS.md) for hands-on checks, and [release notes](releases/0.1.32.md) for the public beta's outstanding validations. Automated checks live in tests/ and the Windows/Linux CI workflow. Proposed details implemented as initial defaults remain subject to product review.
 
-The product decisions in this draft come from this chat. The [shortcut research](shortcut-research.md) records documented conflicts. The [prototype notes](../prototype/README.md), [interaction implementation](../prototype/app.js), and [geometry](../prototype/geometry.mjs) document experiments; copied values are explicitly proposed above.
+An earlier browser experiment simulated launches and could not validate native hotkeys, cursor control or performance. Its paging, edge fitting and adjustable delays are superseded by this specification. The experiment and exploratory research are kept locally outside the versioned project.
 
-The browser demonstrates overlapping navigation, selection modes, density paging, and centered menu opening. It simulates launches, receives input only while focused, and cannot center or restore the system cursor. Passing its checks does not validate native hotkeys, launching, cursor control, or performance.
-
-Customization research is kept separately in [PERSONALIZATION-STUDY.md](PERSONALIZATION-STUDY.md). Automatic, custom-image and From Software item icons are implemented. Themes, editable colors, larger background images and compatible-program action adapters remain proposals for later work.
+Automatic, custom-image and From Software item icons are implemented. Themes, editable colors, larger background images and compatible-program action adapters remain proposals for later work.

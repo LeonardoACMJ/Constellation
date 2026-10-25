@@ -4,9 +4,7 @@ A portable system-tray radial launcher. Stars launch programs, shortcuts, URLs, 
 
 **0.1.32 is the first public beta for Windows x64.** See the [release notes](docs/releases/0.1.32.md) for known limits and pending manual checks.
 
-The first Windows native application is implemented. The [product and behavior spec](docs/SPEC.md) defines intended behavior and acceptance checks; [the user guide](docs/USER-GUIDE.md) explains this preview's controls and limits. The [verification record](docs/VERIFICATION.md) separates automated evidence from checks still needing hands-on review. Linux portability is a design constraint; a Linux desktop adapter is not implemented yet.
-
-The [browser interaction prototype](prototype/README.md) is an experiment, not the native app. Its paging, edge fitting, and delay controls are superseded by the current spec.
+The first Windows native application is implemented. The [product and behavior spec](docs/SPEC.md) defines intended behavior and acceptance checks; [the user guide](docs/USER-GUIDE.md) explains this preview's controls and limits. The [manual checklist](docs/MANUAL-CHECKS.md) lists checks for hands-on review. Linux portability is a design constraint; a Linux desktop adapter is not implemented yet.
 
 ## Install and first run
 
@@ -39,7 +37,7 @@ The dependencies are MIT OR Apache-2.0, both compatible with GPLv3.
 
 ## Development environment
 
-Rust is installed on the development PC. Activate the existing portable MSVC/Windows SDK environment before Windows builds:
+Windows builds need Rust with the MSVC target and an activated MSVC/Windows SDK environment. On this project’s development PC the portable toolchain is activated with the first command below; elsewhere use your existing toolchain environment:
 
 ```cmd
 call E:\_DevTools\env.cmd
@@ -58,6 +56,8 @@ Runtime configuration and other app-managed files belong beside the distributed 
 
 The editor supports native file/folder pickers, dropped files, quoted argument fields, bounded undo/redo, and validated configuration import/export. Missing targets and layout overflow remain advisory.
 
-For repeatable large-tree measurements, the device-free core example is `cargo run --release --example stress`. The interactive `python tests/large_editor_smoke.py` requires a separately authorized desktop session. The first measures the portable core; the second measures a real native full-preview paint. The [personalization study](docs/PERSONALIZATION-STUDY.md) separates implemented custom/program icons from future themes, editable colors, background artwork and application actions.
+For repeatable large-tree measurements, the device-free core example is `cargo run --release --example stress`. The interactive `python tests/large_editor_smoke.py` requires a separately authorized desktop session. The first measures the portable core; the second measures a real native full-preview paint. Themes, editable colors, background artwork and application actions remain future work; custom/program icons are implemented.
 
 When the current portable copy is running, package an update separately with `python scripts/package.py --staging-dir portable/Constellation-update`. The archive version comes from Cargo metadata. Close the editor and tray app before replacing the installed executable, and preserve its `data` directory.
+
+Development research, historical verification notes, personal handoffs and the superseded browser prototype are local-only and ignored by Git. Put new exploratory material under `.local/research/` rather than adding it to public docs. Keep useful implementation documentation, tests and reproducible developer tools versioned. New portable ZIPs contain the executable, user guide, manifesto, license and dependency notices; developer checklists and studies remain outside the package. Existing release archives retain their original contents and checksums.

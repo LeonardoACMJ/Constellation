@@ -120,8 +120,8 @@ Stop the resident app using **Quit** in its tray menu. Closing the configuration
 
 This is the first native build. The configuration UI is functional and deliberately plain. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.
 
-Customization feasibility and the proposed later app-action adapters are described in [the personalization study](PERSONALIZATION-STUDY.md). Themes and action adapters remain future work; item icons are available in Configure.
+Themes and application-action adapters remain future work; item icons are available in Configure.
 
-Use [the feedback-build manual checklist](MANUAL-CHECKS.md) to review scrolling, styling, overlapping chimes, cursor-end options, fresh opening and outside targeting. Local desktop automation is on hold while the user uses the PC.
+For known beta limitations and feedback guidance, see the [release notes](https://github.com/LeonardoACMJ/Constellation/releases).
 
 Read [A small manifesto for portable software / Um pequeno manifesto por aplicações portáteis](PORTABLE-MANIFESTO.md) for the principles behind the portable folder.
