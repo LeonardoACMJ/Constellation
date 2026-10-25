@@ -253,3 +253,36 @@ fn all_four_instruments_roundtrip_and_keep_tails_on_switch() {
     mixed.mix(&mut vec![0; RATE as usize]);
     assert_eq!(mixed.active(), 0);
 }
+
+#[test]
+fn none_sound_preserves_legacy_mute_volume_and_last_instrument() {
+    use constellation::{config::Instrument, editing::History};
+    let mut legacy = Config::default();
+    legacy.sound.enabled = false;
+    legacy.sound.volume = 0.37;
+    legacy.sound.instrument = Instrument::WindChimes;
+    let mut loaded = storage::parse_config(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+    assert_eq!(loaded.sound.selected_instrument(), None);
+    loaded.sound.select_instrument(None);
+    assert_eq!(loaded, legacy);
+    assert_eq!(
+        storage::parse_config(&serde_json::to_vec(&loaded).unwrap()).unwrap(),
+        legacy
+    );
+    loaded
+        .sound
+        .select_instrument(Some(Instrument::PluckedStrings));
+    assert_eq!(
+        loaded.sound.selected_instrument(),
+        Some(Instrument::PluckedStrings)
+    );
+    assert_eq!(loaded.sound.volume, 0.37);
+    let mut history = History::default();
+    history.record(&legacy, &loaded);
+    assert_eq!(history.undo(&loaded).unwrap(), legacy);
+    assert_eq!(history.redo(&legacy).unwrap(), loaded);
+    loaded.sound.select_instrument(None);
+    assert!(!loaded.sound.enabled);
+    assert_eq!(loaded.sound.instrument, Instrument::PluckedStrings);
+    assert_eq!(loaded.sound.volume, 0.37);
+}

@@ -1,6 +1,6 @@
 # Lightweight synthesized chimes
 
-The 0.1.23 editor exposes Soft mallet (the warmer struck-bar tone introduced in 0.1.22), Classic bell (the previous high bell), Plucked strings and Wind chimes. Audition quality remains a user decision; numerical checks establish stability, not realism.
+The current Sound selector exposes None (silent), Soft mallet (the warmer struck-bar tone introduced in 0.1.22), Classic bell (the previous high bell), Plucked strings and Wind chimes. Audition quality remains a user decision; numerical checks establish stability, not realism.
 
 | Technique | Existing work | Fit here |
 |---|---|---|
@@ -10,13 +10,15 @@ The 0.1.23 editor exposes Soft mallet (the warmer struck-bar tone introduced in 
 
 These sources establish the methods. The small Rust implementation and tuning are our own; no STK code, raw excitation file, preset bank or library is incorporated.
 
+None is a UI choice mapped to the existing `sound.enabled: false` field, preserving compatibility with old mute settings. Volume and the last instrument field are retained. It suppresses new chimes; playing tails finish normally and the last cached bank may remain. No new None instrument bank or configuration version is introduced.
+
 ## Current prototype
 
 - C4–D4–E4–G4–A4 pentatonic bank, one octave below the previous tone.
 - Four damped sinusoidal modes: approximate ratios 1, 4, 10 and 18. Upper modes decay sooner than the fundamental. Per-mode cosine attacks avoid an abrupt onset; a cosine release reaches zero smoothly.
 - Duration 320 ms (previously 160 ms). Bank is generated once on the existing audio worker. The playback loop still mixes cached PCM with the same overlapping voices, limiter and primed driver queue. Longer tails can keep more voices active during a sweep; the existing 32-voice cap applies.
 - Five mono float32 tables at 48 kHz contain **307,200 bytes (300 KiB)** of PCM, versus 153,600 bytes previously. This is table payload, not total application memory. No new dependency, resident thread, filesystem audio source or idle polling is introduced.
-- Configuration defaults to Soft mallet. The editor instrument selector persists on Save and applies to the next chime without restarting. Classic bell uses the original high register and 160 ms envelope. Plucked strings uses a 480 ms filtered feedback string with corrected fractional tuning; Wind chimes uses five tube modes (approximately 1, 2.76, 5.40, 8.93, 13.34), 720 ms of ringing, and smooth attack/release. Each highlight strikes one string/tube; no sound is generated autonomously. A selected bank is generated on the audio worker; active voices keep shared references to their own note data so switching never cuts or retunes existing tails. Old note data is released after those voices finish. The default bank is omitted from JSON; an explicitly saved non-default instrument field requires 0.1.23 or newer.
+- Configuration defaults to Soft mallet. The editor Sound selector persists on Save and applies to the next chime without restarting. Classic bell uses the original high register and 160 ms envelope. Plucked strings uses a 480 ms filtered feedback string with corrected fractional tuning; Wind chimes uses five tube modes (approximately 1, 2.76, 5.40, 8.93, 13.34), 720 ms of ringing, and smooth attack/release. Each highlight strikes one string/tube; no sound is generated autonomously. A selected bank is generated on the audio worker; active voices keep shared references to their own note data so switching never cuts or retunes existing tails. Old note data is released after those voices finish. The default bank is omitted from JSON; an explicitly saved non-default instrument field requires 0.1.23 or newer.
 
 | Selected bank | PCM table payload (5 mono float32 notes, 48 kHz) |
 |---|---:|

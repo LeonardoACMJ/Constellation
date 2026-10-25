@@ -86,7 +86,7 @@ fn instrument_row_fits_above_footer_and_advice_stays_above_layout() {
         let instrument = layout.control(
             Rect {
                 x: 405,
-                y: 833,
+                y: 795,
                 w: 260,
                 h: 160,
             },

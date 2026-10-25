@@ -63,7 +63,6 @@ const RADIUS: i32 = 501;
 const DISTANCE: i32 = 502;
 const SPREAD: i32 = 503;
 const GAP: i32 = 504;
-const SOUND: i32 = 505;
 const VOLUME: i32 = 506;
 const MONITOR: i32 = 507;
 const INSTRUMENT: i32 = 508;
@@ -495,42 +494,20 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             send(hwnd, id + 10, TBM_SETRANGEMIN, 0, min);
             send(hwnd, id + 10, TBM_SETRANGEMAX, 1, max);
         }
-        control(
-            hwnd,
-            "BUTTON",
-            "Chimes",
-            SOUND,
-            305,
-            798,
-            110,
-            28,
-            BS_AUTOCHECKBOX as u32,
-        );
-        label(hwnd, "Volume (0–1)", 430, 798, 110);
-        control(
-            hwnd,
-            "EDIT",
-            "",
-            VOLUME,
-            550,
-            795,
-            110,
-            28,
-            WS_BORDER | ES_AUTOHSCROLL as u32,
-        );
-        label(hwnd, "Instrument", 305, 838, 90);
+        label(hwnd, "Sound", 305, 800, 90);
         control(
             hwnd,
             "COMBOBOX",
             "",
             INSTRUMENT,
             405,
-            833,
+            795,
             260,
             160,
             WS_TABSTOP | CBS_DROPDOWNLIST as u32,
         );
         for title in [
+            "None",
             "Soft mallet",
             "Classic bell",
             "Plucked strings",
@@ -544,6 +521,18 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                 wide(title).as_ptr() as isize,
             );
         }
+        label(hwnd, "Volume (0–1)", 430, 838, 110);
+        control(
+            hwnd,
+            "EDIT",
+            "",
+            VOLUME,
+            550,
+            833,
+            110,
+            28,
+            WS_BORDER | ES_AUTOHSCROLL as u32,
+        );
         label(hwnd, "FULL FAN-OUT PREVIEW", 700, 18, 300);
         control(
             hwnd,
@@ -1300,11 +1289,12 @@ impl Editor {
             self.hwnd,
             INSTRUMENT,
             CB_SETCURSEL,
-            match self.c.sound.instrument {
-                Instrument::Mallet => 0,
-                Instrument::ClassicBell => 1,
-                Instrument::PluckedStrings => 2,
-                Instrument::WindChimes => 3,
+            match self.c.sound.selected_instrument() {
+                None => 0,
+                Some(Instrument::Mallet) => 1,
+                Some(Instrument::ClassicBell) => 2,
+                Some(Instrument::PluckedStrings) => 3,
+                Some(Instrument::WindChimes) => 4,
             },
             0,
         );
@@ -1318,13 +1308,6 @@ impl Editor {
         ] {
             set(self.hwnd, id, &value.to_string());
         }
-        send(
-            self.hwnd,
-            SOUND,
-            BM_SETCHECK,
-            usize::from(self.c.sound.enabled),
-            0,
-        );
     }
     unsafe fn controls_to_settings(&mut self) -> Result<(), String> {
         let number = |id| -> Result<f64, String> {
@@ -1339,14 +1322,15 @@ impl Editor {
         candidate.layout.spread = number(SPREAD)?;
         candidate.layout.gap = number(GAP)?;
         candidate.sound.volume = number(VOLUME)?;
-        candidate.sound.instrument = match send(self.hwnd, INSTRUMENT, CB_GETCURSEL, 0, 0) {
-            0 => Instrument::Mallet,
-            1 => Instrument::ClassicBell,
-            2 => Instrument::PluckedStrings,
-            3 => Instrument::WindChimes,
-            _ => return Err("Choose an instrument".into()),
+        let instrument = match send(self.hwnd, INSTRUMENT, CB_GETCURSEL, 0, 0) {
+            0 => None,
+            1 => Some(Instrument::Mallet),
+            2 => Some(Instrument::ClassicBell),
+            3 => Some(Instrument::PluckedStrings),
+            4 => Some(Instrument::WindChimes),
+            _ => return Err("Choose a sound".into()),
         };
-        candidate.sound.enabled = send(self.hwnd, SOUND, BM_GETCHECK, 0, 0) == 1;
+        candidate.sound.select_instrument(instrument);
         candidate.validate()?;
         if candidate != self.c {
             if self.settings_before.is_none() {
@@ -1972,11 +1956,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     e.checkpoint_settings();
                     advanced(e);
                     Ok(())
-                }
-                SOUND => {
-                    let result = e.controls_to_settings();
-                    e.dirty = true;
-                    result
                 }
                 _ => Ok(()),
             };

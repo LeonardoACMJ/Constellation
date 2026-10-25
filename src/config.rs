@@ -181,6 +181,18 @@ pub struct Sound {
     pub enabled: bool,
     pub volume: f64,
 }
+impl Sound {
+    /// None is the editor's silent choice; keep the existing portable schema.
+    pub fn selected_instrument(&self) -> Option<Instrument> {
+        self.enabled.then_some(self.instrument)
+    }
+    pub fn select_instrument(&mut self, instrument: Option<Instrument>) {
+        self.enabled = instrument.is_some();
+        if let Some(instrument) = instrument {
+            self.instrument = instrument;
+        }
+    }
+}
 impl Default for Sound {
     fn default() -> Self {
         Self {
