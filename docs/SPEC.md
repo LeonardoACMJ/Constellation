@@ -1,6 +1,6 @@
 # Constellation — product & behavior spec
 
-**Behavior specification · reviewed 2026-10-25 against native preview 0.1.32**
+**Behavior specification · reviewed 2026-10-25 against native preview 0.1.33**
 
 A lightweight, globally invoked Windows system-tray radial launcher: invoke a shortcut while using another app, navigate nested **Constellations**, and launch a **Star**. The resident app should use as little memory and processing time as practical; configuration may live in a separate process.
 
@@ -277,7 +277,7 @@ These describe acceptance criteria; the [manual checklist](MANUAL-CHECKS.md) ide
 
 ## 8. Implementation and validation boundary
 
-The native preview implements the main interaction, tray, configuration and feedback features. See the [user guide](USER-GUIDE.md) for controls and limits, the [manual checklist](MANUAL-CHECKS.md) for hands-on checks, and [release notes](releases/0.1.32.md) for the public beta's outstanding validations. Automated checks live in tests/ and the Windows/Linux CI workflow. Proposed details implemented as initial defaults remain subject to product review.
+The native preview implements the main interaction, tray, configuration and feedback features. See the [user guide](USER-GUIDE.md) for controls and limits, the [manual checklist](MANUAL-CHECKS.md) for hands-on checks, and [release notes](releases/0.1.33.md) for the public beta's outstanding validations. Automated checks live in tests/ and the Windows/Linux CI workflow. Proposed details implemented as initial defaults remain subject to product review.
 
 An earlier browser experiment simulated launches and could not validate native hotkeys, cursor control or performance. Its paging, edge fitting and adjustable delays are superseded by this specification. The experiment and exploratory research are kept locally outside the versioned project.
 

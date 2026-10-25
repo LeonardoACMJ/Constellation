@@ -2,7 +2,7 @@
 
 A portable system-tray radial launcher. Stars launch programs, shortcuts, URLs, folders, and scripts; nested Constellations organize them.
 
-**0.1.32 is the first public beta for Windows x64.** See the [release notes](docs/releases/0.1.32.md) for known limits and pending manual checks.
+**0.1.33 is the current public beta for Windows x64.** See the [release notes](docs/releases/0.1.33.md) for known limits and pending manual checks.
 
 The first Windows native application is implemented. The [product and behavior spec](docs/SPEC.md) defines intended behavior and acceptance checks; [the user guide](docs/USER-GUIDE.md) explains this preview's controls and limits. The [manual checklist](docs/MANUAL-CHECKS.md) lists checks for hands-on review. Linux portability is a design constraint; a Linux desktop adapter is not implemented yet.
 
