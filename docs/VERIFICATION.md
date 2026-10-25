@@ -1,8 +1,26 @@
 # Native preview verification
 
-2026-10-23 · Windows x64 release build · existing Rust 1.96 and portable MSVC/Windows SDK activated from `E:\_DevTools`.
+Windows native preview · current documentation review: 2026-10-25. Earlier build records used Rust 1.96 and the existing portable MSVC/Windows SDK in `E:\_DevTools`.
 
-## Current revision and manual review
+## Current status — 0.1.30, reviewed 2026-10-25
+
+This review inspected source, documentation, Git state and the installed binary; it did not run tests or drive the desktop. The installed executable matches the local release build. Older measurements below belong to their recorded revisions and do not certify 0.1.30.
+
+| Area | Implemented now | Evidence and remaining review |
+|---|---|---|
+| Universes | Independent trees, global node IDs, editor selector/create/rename/delete guards | Source and named core regressions exist; manually verify save/reopen and multiple real bindings. |
+| Entry and visibility | Per-profile universe/nested entry, per-node Visible in; shared runtime/preview filtering | Regressions include `single_universe_round_trips_in_the_legacy_root_shape` and `hiding_a_child_does_not_shift_sectors_onto_the_wrong_item`. Their presence is not a new test run. |
+| Feedback and icons | Four synthesized sounds plus None, white-dot option, antialiased radial, Automatic/Symbol/Custom/From Software icons, configuration-only notes | Earlier evidence below; new subjective listening/appearance checks are manual. |
+| Startup and packaging | Opt-in Startup-folder link, GPL-3.0-or-later LICENSE in package, one configuration window | Startup COM fixture targets a temporary link, not the real Startup folder. No Start menu application-shortcut button. No installer. |
+| Verification inherited from handoff | Handoff reports 90 passing tests and clean formatting | Reported evidence, not rerun in this documentation review. Follow the no-window skill before any future process-launch test. |
+
+**Known intermittent editor issue:** same-name parent/child selection/save failure was reported but not reproduced consistently. Duplicate names are covered by `an_item_may_share_its_parents_name`; an invalid edit can restore the prior selection and report an error in the bottom status bar. An emptied parent combo is a hypothesis, not a confirmed cause. User decision: wait for reproduction before investigating further.
+
+**Remaining implementation:** editable themes/palettes and per-item colors; optional larger background artwork and program-specific action adapters are proposals. Linux desktop integration and an automatic updater do not exist. Code signing remains future distribution work. The installer is deliberately excluded.
+
+## Historical implementation and verification records
+
+The records below retain their original version and test scope. References to a build being current or left running apply to that historical session, not the installed 0.1.30.
 
 **Interactive script input 0.1.25:** Sleep in X uses `set /p` and `timeout`, while the launcher supplied NUL stdin. On EOF its empty-input branch can repeatedly clear and repaint the prompt. This cause was identified by source inspection; the real suspension script was never executed. Script runners now use CreateProcessW with CREATE_NEW_CONSOLE, no STARTF_USESTDHANDLES and no inherited handles, so Windows supplies real console input/output independently of the GUI resident. Arguments, batch metacharacter rejection, working directories and PowerShell policy remain intact. No input hooks, focus forcing or process-wide console attachment were added. Native harmless console regressions run remotely only. Windows CI confirmed real stdin/stdout/stderr console handles, injected input into that isolated console, and read `17` through a batch `set /p` under a path with spaces and parentheses. Existing batch/PowerShell arguments, working-directory, shortcut and native UI regressions also passed; Linux core tests passed. Local checks ran only device-free tests and release/package/icon validation.
 
@@ -84,11 +102,11 @@ Version **0.1.2** preserves `WM_QUIT` while discarding stale gesture packets. Wi
 
 Version **0.1.1** addresses the reported scrolling artifacts and crunchy audio. The final buffer copy now restores its drawing origin; controls and panels use one absolute responsive layout; unused scrollbars are removed. Audio uses 48 kHz PCM, four reusable 10 ms buffers, a short idle-device grace period, and linear mixing until the near-clip safety knee instead of compressing every sample.
 
-**Current checks:** release compilation and eight headless regression checks passed (three layout checks and five feedback checks). They cover scrollbar thresholds/interdependence, larger preview/list sizing, stable control geometry/dropdown heights, linear overlapping tails, output chunk continuity, voice saturation, profile migration and extended targeting. No windows, cursor/input injection or sound playback occurred in these checks. Native playback quality, driver scheduling, visible scrolling and maximized presentation still need the [manual checklist](MANUAL-CHECKS.md).
+**Checks recorded for 0.1.1:** release compilation and eight headless regression checks passed (three layout checks and five feedback checks). They cover scrollbar thresholds/interdependence, larger preview/list sizing, stable control geometry/dropdown heights, linear overlapping tails, output chunk continuity, voice saturation, profile migration and extended targeting. No windows, cursor/input injection or sound playback occurred in these checks. Native playback quality, driver scheduling, visible scrolling and maximized presentation still need the [manual checklist](MANUAL-CHECKS.md).
 
 Desktop automation remains on hold at the user's request while they use the PC. Earlier passes and samples below describe their recorded revision/conditions; they do not certify the current editor's visual behavior or audio output. The earlier custom-cursor experiment was deferred; 0.1.15 replaces it with a window-local cursor and nonzero-alpha ownership plane. The running user copy was left untouched while preparing a separate update package.
 
-## Implemented
+## Shared implemented baseline
 
 - Shared Rust configuration model, validation, radial geometry/hit testing, navigation state, and portable storage.
 - Native Windows tray, global keyboard/mouse bindings, input consumption, centered overlay/cursor, restoration, and fullscreen suspension.
@@ -97,7 +115,7 @@ Desktop automation remains on hold at the user's request while they use the PC. 
 - Stable profile IDs with legacy migration; repaired saves preserve valid backups. Local save/backup/recovery and a portable ZIP packaging command. New configuration is signaled to the resident process; changes are deferred during an active radial gesture.
 - Lock/disconnect/suspend cancellation and input resynchronization on resume; late selection checks; a dedicated blocking input thread to keep hook delivery independent of disk I/O, launch and rendering work; taskbar icon recreation; explicit empty-Constellation feedback.
 
-## Automated evidence
+## Historical automated evidence
 
 | Check | Evidence / scope |
 |---|---|
@@ -121,11 +139,11 @@ Local generated evidence is under `.local/native-smoke`, `.local/idle-check`, `.
 - Program, URL, folder, shortcut, and script targets using real user configurations. Automated launches cover controlled programs, Python/batch/PowerShell scripts, and a generated Windows shortcut; URL/folder routing is checked without opening user handlers.
 - Direct portable-folder write behavior under additional policies/filesystems. Checks cover relocation, foreign working directory, redirected alternate-storage sentinels, malformed data, and a real NTFS write denial. Sentinel checks detect writes to the tested environment paths; they are not a system-wide filesystem trace.
 
-## Current limits
+## Current limits — reviewed for 0.1.30
 
 - Supported bindings are documented in the user guide. Modifier+mouse combinations and primary-button invocation are not included.
 - Extremely dense full previews still incur native drawing cost (about half a second for 10,000 sectors in this sample); warnings do not change the saved geometry or remove targets.
-- Themes, custom icons/images and compatible-program actions are researched in [the personalization study](PERSONALIZATION-STUDY.md), not implemented controls.
+- Themes, editable colors, larger background images and compatible-program action adapters remain future work in [the personalization study](PERSONALIZATION-STUDY.md). Per-item automatic/custom/From Software icons are implemented.
 - The configuration window uses styled native controls. Updated scrolling, cached preview rendering, small-window reachability, mixed-DPI behavior, contrast and keyboard focus require manual review in this revision.
 - Script runners must already be installed. Batch metacharacters are rejected to avoid unintended shell interpretation; a shortcut wrapper can handle advanced cases.
-- No installer, startup registration, automatic updater, or Linux desktop adapter is included.
+- No installer is planned. Start with Windows is implemented as an explicit opt-in Startup link; a Start menu application-shortcut button, automatic updater and Linux desktop adapter are not implemented.

@@ -8,14 +8,16 @@ The [browser interaction prototype](prototype/README.md) is an experiment, not t
 
 ## Install and first run
 
-Constellation is portable: there is no installer, no AppData fallback and no PATH change. It writes nothing outside its own folder unless you tick **Start with Windows**, which puts a shortcut in your own Startup folder and nothing in the registry.
+Constellation is portable: there is no installer, no AppData fallback and no PATH change. App-managed data stays in its own folder. Explicit configuration exports go to the destination you choose; **Start with Windows** optionally puts a shortcut in your own Startup folder and writes no registry setting.
 
 1. Download the ZIP from [Releases](https://github.com/LeonardoACMJ/Constellation/releases) and extract the whole folder somewhere writable.
 2. Run `constellation.exe`. It lives in the notification area and shows no permanent window.
 3. Press **Ctrl+Q**. The radial opens centred on the monitor under the cursor.
 4. Open **Settings** in the sample menu, or right-click the tray icon, to edit your own items.
 
-Everything the app writes stays beside the executable, in `data`. Move the folder and it keeps working; its relative paths resolve from the executable, not from where it was launched. To update, close the app, replace `constellation.exe` and keep `data`.
+Configuration, icons and logs stay beside the executable, in `data`; explicit exports and the optional Startup link are the exceptions described above. Move the folder and it keeps working; its relative paths resolve from the executable, not from where it was launched. To update, close the app, replace `constellation.exe` and keep `data`.
+
+**Start with Windows** is a checkbox in Configure, below Import/Export in the left column; scroll down if needed. It enables automatic startup when you sign in, immediately, without Save. There is no Add to Start menu button. After moving the portable folder, turn the checkbox off and on to update the link.
 
 ## Using it
 
@@ -46,12 +48,12 @@ The unpacked app is `portable/Constellation/constellation.exe`; the distributabl
 
 The native application uses Rust, Serde, and direct Windows APIs for tray, input, GDI rendering, launching, and audio. The configuration panel runs in a separate process of the same executable, keeping its UI and preview work out of the resident process. The geometry/model/state tests also build on Linux.
 
-On a Windows desktop, run `python tests/native_smoke.py` after building to exercise input consumption, launch/cancellation, fullscreen pass-through, cursor restoration, and configuration saving in an isolated `.local` folder. It temporarily creates its own foreground test window and restores the cursor afterward. Pillow is optional for screenshots; no test opens a browser.
+For an explicitly authorized interactive desktop session only, `python tests/native_smoke.py` after building can be used to exercise input consumption, launch/cancellation, fullscreen pass-through, cursor restoration, and configuration saving in an isolated `.local` folder. It temporarily creates its own foreground test window and restores the cursor afterward. Do not run it while the user is using this PC; it is not a headless check. Pillow is optional for screenshots; no test opens a browser.
 
 Runtime configuration and other app-managed files belong beside the distributed executable. Build output and local runtime data are ignored by Git.
 
 The editor supports native file/folder pickers, dropped files, quoted argument fields, bounded undo/redo, and validated configuration import/export. Missing targets and layout overflow remain advisory.
 
-For repeatable large-tree measurements, run `cargo run --release --example stress` and `python tests/large_editor_smoke.py`. The first measures the portable core; the second measures a real native full-preview paint. The [personalization study](docs/PERSONALIZATION-STUDY.md) examines themes, custom colors/icons, and future application actions; these are proposals, not implemented settings.
+For repeatable large-tree measurements, the device-free core example is `cargo run --release --example stress`. The interactive `python tests/large_editor_smoke.py` requires a separately authorized desktop session. The first measures the portable core; the second measures a real native full-preview paint. The [personalization study](docs/PERSONALIZATION-STUDY.md) separates implemented custom/program icons from future themes, editable colors, background artwork and application actions.
 
 When the current portable copy is running, package an update separately with `python scripts/package.py --staging-dir portable/Constellation-update`. The archive version comes from Cargo metadata. Close the editor and tray app before replacing the installed executable, and preserve its `data` directory.

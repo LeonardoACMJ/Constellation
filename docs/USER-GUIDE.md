@@ -89,6 +89,12 @@ Node IDs are unique across every universe, so a navigation path never resolves a
 
 Relative file paths resolve from this folder, not the directory from which the app was invoked. A plain program/runner name resolves through PATH. External installed applications remain external; copying Constellation does not copy those programs.
 
+## Start with Windows and the Start menu
+
+Open Configure and scroll down the **left column**, below **Import… / Export…**, to find the **Start with Windows** checkbox. It applies immediately; Save is not needed. This launches Constellation when you sign into Windows.
+
+There is currently **no Add to Start menu button**. The Startup shortcut and a searchable Start menu application shortcut are different integrations; enabling the checkbox only creates the former. If you move the portable folder, untick and tick Start with Windows again to point it at the new location. Untick it before deleting the folder.
+
 ## Files and exit
 
 **Universe compatibility (0.1.27):** a configuration with a single universe is still written in the original `root` shape, and `universe`/`root_id` are omitted from profiles while they hold their defaults, so an existing file is not rewritten by opening and saving it. The moment a second universe exists, Save writes a `universes` list instead and older builds cannot read that file. `visible_in` behaves like `note`: older builds reject any node carrying it. Keep a copy from before, or remove the field from every node, if you intend to downgrade.

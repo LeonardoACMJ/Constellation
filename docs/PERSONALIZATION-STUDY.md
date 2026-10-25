@@ -1,8 +1,8 @@
 # Personalization and application actions
 
-2026-10-23 · Feasibility study; proposed direction, not shipped settings.
+Reviewed 2026-10-25 against 0.1.30 · Implemented icons and future personalization proposals.
 
-**Current status (0.1.17):** per-item automatic/custom icons are implemented. The antialiased renderer supports transparent images. Colors/theme controls remain future work.
+**Current status (0.1.30):** Automatic, Symbol, Custom image and From Software item-icon modes are implemented. The antialiased renderer supports transparent images. Colors/theme controls remain future work.
 
 **Earlier finding:** colors and local icons fit the native design; arbitrary image transparency required a rendering change. Application actions are feasible for programs exposing a documented command line or API; support will be program-specific.
 
@@ -16,13 +16,11 @@
 | Program icons | Implemented: Windows Shell extraction in a background worker, including `.lnk` and file-type associations. | Cache results; no extraction in input/paint handlers. Windows provides [ExtractIconExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-extracticonexw); WIC provides native [PNG, ICO and JPEG decoders](https://learn.microsoft.com/en-us/windows/win32/wic/-wic-about-windows-imaging-codec). |
 | Item/background images | Optional static images, cropped in the editor, with a separate readable label layer. Start with item icons before large backgrounds. | More pixels and blending work. Decode and resize once; do not keep original full-resolution photos in resident memory. |
 
-The current overlay uses black as a transparency key. Windows makes every pixel of that exact color transparent, so arbitrary black artwork would acquire holes. That mechanism also cannot represent a PNG's varying per-pixel alpha. This follows [SetLayeredWindowAttributes](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setlayeredwindowattributes).
-
-**Proposed rendering step:** prepare a premultiplied BGRA surface and present it with [UpdateLayeredWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-updatelayeredwindow), or evaluate Direct2D if image composition justifies it. Recreate/reset the layering style when leaving the existing color-key mechanism; Windows documents that a prior `SetLayeredWindowAttributes` call otherwise prevents `UpdateLayeredWindow` from working. Keep drawing event-driven and retain the existing geometry/hit testing.
+**Rendering already implemented:** the radial uses antialiased GDI+ paths on a premultiplied BGRA surface with per-pixel alpha. The previous black color-key limitation is historical; transparent custom icons do not require a new renderer. Icon extraction/decoding runs on a bounded background cache. See [verification](VERIFICATION.md) for implementation evidence and its limits.
 
 Memory arithmetic, **not measured implementation results**: one 64×64 RGBA icon is 16 KiB; 100 such decoded icons are about 1.56 MiB. One 1920×1080 four-byte surface is about 7.91 MiB, and one 3840×2160 surface is about 31.64 MiB. Additional buffers and decoders add overhead. A bounded icon cache and a buffer only for the active monitor should keep this compatible with the lightweight goal; measure before choosing defaults.
 
-Proposed rollout: palette controls → per-item accents → custom/program icons → optional static backgrounds. Animated backgrounds, executable theme scripts, CSS engines and downloaded theme dependencies are outside this initial direction.
+Remaining proposed rollout: palette controls → per-item accents → optional static backgrounds. Custom/program icons are already available. Animated backgrounds, executable theme scripts, CSS engines and downloaded theme dependencies are outside this initial direction.
 
 ## Actions inside compatible programs — later
 
@@ -41,4 +39,4 @@ Authenticated adapters need a deliberate credential/export design before impleme
 
 Choose preferred palettes, whether accents apply per item or per Constellation subtree, and which program's action should be the first real adapter. These are future customization choices; they do not block the current launcher/editor work.
 
-Custom cursor follow-up: a small native dot cursor was tried during the feedback pass, but desktop checks did not establish consistent behavior over transparent areas. That experiment was not shipped. Version 0.1.15 adds an optional native white dot per profile, with a minimal-alpha window plane to retain cursor ownership over gaps, centered hotspot and restoration on close. Native checks run remotely; manual perceived behavior still needs confirmation. Windows cursor settings remain untouched.
+The optional white-dot cursor is implemented per shortcut profile, with the system cursor available as an alternative. It does not change Windows cursor-theme settings. Actual perceived behavior remains a manual check.

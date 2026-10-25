@@ -1,6 +1,6 @@
 # Constellation — product & behavior spec
 
-**Draft 0.1 · 2026-10-23 · Native preview available for review**
+**Behavior specification · reviewed 2026-10-25 against native preview 0.1.30**
 
 A lightweight, globally invoked Windows system-tray radial launcher: invoke a shortcut while using another app, navigate nested **Constellations**, and launch a **Star**. The resident app should use as little memory and processing time as practical; configuration may live in a separate process.
 
@@ -187,6 +187,9 @@ The prototype switches to Previous/More sectors above its capacity thresholds; t
 | DATA-09 | Configuration transfer | **Agreed capability:** import/export. **Initial implementation:** validate before replacing the draft; imports are undoable and require Save. Exports contain configuration, not bundled targets/assets. Explicitly chosen export documents may be written to the user's selected destination; no background storage fallback is introduced. |
 | DATA-10 | Target advice | **Agreed capability:** warn about missing targets without preventing configuration. Availability can change after editing; dispatch errors remain governed by RUN-02. |
 | DATA-11 | Per-node note | Optional inert free text on every Node, including root, Stars and Constellations at any supported depth. Initial cap: 140 Unicode scalar values; one stored line, no control/line-separator characters. Item editor places it under Name with a live character counter; typing/paste is bounded immediately. Omit empty notes from JSON; default absent notes to empty without changing the config version. DATA-08 history and DATA-09 transfer preserve notes. RUN-01 dispatch and DATA-10 warnings remain independent. Notes are internal configuration metadata: show/edit them only in configuration controls, never in the radial or full fan-out preview. They must not add panels, tooltips, hover text or change the 0.1.18 radial appearance. |
+| DATA-12 | Universes | **Implemented 0.1.30:** create, rename, select and delete independent trees. Node IDs remain globally unique. Reject deletion of the last universe or one still referenced by a profile. |
+| DATA-13 | Profile entry point | **Implemented 0.1.30:** each profile opens one universe and optionally a Constellation within it. This is a view, not a copy. Reject missing universes, Star entry points and entry points outside the chosen universe. |
+| DATA-14 | Profile visibility | **Implemented 0.1.30:** Node.visible_in lists profile IDs; empty means all profiles. Hidden parents hide their descendants. Hide a populated Constellation when filtering leaves no visible descendants; retain deliberately empty Constellations. Runtime and full preview use the same filtered child list so sectors remain paired with the correct nodes. |
 
 
 **DATA-11 migration:** new builds read existing files unchanged. Older builds with `deny_unknown_fields` reject a `note` field. A pre-note `data/config.backup.json` may allow recovery; subsequent saves may put notes in that backup too. Preserve a compatible copy before downgrading, or remove `note` from every node. No second scripts-folder index/README is maintained.
@@ -215,8 +218,9 @@ The prototype switches to Previous/More sectors above its capacity thresholds; t
 | PORT-04 | If required local storage cannot be written, show a clear error and preserve existing data; never silently fall back to an external storage directory or request elevation to create one. |
 | PORT-05 | Moving or copying the whole folder while the app is stopped must retain its configuration and app-managed assets. No app-owned settings may depend on the old absolute root. References to separately installed programs remain external targets. |
 | PORT-06 | **Proposed:** support executable-root-relative target and asset paths for bundled scripts/tools; preserve explicitly absolute paths to external programs. Do not resolve relative targets against the caller's working directory. |
+| PORT-07 | **Implemented opt-in exception:** Start with Windows creates/removes only `Constellation.lnk` in the current user’s Startup folder, pointing at the current portable executable. It applies immediately outside config.json, writes no registry setting and does not create a Start menu application entry. After moving the portable folder, recreate the link. |
 
-No installer, automatic system registration, or startup registration is part of the portable baseline. Runtime tray and global input registration remain necessary for CORE-07–08.
+PORT-02 governs app storage; PORT-07 is an explicit user-selected integration exception, alongside DATA-09 document exports. No installer or automatic system registration is part of the portable baseline. Runtime tray and global input registration remain necessary for CORE-07–08.
 
 ## 6. Resource use & implementation direction
 
@@ -266,6 +270,8 @@ These describe acceptance criteria; the [verification record](VERIFICATION.md) s
 | A-15 | DATA-06–10 | Pick target/runner/folder paths; drop multiple kinds; preserve quoted and empty arguments. Switch with valid and invalid edits. Undo/redo changes after Save, delete a branch, and import valid/malformed files without losing the previous valid draft. Export a readable snapshot without silently bundling programs. |
 | A-16 | INT-01, CFG-08 | Reopen after selecting from an expanded branch: a fresh root is presented before becoming visible; stale window mouse messages cannot expand it. Test far-away Star/child directions, gaps, hub, click/Hold selection, and exact-targeting opt-out. |
 | A-17 | DATA-11, DATA-08–10, CFG-06, PERF-02, RUN-01 | Edit notes on root, a nested Constellation and a Star; see the counter/cap while typing and pasting. Undo/redo, clear, save/reload and import/export them. Sweep between noted/empty items: identical radial/preview appearance, immediate hover, unchanged dispatch and independent missing-target advice. Existing files gain no empty note fields. |
+| A-18 | DATA-12–14 | Create two universes; configure root and nested entry points on separate bindings, hide siblings per profile, then Save/reopen. Verify correct node launches after filtering and reject deletion of a referenced universe. |
+| A-19 | PORT-07 | Manually enable/disable Start with Windows. The checkbox reflects the current user's Startup link; toggling applies immediately and does not create a Start menu application shortcut or alter exported JSON. |
 
 ## 8. Evidence & prototype boundary
 
@@ -275,4 +281,4 @@ The product decisions in this draft come from this chat. The [shortcut research]
 
 The browser demonstrates overlapping navigation, selection modes, density paging, and centered menu opening. It simulates launches, receives input only while focused, and cannot center or restore the system cursor. Passing its checks does not validate native hotkeys, launching, cursor control, or performance.
 
-Customization research is kept separately in [PERSONALIZATION-STUDY.md](PERSONALIZATION-STUDY.md). Its proposed themes, icons/images, and compatible-program actions are not committed release requirements or implemented controls.
+Customization research is kept separately in [PERSONALIZATION-STUDY.md](PERSONALIZATION-STUDY.md). Automatic, custom-image and From Software item icons are implemented. Themes, editable colors, larger background images and compatible-program action adapters remain proposals for later work.
