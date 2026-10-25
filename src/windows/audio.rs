@@ -47,27 +47,79 @@ pub struct Chimes {
 }
 impl Default for Chimes {
     fn default() -> Self {
+        let Some(event) = Wake::new() else {
+            return Self { channel: None };
+        };
+        let wake = Arc::new(event);
+        let worker_wake = wake.clone();
+        let (tx, rx) = sync_channel(64);
+        // Diagnostic A/B mode only; normal builds still release idle devices.
+        let keep_open = std::env::args().any(|a| a == "--audio-keep-open");
+        let trace = AudioTrace::new(std::env::args().any(|a| a == "--trace-audio"));
+        if std::thread::Builder::new()
+            .name("constellation-audio".into())
+            .stack_size(512 * 1024)
+            .spawn(move || output(rx, worker_wake, keep_open, trace))
+            .is_err()
         {
-            let Some(event) = Wake::new() else {
-                return Self { channel: None };
-            };
-            let wake = Arc::new(event);
-            let worker_wake = wake.clone();
-            let (tx, rx) = sync_channel(64);
-            if std::thread::Builder::new()
-                .name("constellation-audio".into())
-                .stack_size(512 * 1024)
-                .spawn(move || output(rx, worker_wake))
-                .is_err()
-            {
-                return Self { channel: None };
-            }
-            Self {
-                channel: Some((tx, wake)),
-            }
+            return Self { channel: None };
+        }
+        Self {
+            channel: Some((tx, wake)),
         }
     }
 }
+
+/// Opt-in bounded diagnostics. Disk I/O belongs to a separate blocking thread,
+/// never the audio worker or input/UI handlers. No sample data or target paths.
+struct AudioTrace(Option<SyncSender<(std::time::Instant, &'static str)>>);
+impl AudioTrace {
+    fn new(enabled: bool) -> Self {
+        if !enabled {
+            return Self(None);
+        }
+        let Ok(root) = crate::storage::root() else {
+            return Self(None);
+        };
+        let path = root.join("data/audio-trace.log");
+        let started = std::time::Instant::now();
+        let (tx, rx) = sync_channel::<(std::time::Instant, &'static str)>(128);
+        if std::thread::Builder::new()
+            .name("constellation-audio-trace".into())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                use std::io::Write;
+                let Ok(mut file) = std::fs::File::create(path) else {
+                    return;
+                };
+                for (index, (when, event)) in rx.into_iter().enumerate() {
+                    if index >= 1024 {
+                        break;
+                    }
+                    if writeln!(
+                        file,
+                        "{:.3} ms {event}",
+                        when.duration_since(started).as_secs_f64() * 1000.
+                    )
+                    .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .is_err()
+        {
+            return Self(None);
+        }
+        Self(Some(tx))
+    }
+    fn record(&self, event: &'static str) {
+        if let Some(tx) = &self.0 {
+            let _ = tx.try_send((std::time::Instant::now(), event));
+        }
+    }
+}
+
 impl Chimes {
     pub fn play(&self, s: Sound) {
         if !s.enabled || s.volume <= 0. {
@@ -267,7 +319,20 @@ impl Drop for Device {
         }
     }
 }
-fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
+fn update_idle_deadline(
+    deadline: &mut Option<std::time::Instant>,
+    queued: bool,
+    keep_open: bool,
+    now: std::time::Instant,
+) {
+    if queued || keep_open {
+        *deadline = None;
+    } else {
+        deadline.get_or_insert(now + std::time::Duration::from_millis(750));
+    }
+}
+
+fn output(rx: Receiver<Sound>, wake: Arc<Wake>, keep_open: bool, trace: AudioTrace) {
     unsafe {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
         let mut mixer = Mixer::default();
@@ -278,6 +343,12 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
             | 1;
         let mut device: Option<Device> = None;
         let mut idle_deadline: Option<std::time::Instant> = None;
+        let mut idle = false;
+        trace.record(if keep_open {
+            "session keep_device_open"
+        } else {
+            "session release_after_750ms"
+        });
         loop {
             if !wake.begin_cycle() {
                 break;
@@ -290,6 +361,11 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
                         seed ^= seed >> 7;
                         seed ^= seed << 17;
                         if s.enabled {
+                            if device.is_none() {
+                                trace.record("note cold_device");
+                            } else if idle {
+                                trace.record("note resume_paused_device");
+                            }
                             mixer.set_instrument(s.instrument);
                             mixer.start((seed % 5) as usize, s.volume);
                         }
@@ -305,35 +381,59 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
                 break;
             }
             if device.is_none() && mixer.active() > 0 {
+                trace.record("device open_begin");
                 device = Device::open(&wake);
                 if device.is_none() {
+                    trace.record("device open_failed");
                     break;
                 }
+                trace.record("device open_ready");
             }
             if let Some(d) = &mut device {
                 match d.fill(&mut mixer) {
                     Ok(false) => {
-                        idle_deadline.get_or_insert_with(|| {
-                            std::time::Instant::now() + std::time::Duration::from_millis(750)
-                        });
+                        if !idle {
+                            trace.record("device drained_paused");
+                        }
+                        idle = true;
+                        update_idle_deadline(
+                            &mut idle_deadline,
+                            false,
+                            keep_open,
+                            std::time::Instant::now(),
+                        );
                     }
-                    Ok(true) => idle_deadline = None,
-                    Err(()) => break,
+                    Ok(true) => {
+                        update_idle_deadline(
+                            &mut idle_deadline,
+                            true,
+                            keep_open,
+                            std::time::Instant::now(),
+                        );
+                        idle = false;
+                    }
+                    Err(()) => {
+                        trace.record("device stream_failed");
+                        break;
+                    }
                 }
             }
             let wait = if let Some(deadline) = idle_deadline {
                 let now = std::time::Instant::now();
                 if now >= deadline {
+                    trace.record("device idle_close");
                     device = None;
                     idle_deadline = None;
+                    idle = false;
                     continue;
                 }
                 (deadline - now).as_millis().max(1) as u32
             } else {
                 INFINITE
             };
-            // Events wake for commands/completions. After one short idle grace
-            // period, release the device and wait indefinitely with no polling.
+            // Events wake for commands/completions. The A/B option retains a
+            // paused handle; it still waits indefinitely without silent writes,
+            // timers or polling. Normal mode keeps the bounded idle grace.
             WaitForSingleObject(wake.0, wait);
         }
     }
@@ -342,6 +442,44 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
 #[cfg(test)]
 mod queue_tests {
     use super::*;
+    #[test]
+    fn retained_audio_has_no_idle_deadline_and_normal_mode_keeps_750ms_grace() {
+        let now = std::time::Instant::now();
+        let later = now + std::time::Duration::from_secs(60);
+        let mut normal = None;
+        update_idle_deadline(&mut normal, false, false, now);
+        assert_eq!(normal, Some(now + std::time::Duration::from_millis(750)));
+        let original = normal;
+        update_idle_deadline(&mut normal, false, false, later);
+        assert_eq!(
+            normal, original,
+            "duplicate notifications must not extend the release deadline"
+        );
+        update_idle_deadline(&mut normal, true, false, later);
+        assert_eq!(normal, None, "new audio cancels release");
+        let mut retained = original;
+        update_idle_deadline(&mut retained, false, true, later);
+        assert_eq!(
+            retained, None,
+            "retained mode must use an indefinite event wait"
+        );
+        update_idle_deadline(&mut retained, true, true, later);
+        assert_eq!(retained, None);
+    }
+
+    #[test]
+    fn optional_trace_never_blocks_when_its_bounded_queue_is_full() {
+        let (tx, rx) = sync_channel(1);
+        let trace = AudioTrace(Some(tx));
+        trace.record("first");
+        trace.record("dropped");
+        assert_eq!(rx.try_recv().unwrap().1, "first");
+        assert!(rx.try_recv().is_err());
+        drop(rx);
+        trace.record("disconnected");
+        AudioTrace(None).record("disabled");
+    }
+
     // Kernel-event checks only: no audio device, windows, input or playback.
     #[test]
     fn callback_wakeup_is_manual_reset_and_cleared_before_work() {
