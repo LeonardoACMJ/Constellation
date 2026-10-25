@@ -125,3 +125,28 @@ fn instrument_row_fits_above_footer_and_advice_stays_above_layout() {
         assert!(advice.y + advice.h < heading.y);
     }
 }
+
+/// The universe row sits above the tree and is anchored to the top, while the
+/// tree is the control that absorbs extra height. They must not meet.
+#[test]
+fn the_universe_row_stays_above_a_growing_tree() {
+    const TREE: i32 = 100;
+    const UNIVERSE: i32 = 219;
+    const ADD_UNIVERSE: i32 = 307;
+    let combo = Rect { x: 20, y: 40, w: 182, h: 200 };
+    let button = Rect { x: 210, y: 40, w: 70, h: 26 };
+    let tree = Rect { x: 20, y: 98, w: 260, h: 417 };
+    for height in [MIN_HEIGHT, MIN_HEIGHT + 400, 1440] {
+        let l = Layout::new(MIN_WIDTH, height, 17, 17);
+        let c = l.control(combo, UNIVERSE);
+        let b = l.control(button, ADD_UNIVERSE);
+        let t = l.control(tree, TREE);
+        assert_eq!(c.y, 40, "the selector is anchored, not pushed by height");
+        assert_eq!(b.y, 40);
+        assert!(t.y > c.y + 26, "tree starts below the selector row");
+        assert!(t.h >= tree.h, "the tree is what absorbs extra height");
+        assert!(c.x + c.w <= b.x, "selector and button do not overlap");
+        // A dropdown list keeps the height that opens it, unlike a plain field.
+        assert_eq!(c.h, 200);
+    }
+}

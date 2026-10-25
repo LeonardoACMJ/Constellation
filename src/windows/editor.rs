@@ -47,6 +47,8 @@ const ARGS: i32 = 204;
 const RUNNER: i32 = 205;
 const CWD: i32 = 206;
 const PARENT: i32 = 207;
+const UNIVERSE: i32 = 219;
+const ADD_UNIVERSE: i32 = 307;
 const APPLY: i32 = 301;
 const ADD_STAR: i32 = 302;
 const ADD_FOLDER: i32 = 303;
@@ -314,16 +316,29 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         );
         EDITOR = Box::into_raw(Box::new(Editor::new(hwnd, root, c, displays)));
         let startup_guard = super::DispatchGuard::enter().expect("editor startup dispatch");
-        label(hwnd, "STARS & CONSTELLATIONS", 20, 18, 270);
+        label(hwnd, "UNIVERSE", 20, 18, 270);
+        control(
+            hwnd,
+            "COMBOBOX",
+            "",
+            UNIVERSE,
+            20,
+            40,
+            182,
+            200,
+            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+        );
+        control(hwnd, "BUTTON", "+ Universe", ADD_UNIVERSE, 210, 40, 70, 26, 0);
+        label(hwnd, "STARS & CONSTELLATIONS", 20, 74, 270);
         control(
             hwnd,
             "LISTBOX",
             "",
             TREE,
             20,
-            45,
+            98,
             260,
-            470,
+            417,
             WS_BORDER | WS_VSCROLL | LBS_NOTIFY as u32,
         );
         for (id, title, x, y, w) in [
@@ -1150,6 +1165,17 @@ impl Editor {
         self.rows.clear();
         self.parents.clear();
         send(self.hwnd, PARENT, CB_RESETCONTENT, 0, 0);
+        send(self.hwnd, UNIVERSE, CB_RESETCONTENT, 0, 0);
+        for u in &self.c.universes {
+            send(
+                self.hwnd,
+                UNIVERSE,
+                CB_ADDSTRING,
+                0,
+                wide(&u.name).as_ptr() as isize,
+            );
+        }
+        send(self.hwnd, UNIVERSE, CB_SETCURSEL, self.universe, 0);
         fn walk(
             n: &Node,
             depth: usize,
@@ -1798,6 +1824,25 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 InvalidateRect(hwnd, null(), 1);
                 return 0;
             }
+            if id == UNIVERSE && notify == CBN_SELCHANGE as u32 {
+                let index = send(hwnd, UNIVERSE, CB_GETCURSEL, 0, 0);
+                if index >= 0 && (index as usize) < e.c.universes.len() {
+                    match e.apply() {
+                        Ok(()) => {
+                            e.universe = index as usize;
+                            e.selected = e.c.universes[e.universe].id;
+                            e.refresh();
+                        }
+                        Err(message) => {
+                            // Keep the edit and stay put rather than lose it.
+                            e.status = message;
+                            send(hwnd, UNIVERSE, CB_SETCURSEL, e.universe, 0);
+                        }
+                    }
+                }
+                InvalidateRect(hwnd, null(), 1);
+                return 0;
+            }
             if matches!(id, KIND | PARENT | ICON_MODE) && notify == CBN_SELCHANGE as u32 {
                 e.item_dirty = true;
                 e.enable_fields();
@@ -1898,10 +1943,57 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 APPLY => e.apply(),
                 ADD_STAR => e.add(false),
                 ADD_FOLDER => e.add(true),
+                ADD_UNIVERSE => (|| {
+                    e.apply()?;
+                    let mut c = e.c.clone();
+                    let id = c
+                        .max_node_id()
+                        .checked_add(1)
+                        .ok_or("Item ID space exhausted")?;
+                    c.universes.push(Node {
+                        note: String::new(),
+                        icon: Default::default(),
+                        visible_in: vec![],
+                        id,
+                        name: "New universe".into(),
+                        children: Some(vec![]),
+                        target: None,
+                    });
+                    e.commit(c);
+                    e.universe = e.c.universes.len() - 1;
+                    e.selected = id;
+                    e.refresh();
+                    e.status =
+                        "Universe added. Point a shortcut profile at it so a binding opens it."
+                            .into();
+                    Ok(())
+                })(),
                 DELETE => (|| {
                     e.apply()?;
                     if e.selected == e.c.universes[e.universe].id {
-                        return Err("The root constellation cannot be deleted".into());
+                        if e.c.universes.len() == 1 {
+                            return Err("The last universe cannot be deleted".into());
+                        }
+                        let doomed = e.c.universes[e.universe].id;
+                        if let Some(p) = e
+                            .c
+                            .profiles
+                            .iter()
+                            .find(|p| e.c.universe_of(p).is_some_and(|u| u.id == doomed))
+                        {
+                            return Err(format!(
+                                "{} opens this universe; point it elsewhere first",
+                                p.name
+                            ));
+                        }
+                        let mut c = e.c.clone();
+                        c.universes.remove(e.universe);
+                        e.commit(c);
+                        e.universe = 0;
+                        e.selected = e.c.universes[0].id;
+                        e.refresh();
+                        e.status = "Universe deleted from draft. Undo restores it.".into();
+                        return Ok(());
                     }
                     let mut c = e.c.clone();
                     remove(&mut c.universes[e.universe], e.selected);
