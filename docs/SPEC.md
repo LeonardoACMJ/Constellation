@@ -1,6 +1,6 @@
 # Constellation — product & behavior spec
 
-**Behavior specification · reviewed 2026-10-25 against native preview 0.1.31**
+**Behavior specification · reviewed 2026-10-25 against native preview 0.1.32**
 
 A lightweight, globally invoked Windows system-tray radial launcher: invoke a shortcut while using another app, navigate nested **Constellations**, and launch a **Star**. The resident app should use as little memory and processing time as practical; configuration may live in a separate process.
 
@@ -218,8 +218,8 @@ The prototype switches to Previous/More sectors above its capacity thresholds; t
 | PORT-04 | If required local storage cannot be written, show a clear error and preserve existing data; never silently fall back to an external storage directory or request elevation to create one. |
 | PORT-05 | Moving or copying the whole folder while the app is stopped must retain its configuration and app-managed assets. No app-owned settings may depend on the old absolute root. References to separately installed programs remain external targets. |
 | PORT-06 | **Proposed:** support executable-root-relative target and asset paths for bundled scripts/tools; preserve explicitly absolute paths to external programs. Do not resolve relative targets against the caller's working directory. |
-| PORT-07 | **Implemented opt-in exception:** Start with Windows creates/removes only `Constellation.lnk` in the current user’s Startup folder, pointing at the current portable executable. It applies immediately outside config.json, writes no registry setting and does not create a Start menu application entry. After moving the portable folder, recreate the link. |
-| PORT-08 | **Agreed; implemented 0.1.31:** Add to Start menu independently creates/removes `Constellation.lnk` in the current user’s Start menu Programs folder. Apply immediately outside config.json, without registry writes, elevation or enabling Startup. Launch the resident when stopped; open/raise Configure when already running. Recreate after moving the portable folder. |
+| PORT-07 | **Implemented opt-in exception:** Enable Windows startup / Disable Windows startup action button creates/removes only `Constellation.lnk` in the current user’s Startup folder, pointing at the current portable executable. It applies immediately outside config.json, writes no registry setting and does not create a Start menu application entry. After moving the portable folder, recreate the link. |
+| PORT-08 | **Agreed; implemented 0.1.31:** Add to Start menu / Remove from Start menu action button independently creates/removes `Constellation.lnk` in the current user’s Start menu Programs folder. Apply immediately outside config.json, without registry writes, elevation or enabling Startup. Both integration controls are push buttons showing the next action from actual link state; neither depends on Save, draft validation or history. Re-read state after failures too. Launch the resident when stopped; open/raise Configure when already running. Recreate after moving the portable folder. |
 
 PORT-02 governs app storage; PORT-07–08 are explicit user-selected integration exceptions, alongside DATA-09 document exports. No installer or automatic system registration is part of the portable baseline. Runtime tray and global input registration remain necessary for CORE-07–08.
 
@@ -272,8 +272,8 @@ These describe acceptance criteria; the [verification record](VERIFICATION.md) s
 | A-16 | INT-01, CFG-08 | Reopen after selecting from an expanded branch: a fresh root is presented before becoming visible; stale window mouse messages cannot expand it. Test far-away Star/child directions, gaps, hub, click/Hold selection, and exact-targeting opt-out. |
 | A-17 | DATA-11, DATA-08–10, CFG-06, PERF-02, RUN-01 | Edit notes on root, a nested Constellation and a Star; see the counter/cap while typing and pasting. Undo/redo, clear, save/reload and import/export them. Sweep between noted/empty items: identical radial/preview appearance, immediate hover, unchanged dispatch and independent missing-target advice. Existing files gain no empty note fields. |
 | A-18 | DATA-12–14 | Create two universes; configure root and nested entry points on separate bindings, hide siblings per profile, then Save/reopen. Verify correct node launches after filtering and reject deletion of a referenced universe. |
-| A-19 | PORT-07 | Manually enable/disable Start with Windows. The checkbox reflects the current user's Startup link; toggling applies immediately and does not create a Start menu application shortcut or alter exported JSON. |
-| A-20 | PORT-08 | Toggle Add to Start menu; verify only the user Programs link changes, independently of Start with Windows and JSON. Open the entry with the resident stopped and running; expect one tray instance or the configuration window, respectively. |
+| A-19 | PORT-07 | Click Enable Windows startup / Disable Windows startup. The button reflects the reverse action for the actual Startup link; the operation applies immediately and does not create a Start menu application shortcut or alter exported JSON. |
+| A-20 | PORT-08 | Click Add to Start menu / Remove from Start menu without saving; verify only the user Programs link changes, independently of Start with Windows and JSON. Open the entry with the resident stopped and running; expect one tray instance or the configuration window, respectively. |
 
 ## 8. Evidence & prototype boundary
 

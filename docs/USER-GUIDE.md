@@ -89,13 +89,20 @@ Node IDs are unique across every universe, so a navigation path never resolves a
 
 Relative file paths resolve from this folder, not the directory from which the app was invoked. A plain program/runner name resolves through PATH. External installed applications remain external; copying Constellation does not copy those programs.
 
-## Start with Windows and the Start menu
+## Windows startup and the Start menu
 
-Open Configure and scroll down the **left column**, below **Import… / Export…**, to find the **Start with Windows** checkbox. It applies immediately; Save is not needed. This launches Constellation when you sign into Windows.
+In Configure, scroll down the **left column**, below **Import… / Export…**. These buttons act immediately and never need **Save**:
 
-**Add to Start menu**, immediately below Start with Windows, creates/removes `Constellation.lnk` in your own Start menu Programs folder. Open it to start the tray app; if Constellation is already running, it opens or raises Configure instead of showing an already-running error. Windows controls when its search index discovers new shortcuts.
+| Current button | Action on click | Button afterward |
+|---|---|---|
+| Add to Start menu | Create the current user's Constellation shortcut | Remove from Start menu |
+| Remove from Start menu | Remove that shortcut | Add to Start menu |
+| Enable Windows startup | Create the current user's automatic-login shortcut | Disable Windows startup |
+| Disable Windows startup | Remove that automatic-login shortcut | Enable Windows startup |
 
-Both checkboxes apply immediately, are independent and need no Save. Neither writes registry settings or requires an installer. If you move the portable folder, untick and tick each enabled option again to update its shortcut. Untick them before deleting the folder.
+The two shortcuts are independent. Their actions do not save, validate or discard the configuration draft, create history entries or require valid item fields. The button updates from the actual shortcut state, including after an error; the bottom status confirms success or reports failure.
+
+The Start menu entry starts the tray app, or opens/raises Configure if it is already running. Windows controls when its search index discovers new shortcuts. Neither integration writes registry settings or requires an installer. After moving the portable folder, remove and add each enabled shortcut again to update its location; remove them before deleting the folder.
 
 ## Files and exit
 
@@ -105,7 +112,7 @@ Both checkboxes apply immediately, are independent and need no Save. Neither wri
 
 **Note compatibility (0.1.19):** the configuration format version stays unchanged and old files load normally. Older app builds reject configurations containing a `note` field because Node rejects unknown fields. A backup only helps if it predates notes; later saves can copy notes into the backup too. Before downgrading, keep a compatible configuration copy or remove `note` from every node, including Constellations and root. Notes live only in config.json; no scripts-folder README/index is generated.
 
-`data/config.json` and `data/config.backup.json` live beside the executable. Profiles carry stable numeric IDs; older configurations without IDs are upgraded when loaded and persist those IDs on Save. Saving a repaired configuration preserves an existing valid backup instead of backing up malformed JSON. Errors, when present, are recorded in the same `data` directory. No installer, AppData fallback, or global PATH modification is used. **Start with Windows**, below the editor's Import/Export buttons, is one optional shortcut outside this folder: it places `Constellation.lnk` in your own Startup folder and removes it when unticked. Nothing is written to the registry, Task Manager's Startup tab lists it like any other entry, and deleting that shortcut by hand turns it off. The independent Add to Start menu option creates a second link in the user Programs folder. Both apply immediately outside the saved configuration and do not travel with exported JSON.
+`data/config.json` and `data/config.backup.json` live beside the executable. Profiles carry stable numeric IDs; older configurations without IDs are upgraded when loaded and persist those IDs on Save. Saving a repaired configuration preserves an existing valid backup instead of backing up malformed JSON. Errors, when present, are recorded in the same `data` directory. No installer, AppData fallback, or global PATH modification is used. **Enable Windows startup**, below the editor's Import/Export buttons, creates `Constellation.lnk` in your own Startup folder; **Disable Windows startup** removes it. Nothing is written to the registry, Task Manager's Startup tab lists it like any other entry, and deleting that shortcut by hand turns it off. The independent Add to Start menu option creates a second link in the user Programs folder. Both apply immediately outside the saved configuration and do not travel with exported JSON.
 
 Stop the resident app using **Quit** in its tray menu. Closing the configuration window leaves the tray app running. Stop before moving the folder or replacing the executable; preserve `data` when updating.
 

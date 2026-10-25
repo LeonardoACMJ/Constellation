@@ -185,6 +185,15 @@ unsafe fn notify_resident() {
     }
 }
 
+fn integration_label(id: i32, enabled: bool) -> &'static str {
+    match (id == STARTUP, enabled) {
+        (true, true) => "Disable Windows startup",
+        (true, false) => "Enable Windows startup",
+        (false, true) => "Remove from Start menu",
+        (false, false) => "Add to Start menu",
+    }
+}
+
 unsafe fn control(
     hwnd: HWND,
     class: &str,
@@ -501,16 +510,14 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             );
         }
         control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 490, 484, 73, 28, 0);
-        for (id, title, rect, checked) in [
+        for (id, rect, enabled) in [
             (
                 STARTUP,
-                "Start with Windows",
                 crate::editor_layout::STARTUP_CONTROL,
                 super::startup::enabled(),
             ),
             (
                 START_MENU,
-                "Add to Start menu",
                 crate::editor_layout::START_MENU_CONTROL,
                 super::startup::start_menu_enabled(),
             ),
@@ -518,15 +525,14 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             control(
                 hwnd,
                 "BUTTON",
-                title,
+                integration_label(id, enabled),
                 id,
                 rect.x,
                 rect.y,
                 rect.w,
                 rect.h,
-                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+                WS_TABSTOP,
             );
-            send(hwnd, id, BM_SETCHECK, usize::from(checked), 0);
         }
         control(hwnd, "BUTTON", "Undo", UNDO, 20, 610, 120, 32, 0);
         control(hwnd, "BUTTON", "Redo", REDO, 150, 610, 130, 32, 0);
@@ -2041,6 +2047,40 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if notify != BN_CLICKED {
                 return 0;
             }
+            // OS shortcuts are immediate actions, separate from draft validation,
+            // Save, history and unsaved-state tracking.
+            if matches!(id, STARTUP | START_MENU) {
+                let was_enabled = if id == STARTUP {
+                    super::startup::enabled()
+                } else {
+                    super::startup::start_menu_enabled()
+                };
+                let result = if id == STARTUP {
+                    super::startup::set(!was_enabled)
+                } else {
+                    super::startup::set_start_menu(!was_enabled)
+                };
+                let enabled = if id == STARTUP {
+                    super::startup::enabled()
+                } else {
+                    super::startup::start_menu_enabled()
+                };
+                set(hwnd, id, integration_label(id, enabled));
+                e.status = match result {
+                    Err(message) => message,
+                    Ok(()) => format!(
+                        "{}. Applied immediately; no Save needed.",
+                        match (id == STARTUP, enabled) {
+                            (true, true) => "Windows startup enabled",
+                            (true, false) => "Windows startup disabled",
+                            (false, true) => "Added to Start menu",
+                            (false, false) => "Removed from Start menu",
+                        }
+                    ),
+                };
+                InvalidateRect(hwnd, null(), 0);
+                return 0;
+            }
             e.checkpoint_settings();
             let result = match id {
                 ICON_BROWSE => (|| {
@@ -2078,30 +2118,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 IMPORT => e.transfer(false),
                 EXPORT => e.transfer(true),
                 APPLY => e.apply(),
-                STARTUP | START_MENU => (|| {
-                    let on = send(hwnd, id, BM_GETCHECK, 0, 0) == 1;
-                    let result = if id == STARTUP {
-                        super::startup::set(on)
-                    } else {
-                        super::startup::set_start_menu(on)
-                    };
-                    // Re-read even on failure so the checkbox reflects the actual file.
-                    let now = if id == STARTUP {
-                        super::startup::enabled()
-                    } else {
-                        super::startup::start_menu_enabled()
-                    };
-                    send(hwnd, id, BM_SETCHECK, usize::from(now), 0);
-                    result?;
-                    e.status = match (id == STARTUP, now) {
-                        (true, true) => "Constellation will start with Windows.",
-                        (true, false) => "Constellation will no longer start with Windows.",
-                        (false, true) => "Constellation was added to your Start menu.",
-                        (false, false) => "Constellation was removed from your Start menu.",
-                    }
-                    .into();
-                    Ok(())
-                })(),
                 ADD_STAR => e.add(false),
                 ADD_FOLDER => e.add(true),
                 ADD_UNIVERSE => (|| {
