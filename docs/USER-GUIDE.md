@@ -1,6 +1,6 @@
 # Constellation — portable preview
 
-Extract this whole folder to a writable location, then run `constellation.exe`.
+Extract this whole folder to a writable location, then run `constellation.exe`. Constellation is free software under the GNU General Public License v3 or later; the full text ships beside the executable as `LICENSE`, and `THIRD-PARTY-NOTICES.txt` lists the dependencies.
 The app stays in the notification area (system tray); it does not show a permanent main window. Only one resident instance can run in a Windows session.
 
 The app/tray icon is a mint four-point star. Individual Stars use one star; Constellations use three smaller lavender stars, including the root. The configuration list uses one hollow star for Constellations.

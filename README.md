@@ -25,6 +25,12 @@ A **shortcut profile** is a binding with its own behaviour: Click opens and stay
 
 [The user guide](docs/USER-GUIDE.md) covers the editor, every target type, the configuration files and the compatibility notes that matter before downgrading.
 
+## License
+
+GNU General Public License, version 3 or later — see [LICENSE](LICENSE). You may use, study, change and share it, including commercially; if you distribute a modified version, its source has to be available under the same terms. Forks stay open.
+
+The dependencies are MIT OR Apache-2.0, both compatible with GPLv3.
+
 ## Development environment
 
 Rust is installed on the development PC. Activate the existing portable MSVC/Windows SDK environment before Windows builds:
