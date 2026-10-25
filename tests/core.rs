@@ -541,3 +541,28 @@ fn validate_rejects_restrictions_that_nothing_could_ever_show() {
     c.universes[0].children.as_mut().unwrap()[1].visible_in = vec![2];
     assert!(c.validate().is_err(), "audience opens a different universe");
 }
+
+/// Coryn hit this with a Star named like its own constellation: nothing saved and
+/// clicking one selected the other. Rule the data layer in or out — a duplicate
+/// name must be ordinary, and a new ID must not collide with an existing one.
+#[test]
+fn an_item_may_share_its_parents_name() {
+    let mut c = Config::default();
+    c.universes[0] = node(
+        1,
+        "Universe",
+        Some(vec![node(10, "Yeetus", Some(vec![node(24, "ModHub V2", None, vec![])]), vec![])]),
+        vec![],
+    );
+    let id = c.max_node_id() + 1;
+    assert_eq!(id, 25);
+    assert!(c.find(id).is_none(), "a fresh ID must not already exist");
+    let parent = c.universes[0].find_mut(10).unwrap();
+    parent.children.as_mut().unwrap().push(node(id, "Yeetus", None, vec![]));
+    assert!(c.validate().is_ok(), "{:?}", c.validate());
+    // The two must stay tellable apart by ID, which is what the editor maps clicks to.
+    assert_eq!(c.find(10).unwrap().name, "Yeetus");
+    assert_eq!(c.find(25).unwrap().name, "Yeetus");
+    assert!(c.find(10).unwrap().children.is_some());
+    assert!(c.find(25).unwrap().children.is_none());
+}
