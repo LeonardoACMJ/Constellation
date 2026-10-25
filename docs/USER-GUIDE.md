@@ -75,7 +75,7 @@ Click mode stays open after release. Hold mode selects the hovered Star when the
 - **Windows shortcut / file:** `.lnk` or another file opened by its Windows handler.
 - **URL:** an HTTP/HTTPS URL opened through its Windows handler.
 - **Filesystem folder:** folder opened through its Windows handler.
-- **Script:** script file, optional runner, arguments, optional working directory. Defaults: `.ps1` → `powershell.exe -NoProfile -File`; `.py` → `python.exe`; `.bat`/`.cmd` → `cmd.exe /d /s /c`. Runners must already exist. PowerShell execution policy is respected; the app does not change it. Batch paths/arguments with shell metacharacters are rejected; use a shortcut wrapper or another runner.
+- **Script:** script file, optional runner, arguments, optional working directory. Defaults: `.ps1` → `powershell.exe -NoProfile -File`; `.py` → `python.exe`; `.bat`/`.cmd` → `cmd.exe /d /s /c`. Script runners open with a fresh console and usable keyboard input (including interactive prompts and timers). Runners must already exist. PowerShell execution policy is respected; the app does not change it. Batch paths/arguments with shell metacharacters are rejected; use a shortcut wrapper or another runner.
 
 Relative file paths resolve from this folder, not the directory from which the app was invoked. A plain program/runner name resolves through PATH. External installed applications remain external; copying Constellation does not copy those programs.
 

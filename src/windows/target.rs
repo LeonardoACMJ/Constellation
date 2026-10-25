@@ -59,26 +59,20 @@ fn launch_using(
                     .map(|v| format!("\"{v}\""))
                     .collect::<Vec<_>>()
                     .join(" ");
-                let mut cmd = Command::new(runner);
-                cmd.args(["/d", "/s", "/c"]);
-                use std::os::windows::process::CommandExt;
-                cmd.raw_arg(format!("\"{command}\""));
-                cmd.current_dir(
-                    cwd.as_deref()
-                        .map(|v| storage::resolve(root, v))
-                        .unwrap_or_else(|| root.to_path_buf()),
+                return spawn_console(
+                    root,
+                    runner,
+                    &[],
+                    Some(&format!("/d /s /c \"{command}\"")),
+                    cwd.as_deref(),
                 );
-                cmd.stdin(Stdio::null())
-                    .spawn()
-                    .map_err(|e| format!("Cannot run script: {e}"))?;
-                return Ok(());
             }
             if runner_name.starts_with("powershell") || runner_name.starts_with("pwsh") {
                 argv.extend(["-NoProfile".into(), "-File".into()]);
             }
             argv.push(path.to_string_lossy().into_owned());
             argv.extend_from_slice(args);
-            spawn(root, runner, &argv, cwd.as_deref())
+            spawn_console(root, runner, &argv, None, cwd.as_deref())
         }
         Target::Shortcut { path } | Target::Folder { path } => {
             let resolved = storage::resolve(root, path);
@@ -116,6 +110,105 @@ fn spawn(root: &Path, path: &str, args: &[String], cwd: Option<&str>) -> Result<
         .map_err(|e| format!("Could not launch {}: {e}", command.display()))?;
     Ok(())
 }
+// Script runners need their own real console input/output. Inheriting the GUI
+// resident's missing handles (or NUL stdin) breaks set /p, Read-Host and timeout.
+// Do not attach a console to the resident or change its process-wide handles.
+fn spawn_console(
+    root: &Path,
+    runner: &str,
+    args: &[String],
+    raw_tail: Option<&str>,
+    cwd: Option<&str>,
+) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{
+            CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
+        },
+    };
+    let executable = if Path::new(runner).components().count() > 1 || runner.contains(['\\', '/']) {
+        storage::resolve(root, runner)
+    } else {
+        runner.into()
+    };
+    let executable = executable
+        .to_str()
+        .ok_or("Script runner is not valid Unicode")?;
+    if executable.contains(['\"', '\0']) {
+        return Err("Invalid script runner path".into());
+    }
+    // argv[0] is quoted as a file name; subsequent arguments follow CRT escaping.
+    let mut line = format!("\"{executable}\"");
+    for arg in args {
+        line.push(' ');
+        line.push_str(&quote_argument(arg));
+    }
+    if let Some(raw) = raw_tail {
+        line.push(' ');
+        line.push_str(raw);
+    }
+    let directory = cwd
+        .map(|v| storage::resolve(root, v))
+        .unwrap_or_else(|| root.into());
+    let directory: Vec<u16> = directory.as_os_str().encode_wide().chain([0]).collect();
+    if line.contains('\0') || directory[..directory.len() - 1].contains(&0) {
+        return Err("Launch arguments contain a NUL character".into());
+    }
+    let mut line = wide(&line);
+    if line.len() > 32767 {
+        return Err("Script command line is too long".into());
+    }
+    unsafe {
+        let mut startup: STARTUPINFOW = std::mem::zeroed();
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut process: PROCESS_INFORMATION = std::mem::zeroed();
+        // No STARTF_USESTDHANDLES: Windows supplies the new console's handles.
+        // No handle inheritance: never pass the tray app's handles to scripts.
+        if CreateProcessW(
+            std::ptr::null(),
+            line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_NEW_CONSOLE,
+            std::ptr::null(),
+            directory.as_ptr(),
+            &startup,
+            &mut process,
+        ) == 0
+        {
+            return Err(format!(
+                "Cannot run script: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    Ok(())
+}
+
+fn quote_argument(value: &str) -> String {
+    let mut result = String::from("\"");
+    let mut slashes = 0;
+    for ch in value.chars() {
+        if ch == '\\' {
+            slashes += 1;
+            continue;
+        }
+        result.extend(std::iter::repeat_n(
+            '\\',
+            if ch == '\"' { slashes * 2 + 1 } else { slashes },
+        ));
+        result.push(ch);
+        slashes = 0;
+    }
+    result.extend(std::iter::repeat_n('\\', slashes * 2));
+    result.push('\"');
+    result
+}
+
 fn shell(target: &str, root: &Path) -> Result<(), String> {
     let result = unsafe {
         ShellExecuteW(
@@ -165,6 +258,79 @@ mod tests {
             std::thread::sleep(Duration::from_millis(25));
         }
     }
+    #[test]
+    fn console_argument_escaping_preserves_quotes_and_trailing_slashes() {
+        assert_eq!(quote_argument(""), "\"\"");
+        assert_eq!(quote_argument("two words"), "\"two words\"");
+        assert_eq!(quote_argument("a\"b"), "\"a\\\"b\"");
+        assert_eq!(quote_argument("C:\\two words\\"), "\"C:\\two words\\\\\"");
+        assert_eq!(quote_argument("a\\\"b"), "\"a\\\\\\\"b\"");
+    }
+
+    // Remote Windows CI only: no real user script or power-management action.
+    #[test]
+    fn interactive_batch_has_real_console_input_and_output() {
+        let root = sandbox().join("folder (with spaces)");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("seed.ps1"),
+            r#"
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class InputProbe {
+ [StructLayout(LayoutKind.Explicit, CharSet=CharSet.Unicode, Size=20)]
+ public struct Record {
+  [FieldOffset(0)] public short Type;
+  [FieldOffset(4)] public int Down;
+  [FieldOffset(8)] public short Repeat;
+  [FieldOffset(14)] public char Character;
+ }
+ [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int id);
+ [DllImport("kernel32.dll")] static extern bool GetConsoleMode(IntPtr h, out uint mode);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode)]
+ static extern bool WriteConsoleInputW(IntPtr h, Record[] records, uint count, out uint written);
+ public static void Seed() {
+  uint mode, written;
+  foreach(int id in new int[]{-10,-11,-12})
+   if(!GetConsoleMode(GetStdHandle(id),out mode)) throw new Exception("Invalid console handle");
+  var records=new Record[3];
+  var chars="17\r";
+  for(int i=0;i<3;i++) records[i]=new Record{Type=1,Down=1,Repeat=1,Character=chars[i]};
+  if(!WriteConsoleInputW(GetStdHandle(-10),records,3,out written)||written!=3)
+   throw new Exception("Cannot seed isolated console");
+ }
+}
+'@
+[InputProbe]::Seed()
+[IO.File]::WriteAllText((Join-Path (Get-Location) 'console.txt'), 'real console')
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("Sleep fixture (inert).bat"),
+            "@echo off\r\npowershell.exe -NoProfile -File seed.ps1\r\nif errorlevel 1 exit /b 1\r\nset /p minutes=Minutes (inert test): \r\n> answer.txt echo %minutes%\r\n").unwrap();
+        launch(
+            &root,
+            &Target::Script {
+                path: "Sleep fixture (inert).bat".into(),
+                runner: None,
+                args: vec![],
+                cwd: None,
+            },
+        )
+        .unwrap();
+        wait(&root.join("answer.txt"));
+        assert_eq!(
+            fs::read_to_string(root.join("console.txt")).unwrap(),
+            "real console"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("answer.txt")).unwrap().trim(),
+            "17"
+        );
+    }
+
     #[test]
     fn program_arguments_and_cwd_are_literal() {
         let root = sandbox();
