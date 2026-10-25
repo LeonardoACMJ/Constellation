@@ -14,6 +14,24 @@ use std::{
 };
 use windows_sys::Win32::{Foundation::*, Media::Audio::*, System::Threading::*};
 struct Wake(HANDLE);
+impl Wake {
+    fn new() -> Option<Self> {
+        // CALLBACK_EVENT requires a manual-reset event. A single worker shares
+        // it for driver completions and note commands.
+        let event = unsafe { CreateEventW(null(), 1, 0, null()) };
+        if event.is_null() {
+            None
+        } else {
+            Some(Self(event))
+        }
+    }
+    fn begin_cycle(&self) -> bool {
+        // Clear BEFORE inspecting commands/headers, never between inspecting
+        // work and waiting. Notifications arriving during service must remain
+        // signaled so the next wait cannot miss them.
+        unsafe { ResetEvent(self.0) != 0 }
+    }
+}
 // The event handle is thread-safe, and is closed only after both owners drop.
 unsafe impl Send for Wake {}
 unsafe impl Sync for Wake {}
@@ -29,12 +47,11 @@ pub struct Chimes {
 }
 impl Default for Chimes {
     fn default() -> Self {
-        unsafe {
-            let event = CreateEventW(null(), 0, 0, null());
-            if event.is_null() {
+        {
+            let Some(event) = Wake::new() else {
                 return Self { channel: None };
-            }
-            let wake = Arc::new(Wake(event));
+            };
+            let wake = Arc::new(event);
             let worker_wake = wake.clone();
             let (tx, rx) = sync_channel(64);
             if std::thread::Builder::new()
@@ -262,6 +279,9 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
         let mut device: Option<Device> = None;
         let mut idle_deadline: Option<std::time::Instant> = None;
         loop {
+            if !wake.begin_cycle() {
+                break;
+            }
             let mut disconnected = false;
             loop {
                 match rx.try_recv() {
@@ -322,11 +342,93 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>) {
 #[cfg(test)]
 mod queue_tests {
     use super::*;
+    // Kernel-event checks only: no audio device, windows, input or playback.
+    #[test]
+    fn callback_wakeup_is_manual_reset_and_cleared_before_work() {
+        let wake = Wake::new().unwrap();
+        unsafe {
+            assert_eq!(WaitForSingleObject(wake.0, 0), WAIT_TIMEOUT);
+            SetEvent(wake.0);
+            assert_eq!(WaitForSingleObject(wake.0, 0), WAIT_OBJECT_0);
+            assert_eq!(
+                WaitForSingleObject(wake.0, 0),
+                WAIT_OBJECT_0,
+                "callback notification must remain set until explicit reset"
+            );
+            assert!(wake.begin_cycle());
+            assert_eq!(WaitForSingleObject(wake.0, 0), WAIT_TIMEOUT);
+        }
+    }
+
+    #[test]
+    fn commands_and_completions_arriving_during_service_keep_next_wait_awake() {
+        let wake = Wake::new().unwrap();
+        let (tx, rx) = sync_channel(4);
+        let sound = Sound::default();
+        unsafe {
+            // An old completion wakes the cycle, then a new command arrives
+            // after its reset; both the command and callback state are observed.
+            SetEvent(wake.0);
+            assert!(wake.begin_cycle());
+            tx.try_send(sound).unwrap();
+            SetEvent(wake.0);
+            assert_eq!(rx.try_recv().unwrap(), sound);
+            SetEvent(wake.0); // Driver completes during the same service pass.
+            assert_eq!(WaitForSingleObject(wake.0, 0), WAIT_OBJECT_0);
+            assert_eq!(WaitForSingleObject(wake.0, 0), WAIT_OBJECT_0);
+            assert!(wake.begin_cycle());
+            assert_eq!(WaitForSingleObject(wake.0, 0), WAIT_TIMEOUT);
+            // A request after the empty check still wakes the worker.
+            assert!(rx.try_recv().is_err());
+            tx.try_send(sound).unwrap();
+            SetEvent(wake.0);
+            assert_eq!(WaitForSingleObject(wake.0, 0), WAIT_OBJECT_0);
+            assert_eq!(rx.try_recv().unwrap(), sound);
+        }
+    }
 
     #[derive(Default)]
     struct RecordingStream {
         operations: String,
         samples: Vec<i16>,
+    }
+
+    #[test]
+    fn rapid_wind_chime_bursts_keep_existing_tails_during_queue_reuse() {
+        use crate::config::Instrument;
+        let mut device = Device::empty();
+        let (mut mixer, mut reference) = (
+            Mixer::new(Instrument::WindChimes),
+            Mixer::new(Instrument::WindChimes),
+        );
+        let mut stream = RecordingStream::default();
+        let mut checked = 0;
+        for cycle in 0..100 {
+            if [0, 1, 4, 5, 8, 12, 13, 30, 31, 40].contains(&cycle) {
+                assert!(mixer.start(cycle % 5, 0.18));
+                assert!(reference.start(cycle % 5, 0.18));
+            }
+            // Alternate blocked, partial and coalesced driver completions.
+            // New gestures can arrive before any queued block has finished.
+            for (index, buffer) in device.buffers.iter_mut().enumerate() {
+                if cycle % 3 == 2 || (cycle % 3 == 1 && index < 2) {
+                    buffer.header.dwFlags |= WHDR_DONE;
+                }
+            }
+            unsafe {
+                device.fill_using(&mut mixer, &mut stream).unwrap();
+            }
+            let mut expected = vec![0; stream.samples.len() - checked];
+            reference.mix(&mut expected);
+            assert_eq!(
+                &stream.samples[checked..],
+                expected.as_slice(),
+                "cycle {cycle}"
+            );
+            checked = stream.samples.len();
+        }
+        assert_eq!(mixer.active(), 0);
+        assert_eq!(stream.samples.last(), Some(&0));
     }
     impl Stream for RecordingStream {
         unsafe fn pause(&mut self) -> Result<(), ()> {

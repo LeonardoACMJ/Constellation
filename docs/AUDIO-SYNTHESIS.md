@@ -36,3 +36,9 @@ Wind chimes evaluates damped modes using a decaying complex rotation, avoiding t
 Run `cargo run --example audio_preview --locked --offline` to write four 3.5-second WAV comparisons into `.local/audio-review`. The files are offline listening artifacts only: the application neither loads nor packages them. Generation never opens an audio device. Same volume and event timing; the new bank intentionally uses a lower register. Each file contains isolated notes, then a rapid overlapping sweep. The example reports peaks; it does not certify equal perceived loudness.
 
 Automated checks cover finite/bounded tables, exact zero endpoints, quiet boundary samples, the decaying tail and fundamental tuning. Existing checks cover overlap without stolen tails, saturation and continuous PCM across output chunks. Listen manually for tone, attack, loudness, rapid-sweep clutter and driver-specific crackle; adjust using that feedback.
+
+## Windows callback notifications
+
+The output worker uses a manual-reset event for waveOut CALLBACK_EVENT, as required by the [Windows callback contract](https://learn.microsoft.com/en-us/windows/win32/multimedia/using-an-callback-to-process-driver-messages). It resets the event before inspecting commands and completed headers; signals arriving during service remain set for the next wait. Commands and driver completions share that wakeup. Idle waits still block, and the 750 ms device grace period, buffer duration/capacity and mixing remain unchanged.
+
+Kernel-event and recording-stream regressions run without opening an audio device. They cover retained/coalesced notifications, commands during service, overlapping wind-chime bursts, partial completions and continuous PCM through queue reuse. These checks do not establish the cause of a particular user's audible crackle; rapid launch/reopen playback still needs listening on the affected device.
