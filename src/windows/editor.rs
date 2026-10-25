@@ -137,6 +137,7 @@ struct Editor {
 }
 struct PreviewCache {
     config: Config,
+    universe: usize,
     monitor: usize,
     width: i32,
     height: i32,
@@ -867,7 +868,7 @@ impl Editor {
             render::rgb(148, 164, 190),
             12,
         );
-        let warnings = geometry::warnings(&e.c, workw, workh);
+        let warnings = geometry::warnings_for_sectors(&e.c, &all, workw, workh);
         let warning = if warnings.is_empty() {
             "Layout fits this monitor's work area.".into()
         } else {
@@ -890,6 +891,7 @@ impl Editor {
         let height = (r.bottom - r.top + 110).max(1);
         let valid = self.preview_cache.as_ref().is_some_and(|v| {
             v.config == self.c
+                && v.universe == self.universe
                 && v.monitor == self.monitor
                 && v.width == width
                 && v.height == height
@@ -915,6 +917,7 @@ impl Editor {
             DeleteDC(memory);
             self.preview_cache = Some(PreviewCache {
                 config: self.c.clone(),
+                universe: self.universe,
                 monitor: self.monitor,
                 width,
                 height,
@@ -3091,6 +3094,57 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    #[test]
+    #[ignore = "offscreen native preview regression; run on Windows CI"]
+    fn switching_universes_rebuilds_cached_preview_without_editing_config() {
+        std::thread::spawn(|| unsafe {
+            let mut config = Config::default();
+            let mut second = config.universes[0].clone();
+            second.id = 10000;
+            second.name = "Empty second universe".into();
+            second.children = Some(vec![]);
+            config.universes.push(second);
+            fn symbols(node: &mut Node) {
+                node.icon = ItemIcon::Symbol;
+                for child in node.children.iter_mut().flatten() {
+                    symbols(child);
+                }
+            }
+            for root in &mut config.universes {
+                symbols(root);
+            }
+            let mut editor = Editor::new(null_mut(), PathBuf::new(), config.clone(), vec![]);
+            let dc = CreateCompatibleDC(null_mut());
+            assert!(!dc.is_null());
+            let bitmap = CreateCompatibleBitmap(dc, 1400, 900);
+            assert!(!bitmap.is_null());
+            let previous = SelectObject(dc, bitmap);
+            let first = editor.cached_preview(dc);
+            assert!(first > 0);
+            let cached = editor.preview_cache.as_ref().unwrap().bitmap;
+            assert_eq!(editor.cached_preview(dc), first);
+            assert_eq!(editor.preview_cache.as_ref().unwrap().bitmap, cached);
+            editor.universe = 1;
+            editor.selected = config.universes[1].id;
+            assert_eq!(
+                editor.cached_preview(dc),
+                0,
+                "old universe pixels were reused"
+            );
+            editor.universe = 0;
+            editor.selected = config.universes[0].id;
+            assert_eq!(editor.cached_preview(dc), first);
+            assert_eq!(editor.c, config);
+            assert!(!editor.dirty && !editor.item_dirty);
+            drop(editor);
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+        })
+        .join()
+        .unwrap();
+    }
+
     // Run on the remote Windows CI runner only. No visible windows, hooks,
     // mouse/keyboard synthesis or user configuration are involved.
     #[test]

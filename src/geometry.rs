@@ -235,10 +235,19 @@ pub fn directional_hit(sectors: &[Sector], p: Point) -> Option<&Sector> {
     })
 }
 pub fn warnings(config: &Config, width: f64, height: f64) -> Vec<String> {
-    let sectors = full(config);
+    warnings_for_sectors(config, &full(config), width, height)
+}
+
+/// Advise on exactly the sectors shown by a preview, including its selected universe.
+pub fn warnings_for_sectors(
+    config: &Config,
+    sectors: &[Sector],
+    width: f64,
+    height: f64,
+) -> Vec<String> {
     let mut narrow = false;
     let mut overflow = false;
-    for s in &sectors {
+    for s in sectors {
         narrow |= s.sweep * (s.inner + s.outer) * 0.5 < 24.;
         overflow |= s
             .polygon()
@@ -255,7 +264,7 @@ pub fn warnings(config: &Config, width: f64, height: f64) -> Vec<String> {
     if narrow {
         result.push("Some sectors are narrow or hidden by gaps; saving is still allowed.".into())
     }
-    if preview_overlap(config, &sectors) {
+    if preview_overlap(config, sectors) {
         result
             .push("Some target areas overlap in the full preview; saving is still allowed.".into());
     }

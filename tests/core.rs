@@ -649,3 +649,22 @@ fn the_default_configuration_can_open_its_own_editor() {
     );
     assert!(path.ends_with("constellation.exe"), "{path}");
 }
+
+#[test]
+fn preview_warnings_follow_selected_universe_sectors() {
+    let mut c = Config::default();
+    let mut second = c.universes[0].clone();
+    second.id = 10000;
+    second.children = Some(vec![]);
+    c.universes.push(second);
+    let snapshot = c.clone();
+    let first = geometry::full_from(&c, &c.universes[0], None);
+    let second = geometry::full_from(&c, &c.universes[1], None);
+    assert!(!geometry::warnings_for_sectors(&c, &first, 1., 1.).is_empty());
+    assert!(geometry::warnings_for_sectors(&c, &second, 1., 1.).is_empty());
+    assert_eq!(
+        geometry::warnings(&c, 1., 1.),
+        geometry::warnings_for_sectors(&c, &first, 1., 1.)
+    );
+    assert_eq!(c, snapshot);
+}
