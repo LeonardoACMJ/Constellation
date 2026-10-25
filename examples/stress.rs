@@ -10,6 +10,7 @@ fn star(id: u64) -> Node {
     Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id,
         name: format!("Star {id}"),
         children: None,
@@ -25,6 +26,7 @@ fn balanced(depth: usize, width: usize, id: &mut u64) -> Node {
     Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id: own,
         name: format!("Branch {own}"),
         children: Some((0..width).map(|_| balanced(depth - 1, width, id)).collect()),

@@ -167,6 +167,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
     let mut node = Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id: 65,
         name: "Deep Star".into(),
         children: None,
@@ -176,6 +177,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
         node = Node {
             note: String::new(),
             icon: Default::default(),
+            visible_in: vec![],
             id,
             name: format!("Level {id}"),
             children: Some(vec![node]),
@@ -218,6 +220,7 @@ fn ten_thousand_stars_remain_individually_selectable_without_paging() {
             .map(|id| Node {
                 note: String::new(),
                 icon: Default::default(),
+                visible_in: vec![],
                 id,
                 name: format!("Star {id}"),
                 children: None,

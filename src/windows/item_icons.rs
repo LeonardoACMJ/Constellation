@@ -487,6 +487,7 @@ mod cache_tests {
     fn node(id: u64) -> Node {
         Node {
             id,
+            visible_in: vec![],
             name: format!("App {id}"),
             children: None,
             target: Some(Target::Program {

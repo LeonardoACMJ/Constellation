@@ -690,7 +690,7 @@ impl Editor {
         let e = self;
         render::fill(dc, &e.preview, render::rgb(15, 22, 36));
         let tree = &e.c.universes[e.universe];
-        let all = geometry::full_from(&e.c, tree);
+        let all = geometry::full_from(&e.c, tree, None);
         let (workw, workh) = if let Some(d) = e.displays.get(e.monitor) {
             let (mut x, mut y) = (96, 96);
             GetDpiForMonitor(d.handle, MDT_EFFECTIVE_DPI, &mut x, &mut y);
@@ -1454,6 +1454,7 @@ impl Editor {
         let n = Node {
             note: String::new(),
             icon: Default::default(),
+            visible_in: vec![],
             id,
             name: if folder {
                 "New constellation"

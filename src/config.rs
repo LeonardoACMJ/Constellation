@@ -94,6 +94,10 @@ pub struct Node {
     pub target: Option<Target>,
     #[serde(default, skip_serializing_if = "ItemIcon::is_auto")]
     pub icon: ItemIcon,
+    /// Shortcut profiles that show this item. Empty means every profile, so an
+    /// item is shared unless it is deliberately restricted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_in: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,6 +470,35 @@ impl Config {
                 }
             }
         }
+        // A restriction naming a profile that opens a different universe is dead:
+        // the item is hidden everywhere and nothing ever shows it. Say so here
+        // rather than letting it read as a vanished item.
+        for universe in &self.universes {
+            let audience: HashSet<u64> = self
+                .profiles
+                .iter()
+                .filter(|p| self.universe_of(p).is_some_and(|u| u.id == universe.id))
+                .map(|p| p.id)
+                .collect();
+            fn restricted(n: &Node, audience: &HashSet<u64>, all: &HashSet<u64>) -> Result<(), String> {
+                for id in &n.visible_in {
+                    if !all.contains(id) {
+                        return Err(format!("{} is restricted to a profile that does not exist", n.name));
+                    }
+                    if !audience.contains(id) {
+                        return Err(format!(
+                            "{} is restricted to a profile that opens another universe, so nothing would show it",
+                            n.name
+                        ));
+                    }
+                }
+                for c in n.children.as_deref().unwrap_or_default() {
+                    restricted(c, audience, all)?;
+                }
+                Ok(())
+            }
+            restricted(universe, &audience, &profile_ids)?;
+        }
         Ok(())
     }
     /// The universe a profile opens. `universe == 0` means the first one, which
@@ -534,6 +567,7 @@ impl Default for Config {
             Node {
                 note: String::new(),
                 icon: Default::default(),
+                visible_in: vec![],
                 id,
                 name: name.into(),
                 children: None,
@@ -545,6 +579,7 @@ impl Default for Config {
             universes: vec![Node {
                 note: String::new(),
                 icon: Default::default(),
+                visible_in: vec![],
                 id: 1,
                 name: "Your universe".into(),
                 target: None,
@@ -552,6 +587,7 @@ impl Default for Config {
                     Node {
                         note: String::new(),
                         icon: Default::default(),
+                        visible_in: vec![],
                         id: 2,
                         name: "Everyday".into(),
                         target: None,
@@ -577,6 +613,7 @@ impl Default for Config {
                             Node {
                                 note: String::new(),
                                 icon: Default::default(),
+                                visible_in: vec![],
                                 id: 5,
                                 name: "Explore".into(),
                                 target: None,

@@ -173,6 +173,7 @@ pub fn star_from_path(root: &Path, path: &Path, id: u64) -> Result<Node, String>
     Ok(Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id,
         name: if path.is_dir() {
             path.file_name()

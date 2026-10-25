@@ -1,5 +1,5 @@
 use constellation::{
-    config::{Binding, Config, Input, Mode, Node, Target},
+    config::{Binding, Config, Input, Mode, Node, Profile, Target},
     engine::{Action, Engine},
     geometry::{self, Point},
     storage,
@@ -53,6 +53,7 @@ fn subdivision_keeps_every_target_without_pages() {
             .map(|id| Node {
                 note: String::new(),
                 icon: Default::default(),
+                visible_in: vec![],
                 id,
                 name: format!("Star {id}"),
                 children: None,
@@ -287,6 +288,7 @@ fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
     let star = |id| Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id,
         name: format!("Star {id}"),
         children: None,
@@ -296,6 +298,7 @@ fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
     c.universes[0].children = Some(vec![Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id: 2,
         name: "One".into(),
         children: Some(vec![star(3)]),
@@ -309,6 +312,7 @@ fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
     c.universes[0].children.as_mut().unwrap().push(Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id: 4,
         name: "Two".into(),
         children: Some(vec![star(5)]),
@@ -359,6 +363,7 @@ fn a_second_universe_switches_the_file_shape_and_survives_a_reload() {
     let second = Node {
         note: String::new(),
         icon: Default::default(),
+        visible_in: vec![],
         id: c.max_node_id() + 1,
         name: "Work".into(),
         children: Some(vec![]),
@@ -418,4 +423,121 @@ fn validate_rejects_entry_points_that_are_not_constellations_of_that_universe() 
     assert!(c.validate().is_ok());
     c.universes.clear();
     assert!(c.validate().is_err(), "a configuration needs a universe");
+}
+
+fn node(id: u64, name: &str, children: Option<Vec<Node>>, visible_in: Vec<u64>) -> Node {
+    Node {
+        note: String::new(),
+        icon: Default::default(),
+        visible_in,
+        id,
+        name: name.into(),
+        target: children
+            .is_none()
+            .then(|| Target::Folder { path: ".".into() }),
+        children,
+    }
+}
+
+/// Two bindings, one tree: the extra item belongs to the second profile only.
+fn shared_tree() -> Config {
+    let mut c = Config::default();
+    c.universes[0] = node(
+        1,
+        "Universe",
+        Some(vec![
+            node(2, "Shared", None, vec![]),
+            node(3, "Extra", None, vec![2]),
+        ]),
+        vec![],
+    );
+    c.profiles[0].id = 1;
+    let mut second = c.profiles[0].clone();
+    second.id = 2;
+    second.name = "Power".into();
+    second.binding = "Ctrl+F13".into();
+    c.profiles.push(second);
+    c
+}
+
+#[test]
+fn a_restricted_item_shows_only_for_the_profile_that_owns_it() {
+    let c = shared_tree();
+    assert!(c.validate().is_ok());
+    let ids = |profile: usize| -> Vec<u64> {
+        let mut e = Engine::default();
+        assert!(e.open(profile, &c));
+        e.sectors.iter().filter(|s| s.depth == 0).map(|s| s.id).collect()
+    };
+    assert_eq!(ids(0), vec![2], "the plain binding never sees the extra");
+    assert_eq!(ids(1), vec![2, 3]);
+}
+
+/// fan() and full_from() must walk the same filtered list. Hiding the first
+/// child shifts every later one, so a stale zip pairs a sector with its
+/// neighbour and the radial would open the wrong branch.
+#[test]
+fn hiding_a_child_does_not_shift_sectors_onto_the_wrong_item() {
+    let mut c = Config::default();
+    c.universes[0] = node(
+        1,
+        "Universe",
+        Some(vec![
+            node(2, "Hidden branch", Some(vec![node(3, "Never", None, vec![])]), vec![9]),
+            node(4, "Real branch", Some(vec![node(5, "Wanted", None, vec![])]), vec![]),
+        ]),
+        vec![],
+    );
+    c.profiles[0].id = 1;
+    c.profiles.push(Profile { id: 9, name: "Other".into(), binding: "F13".into(), ..c.profiles[0].clone() });
+    assert!(c.validate().is_ok());
+    let tree = c.universes[0].clone();
+    let full: Vec<(usize, u64)> = geometry::full_from(&c, &tree, Some(1))
+        .iter()
+        .map(|s| (s.depth, s.id))
+        .collect();
+    assert_eq!(full, vec![(0, 4), (1, 5)], "{full:?}");
+    // And navigating really lands on the surviving branch's own child.
+    let mut e = Engine::default();
+    assert!(e.open(0, &c));
+    e.motion(&c, geometry::Point { x: 0., y: 0. });
+    let deep = geometry::visible_from(&c, &tree, Some(1), &[4]);
+    assert!(deep.iter().any(|s| s.depth == 1 && s.id == 5));
+    assert!(!deep.iter().any(|s| s.id == 3), "hidden branch stayed hidden");
+}
+
+#[test]
+fn a_constellation_emptied_by_filtering_disappears_but_an_authored_empty_one_stays() {
+    let mut c = Config::default();
+    c.universes[0] = node(
+        1,
+        "Universe",
+        Some(vec![
+            node(2, "All restricted", Some(vec![node(3, "Only other", None, vec![9])]), vec![]),
+            node(4, "Authored empty", Some(vec![]), vec![]),
+        ]),
+        vec![],
+    );
+    c.profiles[0].id = 1;
+    c.profiles.push(Profile { id: 9, name: "Other".into(), binding: "F13".into(), ..c.profiles[0].clone() });
+    assert!(c.validate().is_ok());
+    let tree = c.universes[0].clone();
+    let shown: Vec<u64> = geometry::visible_from(&c, &tree, Some(1), &[])
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(shown, vec![4], "an empty fan is a dead end, an authored one is a choice");
+}
+
+#[test]
+fn validate_rejects_restrictions_that_nothing_could_ever_show() {
+    let mut c = shared_tree();
+    c.universes[0].children.as_mut().unwrap()[1].visible_in = vec![77];
+    assert!(c.validate().is_err(), "unknown profile");
+    // A profile that opens another universe can never reveal it.
+    let other = node(10, "Work", Some(vec![]), vec![]);
+    c.universes.push(other);
+    c.profiles[1].universe = 10;
+    c.universes[0].children.as_mut().unwrap()[1].visible_in = vec![2];
+    assert!(c.validate().is_err(), "audience opens a different universe");
 }

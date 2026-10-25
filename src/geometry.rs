@@ -51,10 +51,41 @@ impl Sector {
     }
 }
 
-fn fan(node: &Node, depth: usize, center: Point, direction: f64, l: Layout, out: &mut Vec<Sector>) {
-    let Some(children) = node.children.as_ref() else {
+/// Children a shortcut profile can see. `None` hides nothing, which is what the
+/// editor preview wants.
+pub fn visible_children(node: &Node, profile: Option<u64>) -> Vec<&Node> {
+    let all = node.children.as_deref().unwrap_or_default();
+    match profile {
+        None => all.iter().collect(),
+        Some(p) => all.iter().filter(|c| shows(c, p)).collect(),
+    }
+}
+fn shows(node: &Node, profile: u64) -> bool {
+    if !node.visible_in.is_empty() && !node.visible_in.contains(&profile) {
+        return false;
+    }
+    // A constellation left with nothing is a dead end, so filtering one empty
+    // hides it too. One that was authored empty keeps showing: that is how it
+    // behaves without profiles, and hiding it would change existing menus.
+    match node.children.as_deref() {
+        Some(children) if !children.is_empty() => children.iter().any(|c| shows(c, profile)),
+        _ => true,
+    }
+}
+
+fn fan(
+    node: &Node,
+    profile: Option<u64>,
+    depth: usize,
+    center: Point,
+    direction: f64,
+    l: Layout,
+    out: &mut Vec<Sector>,
+) {
+    if node.children.is_none() {
         return;
-    };
+    }
+    let children = visible_children(node, profile);
     if children.is_empty() {
         return;
     }
@@ -93,16 +124,21 @@ fn fan(node: &Node, depth: usize, center: Point, direction: f64, l: Layout, out:
 /// open use `visible_from` with that profile's entry node instead.
 pub fn visible(config: &Config, path: &[u64]) -> Vec<Sector> {
     match config.universes.first() {
-        Some(start) => visible_from(config, start, path),
+        Some(start) => visible_from(config, start, None, path),
         None => vec![],
     }
 }
-pub fn visible_from(config: &Config, start: &Node, path: &[u64]) -> Vec<Sector> {
+pub fn visible_from(
+    config: &Config,
+    start: &Node,
+    profile: Option<u64>,
+    path: &[u64],
+) -> Vec<Sector> {
     let mut out = vec![];
     let mut node = start;
     let mut center = Point::default();
     let mut direction = -PI / 2.;
-    fan(node, 0, center, direction, config.layout, &mut out);
+    fan(node, profile, 0, center, direction, config.layout, &mut out);
     for (depth, id) in path.iter().enumerate() {
         let Some(s) = out
             .iter()
@@ -111,10 +147,9 @@ pub fn visible_from(config: &Config, start: &Node, path: &[u64]) -> Vec<Sector> 
         else {
             break;
         };
-        let Some(child) = node
-            .children
-            .as_ref()
-            .and_then(|cs| cs.iter().find(|n| n.id == *id))
+        let Some(child) = visible_children(node, profile)
+            .into_iter()
+            .find(|n| n.id == *id)
         else {
             break;
         };
@@ -124,19 +159,20 @@ pub fn visible_from(config: &Config, start: &Node, path: &[u64]) -> Vec<Sector> 
         center = center.polar(config.layout.radius * config.layout.distance, s.angle);
         direction = s.angle;
         node = child;
-        fan(node, depth + 1, center, direction, config.layout, &mut out);
+        fan(node, profile, depth + 1, center, direction, config.layout, &mut out);
     }
     out
 }
 pub fn full(config: &Config) -> Vec<Sector> {
     match config.universes.first() {
-        Some(start) => full_from(config, start),
+        Some(start) => full_from(config, start, None),
         None => vec![],
     }
 }
-pub fn full_from(config: &Config, start: &Node) -> Vec<Sector> {
+pub fn full_from(config: &Config, start: &Node, profile: Option<u64>) -> Vec<Sector> {
     fn walk(
         node: &Node,
+        profile: Option<u64>,
         depth: usize,
         center: Point,
         direction: f64,
@@ -144,15 +180,15 @@ pub fn full_from(config: &Config, start: &Node) -> Vec<Sector> {
         out: &mut Vec<Sector>,
     ) {
         let start = out.len();
-        fan(node, depth, center, direction, l, out);
+        fan(node, profile, depth, center, direction, l, out);
         let added = out[start..].to_vec();
-        for (s, child) in added
-            .iter()
-            .zip(node.children.as_deref().unwrap_or_default())
-        {
+        // Same list fan() just laid out: zipping against the unfiltered children
+        // would pair each sector with the wrong item.
+        for (s, child) in added.iter().zip(visible_children(node, profile)) {
             if child.children.is_some() {
                 walk(
                     child,
+                    profile,
                     depth + 1,
                     center.polar(l.radius * l.distance, s.angle),
                     s.angle,
@@ -163,7 +199,15 @@ pub fn full_from(config: &Config, start: &Node) -> Vec<Sector> {
         }
     }
     let mut out = vec![];
-    walk(start, 0, Point::default(), -PI / 2., config.layout, &mut out);
+    walk(
+        start,
+        profile,
+        0,
+        Point::default(),
+        -PI / 2.,
+        config.layout,
+        &mut out,
+    );
     out
 }
 pub fn hit(sectors: &[Sector], p: Point) -> Option<&Sector> {

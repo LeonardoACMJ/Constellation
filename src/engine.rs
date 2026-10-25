@@ -39,8 +39,9 @@ impl Engine {
         c.entry_of(c.profiles.get(self.profile?)?)
     }
     fn rebuild(&mut self, c: &Config) {
+        let profile = self.profile.and_then(|i| c.profiles.get(i)).map(|p| p.id);
         self.sectors = match self.entry(c) {
-            Some(start) => geometry::visible_from(c, start, &self.path),
+            Some(start) => geometry::visible_from(c, start, profile, &self.path),
             None => vec![],
         };
     }
