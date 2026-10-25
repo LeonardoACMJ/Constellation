@@ -150,3 +150,35 @@ fn the_universe_row_stays_above_a_growing_tree() {
         assert_eq!(c.h, 200);
     }
 }
+
+/// Name/Kind and Parent/Icon share a row each. They must not overlap, must stay
+/// inside the item column, and must leave the visibility list clear of Apply.
+#[test]
+fn paired_item_rows_stay_side_by_side_inside_their_column() {
+    const NAME: i32 = 201;
+    const KIND: i32 = 202;
+    const PARENT: i32 = 207;
+    const ICON_MODE: i32 = 215;
+    const VISIBLE: i32 = 220;
+    const APPLY: i32 = 301;
+    for (w, h) in [(MIN_WIDTH, MIN_HEIGHT), (2451, 1080)] {
+        let l = Layout::new(w, h, 17, 17);
+        let left = |x, y, w, h, id| l.control(Rect { x, y, w, h }, id);
+        let name = left(305, 66, 175, 28, NAME);
+        let kind = left(490, 66, 175, 250, KIND);
+        let parent = left(305, 444, 175, 250, PARENT);
+        let icon = left(490, 444, 175, 180, ICON_MODE);
+        let visible = left(305, 505, 175, 72, VISIBLE);
+        let apply = left(305, 585, 150, 32, APPLY);
+        for (a, b) in [(name, kind), (parent, icon)] {
+            assert!(a.x + a.w <= b.x, "paired controls overlap at {w}x{h}");
+            assert_eq!(a.y, b.y, "a pair shares its row");
+        }
+        assert!(
+            kind.x + kind.w <= l.item_x + l.item_width,
+            "the right half stays inside the item column"
+        );
+        assert!(visible.y + visible.h <= apply.y, "the list clears Apply");
+        assert!(visible.y >= parent.y + 28, "the list sits below the parent row");
+    }
+}

@@ -48,6 +48,7 @@ const RUNNER: i32 = 205;
 const CWD: i32 = 206;
 const PARENT: i32 = 207;
 const UNIVERSE: i32 = 219;
+const VISIBLE: i32 = 220;
 const ADD_UNIVERSE: i32 = 307;
 const APPLY: i32 = 301;
 const ADD_STAR: i32 = 302;
@@ -351,15 +352,17 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             control(hwnd, "BUTTON", title, id, x, y, w, 30, 0);
         }
         label(hwnd, "ITEM", 305, 18, 340);
-        for (id, title, y) in [
-            (NAME, "Name", 45),
-            (NOTE, "Note", 108),
-            (KIND, "Kind", 171),
-            (TARGET, "Target path / URL", 234),
-            (ARGS, "Arguments (quote values containing spaces)", 297),
-            (RUNNER, "Script runner (blank = extension default)", 360),
-            (CWD, "Working directory (blank = portable folder)", 423),
-            (PARENT, "Parent constellation", 486),
+        // Name/Kind and Parent/Icon share a row each, the way the layout fields
+        // below already do, which is what frees the band for "Visible in".
+        for (id, title, x, y, w) in [
+            (NAME, "Name", 305, 45, 175),
+            (KIND, "Kind", 490, 45, 175),
+            (NOTE, "Note", 305, 108, 360),
+            (TARGET, "Target path / URL", 305, 171, 360),
+            (ARGS, "Arguments (quote values containing spaces)", 305, 234, 360),
+            (RUNNER, "Script runner (blank = extension default)", 305, 297, 360),
+            (CWD, "Working directory (blank = portable folder)", 305, 360, 360),
+            (PARENT, "Parent constellation", 305, 423, 175),
         ] {
             if id == NOTE {
                 control(
@@ -367,14 +370,14 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                     "STATIC",
                     "Note (0/140)",
                     NOTE_COUNT,
-                    305,
+                    x,
                     y,
-                    360,
+                    w,
                     20,
                     0,
                 );
             } else {
-                label(hwnd, title, 305, y, 360);
+                label(hwnd, title, x, y, w);
             }
             let combo = matches!(id, KIND | PARENT);
             control(
@@ -382,12 +385,12 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                 if combo { "COMBOBOX" } else { "EDIT" },
                 "",
                 id,
-                305,
+                x,
                 y + 21,
                 if matches!(id, TARGET | RUNNER | CWD) {
                     280
                 } else {
-                    360
+                    w
                 },
                 if combo { 250 } else { 28 },
                 WS_BORDER
@@ -417,21 +420,33 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             send(hwnd, KIND, CB_ADDSTRING, 0, wide(title).as_ptr() as isize);
         }
         for (id, y) in [
-            (BROWSE_TARGET, 257),
-            (BROWSE_RUNNER, 381),
-            (BROWSE_CWD, 444),
+            (BROWSE_TARGET, 194),
+            (BROWSE_RUNNER, 320),
+            (BROWSE_CWD, 383),
         ] {
             control(hwnd, "BUTTON", "Browse…", id, 592, y, 73, 28, 0);
         }
         control(hwnd, "STATIC", "", ADVICE, 465, 585, 200, 48, 0);
+        label(hwnd, "Visible in (none selected = every profile)", 305, 484, 175);
+        control(
+            hwnd,
+            "LISTBOX",
+            "",
+            VISIBLE,
+            305,
+            505,
+            175,
+            72,
+            WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY as u32 | LBS_MULTIPLESEL as u32,
+        );
         control(
             hwnd,
             "COMBOBOX",
             "",
             ICON_MODE,
-            305,
-            547,
-            280,
+            490,
+            444,
+            175,
             180,
             WS_TABSTOP | CBS_DROPDOWNLIST as u32,
         );
@@ -449,7 +464,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                 wide(title).as_ptr() as isize,
             );
         }
-        control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 592, 547, 73, 28, 0);
+        control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 490, 484, 73, 28, 0);
         control(hwnd, "BUTTON", "Undo", UNDO, 20, 610, 120, 32, 0);
         control(hwnd, "BUTTON", "Redo", REDO, 150, 610, 130, 32, 0);
         control(hwnd, "BUTTON", "Import…", IMPORT, 20, 652, 120, 32, 0);
@@ -1229,6 +1244,16 @@ impl Editor {
         self.selection_to_controls();
         InvalidateRect(self.hwnd, null(), 1);
     }
+    /// Profiles that open the universe being edited, as (id, name).
+    fn audience(&self) -> Vec<(u64, String)> {
+        let universe = self.c.universes[self.universe].id;
+        self.c
+            .profiles
+            .iter()
+            .filter(|p| self.c.universe_of(p).is_some_and(|u| u.id == universe))
+            .map(|p| (p.id, p.name.clone()))
+            .collect()
+    }
     unsafe fn selection_to_controls(&mut self) {
         let Some(n) = self.c.find(self.selected) else {
             return;
@@ -1296,6 +1321,20 @@ impl Editor {
             .position(|id| *id == parent)
             .unwrap_or(0);
         send(self.hwnd, PARENT, CB_SETCURSEL, idx, 0);
+        let restricted = n.visible_in.clone();
+        send(self.hwnd, VISIBLE, LB_RESETCONTENT, 0, 0);
+        for (i, p) in self.audience().into_iter().enumerate() {
+            send(
+                self.hwnd,
+                VISIBLE,
+                LB_ADDSTRING,
+                0,
+                wide(&p.1).as_ptr() as isize,
+            );
+            if restricted.contains(&p.0) {
+                send(self.hwnd, VISIBLE, LB_SETSEL, 1, i as isize);
+            }
+        }
         self.item_dirty = false;
         self.enable_fields();
         self.advice();
@@ -1411,7 +1450,24 @@ impl Editor {
                 "Move/remove this constellation's children before converting it to a Star".into(),
             );
         }
+        let audience = self.audience();
+        // Keep any restriction aimed at a profile this list does not offer, so a
+        // value set by hand in the JSON is not silently dropped here.
+        let mut visible_in: Vec<u64> = old
+            .visible_in
+            .iter()
+            .copied()
+            .filter(|id| !audience.iter().any(|(p, _)| p == id))
+            .collect();
+        visible_in.extend(
+            audience
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| send(self.hwnd, VISIBLE, LB_GETSEL, *i, 0) > 0)
+                .map(|(_, (id, _))| *id),
+        );
         let n = candidate.universes[self.universe].find_mut(self.selected).unwrap();
+        n.visible_in = visible_in;
         n.name = get(self.hwnd, NAME);
         n.note = get(self.hwnd, NOTE);
         n.children = if target.is_none() {
@@ -1840,6 +1896,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         }
                     }
                 }
+                InvalidateRect(hwnd, null(), 1);
+                return 0;
+            }
+            if id == VISIBLE && notify == LBN_SELCHANGE as u32 {
+                e.item_dirty = true;
                 InvalidateRect(hwnd, null(), 1);
                 return 0;
             }
