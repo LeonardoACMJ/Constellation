@@ -16,7 +16,7 @@ The app/tray icon is a mint four-point star. Individual Stars use one star; Cons
 - Locking/disconnecting the session or suspending the PC cancels the current gesture. Availability resumes after unlock/reconnect/resume. Late releases cannot launch from the cancelled gesture.
 - The radial opens without activating its window: the current app keeps focus while the launcher consumes navigation/selection inputs. Switching foreground applications cancels the radial. The tray icon is restored after Explorer recreates the taskbar.
 
-The sample tree includes Calculator, Notepad, the portable folder, and a GitHub URL. Customize it before relying on fixed gestures.
+The sample tree includes Calculator, Notepad, the portable folder, a GitHub URL, and **Settings**, which opens this configuration editor without going through the tray icon. Customize it before relying on fixed gestures.
 
 ## Configure
 
@@ -69,6 +69,16 @@ Click mode stays open after release. Hold mode selects the hovered Star when the
 3. Select the Constellation again and add another Constellation to test nesting. Add a Star inside that one. The **Parent constellation** field moves existing items between branches.
 4. Click **Save**, close the editor, and invoke Ctrl+Q. Hover through your new branch.
 
+## Universes, entry points and visibility
+
+A configuration holds one or more **universes**: independent trees. The selector above the item list chooses which one you are editing, **+ Universe** adds one, and the universe root is the list's first row, so the **Name** field renames it. Deleting that root deletes the universe; the editor refuses while it is the last one, or while a shortcut profile still opens it, and names that profile.
+
+Each shortcut profile opens exactly one universe, chosen in **Shortcut profiles → Opens universe**. **Opens at** picks where in that universe the radial starts: its root, listed first as *whole universe*, or any Constellation inside it. An entry point is a view, not a copy — pointing a second binding at an existing Constellation duplicates nothing and cannot drift from it. Switching the universe rebuilds that list, because a node from another tree is not a legal entry.
+
+**Visible in** restricts an item to particular shortcut profiles. Selecting nothing means every profile, which keeps sharing the default. Use it when two bindings should show nearly the same menu: tag the extra items instead of copying the tree, and there is nothing to keep in step afterwards. A Constellation left with no visible children is hidden too, since an empty fan is a dead end; one you authored empty keeps showing. The list offers only the profiles that open the universe being edited, because a binding that opens another tree could never reveal the item.
+
+Node IDs are unique across every universe, so a navigation path never resolves against the wrong tree.
+
 ## Target types
 
 - **Program:** executable path/name, arguments, optional working directory.
@@ -80,6 +90,8 @@ Click mode stays open after release. Hold mode selects the hovered Star when the
 Relative file paths resolve from this folder, not the directory from which the app was invoked. A plain program/runner name resolves through PATH. External installed applications remain external; copying Constellation does not copy those programs.
 
 ## Files and exit
+
+**Universe compatibility (0.1.27):** a configuration with a single universe is still written in the original `root` shape, and `universe`/`root_id` are omitted from profiles while they hold their defaults, so an existing file is not rewritten by opening and saving it. The moment a second universe exists, Save writes a `universes` list instead and older builds cannot read that file. `visible_in` behaves like `note`: older builds reject any node carrying it. Keep a copy from before, or remove the field from every node, if you intend to downgrade.
 
 **Instrument compatibility (0.1.23):** missing `sound.instrument` defaults to Soft mallet and that default is omitted on Save. Non-default choices save an instrument field (for example, `"instrument": "wind_chimes"`); older builds that reject unknown sound fields cannot read those selections. The configuration format version stays unchanged.
 

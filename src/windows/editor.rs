@@ -258,6 +258,16 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         trace(concat!("editor.start version=", env!("CARGO_PKG_VERSION")));
     }
     unsafe {
+        // One editor at a time. The tray and a Settings star both spawn this same
+        // process, and two editors would each hold their own draft of the whole
+        // configuration, so whichever saved last would silently discard the other.
+        // Raising the existing window beats refusing: the user asked to edit.
+        let existing = FindWindowW(wide("Constellation.Config").as_ptr(), null());
+        if !existing.is_null() {
+            ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+            return Ok(());
+        }
         let controls = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
             dwICC: ICC_BAR_CLASSES,

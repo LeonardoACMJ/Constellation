@@ -25,7 +25,7 @@ A lightweight, globally invoked Windows system-tray radial launcher: invoke a sh
 
 **Agreed distribution:** a self-contained portable folder; see §5.1. Windows is the first implementation, with boundaries that support a later Linux port (ARCH-03).
 
-**Proposed first release:** one shared item tree. Shipping a Linux build, cloud sync, plugins, and automated application discovery are outside this draft's scope. The native renderer and configuration UI remain implementation choices.
+**Item trees (0.1.27):** superseding the single shared tree of earlier drafts, a configuration holds one or more independent **universes**, and each shortcut profile opens exactly one of them, optionally starting at a Constellation inside it rather than at its root. An entry point is a view of the existing tree, never a copy. A node may also name the profiles that show it, so two bindings can share one tree and still differ by an item or two. Node IDs stay unique across every universe, which keeps lookup and the navigation path free of a tree argument. Shipping a Linux build, cloud sync, plugins, and automated application discovery are outside this draft's scope. The native renderer and configuration UI remain implementation choices.
 
 ## 2. Shortcut settings
 
