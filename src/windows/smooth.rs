@@ -129,11 +129,29 @@ mod render_tests {
             for scale in [1., 1.5] {
                 for hover in [None, Some(2), Some(5), Some(6)] {
                     surface
-                        .draw(&plain, &plain.universes[0], &sectors, &path, hover, origin, scale, false)
+                        .draw(
+                            &plain,
+                            &plain.universes[0],
+                            &sectors,
+                            &path,
+                            hover,
+                            origin,
+                            scale,
+                            false,
+                        )
                         .unwrap();
                     let expected = bytes(&surface).to_vec();
                     surface
-                        .draw(&noted, &noted.universes[0], &sectors, &path, hover, origin, scale, false)
+                        .draw(
+                            &noted,
+                            &noted.universes[0],
+                            &sectors,
+                            &path,
+                            hover,
+                            origin,
+                            scale,
+                            false,
+                        )
                         .unwrap();
                     assert_eq!(
                         expected,
@@ -224,7 +242,16 @@ mod render_tests {
             let mut surface = Surface::new(800, 800).unwrap();
             let started = std::time::Instant::now();
             surface
-                .draw(&c, &c.universes[0], &sectors, &path, Some(7), origin, 1.25, false)
+                .draw(
+                    &c,
+                    &c.universes[0],
+                    &sectors,
+                    &path,
+                    Some(7),
+                    origin,
+                    1.25,
+                    false,
+                )
                 .unwrap();
             let first_ms = started.elapsed().as_secs_f64() * 1000.;
             let first = bytes(&surface).to_vec();
@@ -248,7 +275,16 @@ mod render_tests {
             assert!(transparent > 10000 && partial > 500 && levels.len() > 30);
             let repeat_started = std::time::Instant::now();
             surface
-                .draw(&c, &c.universes[0], &sectors, &path, Some(7), origin, 1.25, false)
+                .draw(
+                    &c,
+                    &c.universes[0],
+                    &sectors,
+                    &path,
+                    Some(7),
+                    origin,
+                    1.25,
+                    false,
+                )
                 .unwrap();
             let repeat_ms = repeat_started.elapsed().as_secs_f64() * 1000.;
             assert_eq!(
@@ -333,7 +369,16 @@ mod render_tests {
                 };
                 let mut surface = Surface::new(size, size).unwrap();
                 surface
-                    .draw(&c, &c.universes[0], &sectors, &[], None, origin, scale, false)
+                    .draw(
+                        &c,
+                        &c.universes[0],
+                        &sectors,
+                        &[],
+                        None,
+                        origin,
+                        scale,
+                        false,
+                    )
                     .unwrap();
                 let alpha = |radius: f64| {
                     let x = (origin.x + radius * scale) as usize;
@@ -349,7 +394,16 @@ mod render_tests {
                     "Saved radius must not expand with smoothing"
                 );
                 surface
-                    .draw(&c, &c.universes[0], &sectors, &[], None, origin, scale, true)
+                    .draw(
+                        &c,
+                        &c.universes[0],
+                        &sectors,
+                        &[],
+                        None,
+                        origin,
+                        scale,
+                        true,
+                    )
                     .unwrap();
                 let corner = &bytes(&surface)[..4];
                 assert_eq!(
@@ -358,7 +412,16 @@ mod render_tests {
                     "Custom cursor plane uses minimal nonzero alpha"
                 );
                 surface
-                    .draw(&c, &c.universes[0], &sectors, &[], None, origin, scale, false)
+                    .draw(
+                        &c,
+                        &c.universes[0],
+                        &sectors,
+                        &[],
+                        None,
+                        origin,
+                        scale,
+                        false,
+                    )
                     .unwrap();
                 assert_eq!(
                     &bytes(&surface)[..4],

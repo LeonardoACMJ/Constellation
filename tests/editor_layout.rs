@@ -133,9 +133,24 @@ fn the_universe_row_stays_above_a_growing_tree() {
     const TREE: i32 = 100;
     const UNIVERSE: i32 = 219;
     const ADD_UNIVERSE: i32 = 307;
-    let combo = Rect { x: 20, y: 40, w: 182, h: 200 };
-    let button = Rect { x: 210, y: 40, w: 70, h: 26 };
-    let tree = Rect { x: 20, y: 98, w: 260, h: 417 };
+    let combo = Rect {
+        x: 20,
+        y: 40,
+        w: 182,
+        h: 200,
+    };
+    let button = Rect {
+        x: 210,
+        y: 40,
+        w: 70,
+        h: 26,
+    };
+    let tree = Rect {
+        x: 20,
+        y: 98,
+        w: 260,
+        h: 417,
+    };
     for height in [MIN_HEIGHT, MIN_HEIGHT + 400, 1440] {
         let l = Layout::new(MIN_WIDTH, height, 17, 17);
         let c = l.control(combo, UNIVERSE);
@@ -179,6 +194,9 @@ fn paired_item_rows_stay_side_by_side_inside_their_column() {
             "the right half stays inside the item column"
         );
         assert!(visible.y + visible.h <= apply.y, "the list clears Apply");
-        assert!(visible.y >= parent.y + 28, "the list sits below the parent row");
+        assert!(
+            visible.y >= parent.y + 28,
+            "the list sits below the parent row"
+        );
     }
 }

@@ -480,10 +480,17 @@ impl Config {
                 .filter(|p| self.universe_of(p).is_some_and(|u| u.id == universe.id))
                 .map(|p| p.id)
                 .collect();
-            fn restricted(n: &Node, audience: &HashSet<u64>, all: &HashSet<u64>) -> Result<(), String> {
+            fn restricted(
+                n: &Node,
+                audience: &HashSet<u64>,
+                all: &HashSet<u64>,
+            ) -> Result<(), String> {
                 for id in &n.visible_in {
                     if !all.contains(id) {
-                        return Err(format!("{} is restricted to a profile that does not exist", n.name));
+                        return Err(format!(
+                            "{} is restricted to a profile that does not exist",
+                            n.name
+                        ));
                     }
                     if !audience.contains(id) {
                         return Err(format!(

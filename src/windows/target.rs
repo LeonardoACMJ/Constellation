@@ -279,7 +279,11 @@ mod tests {
             if fs::metadata(path).is_ok_and(|m| m.len() > 0) {
                 return;
             }
-            assert!(Instant::now() < until, "Missing or empty {}", path.display());
+            assert!(
+                Instant::now() < until,
+                "Missing or empty {}",
+                path.display()
+            );
             std::thread::sleep(Duration::from_millis(25));
         }
     }

@@ -329,7 +329,17 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             200,
             WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
         );
-        control(hwnd, "BUTTON", "+ Universe", ADD_UNIVERSE, 210, 40, 70, 26, 0);
+        control(
+            hwnd,
+            "BUTTON",
+            "+ Universe",
+            ADD_UNIVERSE,
+            210,
+            40,
+            70,
+            26,
+            0,
+        );
         label(hwnd, "STARS & CONSTELLATIONS", 20, 74, 270);
         control(
             hwnd,
@@ -359,23 +369,31 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             (KIND, "Kind", 490, 45, 175),
             (NOTE, "Note", 305, 108, 360),
             (TARGET, "Target path / URL", 305, 171, 360),
-            (ARGS, "Arguments (quote values containing spaces)", 305, 234, 360),
-            (RUNNER, "Script runner (blank = extension default)", 305, 297, 360),
-            (CWD, "Working directory (blank = portable folder)", 305, 360, 360),
+            (
+                ARGS,
+                "Arguments (quote values containing spaces)",
+                305,
+                234,
+                360,
+            ),
+            (
+                RUNNER,
+                "Script runner (blank = extension default)",
+                305,
+                297,
+                360,
+            ),
+            (
+                CWD,
+                "Working directory (blank = portable folder)",
+                305,
+                360,
+                360,
+            ),
             (PARENT, "Parent constellation", 305, 423, 175),
         ] {
             if id == NOTE {
-                control(
-                    hwnd,
-                    "STATIC",
-                    "Note (0/140)",
-                    NOTE_COUNT,
-                    x,
-                    y,
-                    w,
-                    20,
-                    0,
-                );
+                control(hwnd, "STATIC", "Note (0/140)", NOTE_COUNT, x, y, w, 20, 0);
             } else {
                 label(hwnd, title, x, y, w);
             }
@@ -427,7 +445,13 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             control(hwnd, "BUTTON", "Browse…", id, 592, y, 73, 28, 0);
         }
         control(hwnd, "STATIC", "", ADVICE, 465, 585, 200, 48, 0);
-        label(hwnd, "Visible in (none selected = every profile)", 305, 484, 175);
+        label(
+            hwnd,
+            "Visible in (none selected = every profile)",
+            305,
+            484,
+            175,
+        );
         control(
             hwnd,
             "LISTBOX",
@@ -773,7 +797,18 @@ impl Editor {
                     .filter_map(|s| e.c.find(s.id)),
             ),
         );
-        render::draw_with_icons(dc, &e.c, tree, &all, &[], None, origin, scale, true, &images);
+        render::draw_with_icons(
+            dc,
+            &e.c,
+            tree,
+            &all,
+            &[],
+            None,
+            origin,
+            scale,
+            true,
+            &images,
+        );
         RestoreDC(dc, saved);
         render::text(
             dc,
@@ -1314,7 +1349,8 @@ impl Editor {
         set(self.hwnd, ARGS, &editing::format_arguments(&args));
         set(self.hwnd, RUNNER, &runner);
         set(self.hwnd, CWD, &cwd);
-        let parent = find_parent(&self.c.universes[self.universe], self.selected).unwrap_or(self.c.universes[self.universe].id);
+        let parent = find_parent(&self.c.universes[self.universe], self.selected)
+            .unwrap_or(self.c.universes[self.universe].id);
         let idx = self
             .parents
             .iter()
@@ -1466,7 +1502,9 @@ impl Editor {
                 .filter(|(i, _)| send(self.hwnd, VISIBLE, LB_GETSEL, *i, 0) > 0)
                 .map(|(_, (id, _))| *id),
         );
-        let n = candidate.universes[self.universe].find_mut(self.selected).unwrap();
+        let n = candidate.universes[self.universe]
+            .find_mut(self.selected)
+            .unwrap();
         n.visible_in = visible_in;
         n.name = get(self.hwnd, NAME);
         n.note = get(self.hwnd, NOTE);
@@ -1501,8 +1539,8 @@ impl Editor {
                 return Err("A constellation cannot be moved into itself or a descendant".into());
             }
             if find_parent(&candidate.universes[self.universe], self.selected) != Some(parent) {
-                let node =
-                    remove(&mut candidate.universes[self.universe], self.selected).ok_or("Cannot move this item")?;
+                let node = remove(&mut candidate.universes[self.universe], self.selected)
+                    .ok_or("Cannot move this item")?;
                 candidate.universes[self.universe]
                     .find_mut(parent)
                     .and_then(|p| p.children.as_mut())
@@ -1526,7 +1564,8 @@ impl Editor {
         {
             self.selected
         } else {
-            find_parent(&self.c.universes[self.universe], self.selected).unwrap_or(self.c.universes[self.universe].id)
+            find_parent(&self.c.universes[self.universe], self.selected)
+                .unwrap_or(self.c.universes[self.universe].id)
         };
         let id = self
             .c
@@ -1572,9 +1611,7 @@ impl Editor {
         self.apply()?;
         let before = self.c.clone();
         if let Some(parent) = find_parent(&self.c.universes[self.universe], self.selected) {
-            let cs = self
-                .c
-                .universes[self.universe]
+            let cs = self.c.universes[self.universe]
                 .find_mut(parent)
                 .unwrap()
                 .children
@@ -2036,11 +2073,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                             return Err("The last universe cannot be deleted".into());
                         }
                         let doomed = e.c.universes[e.universe].id;
-                        if let Some(p) = e
-                            .c
-                            .profiles
-                            .iter()
-                            .find(|p| e.c.universe_of(p).is_some_and(|u| u.id == doomed))
+                        if let Some(p) =
+                            e.c.profiles
+                                .iter()
+                                .find(|p| e.c.universe_of(p).is_some_and(|u| u.id == doomed))
                         {
                             return Err(format!(
                                 "{} opens this universe; point it elsewhere first",
@@ -2495,20 +2531,19 @@ unsafe fn profiles(e: &mut Editor) {
         return;
     }
     theme::window(hwnd);
-    let trees = e
-        .c
-        .universes
-        .iter()
-        .map(|u| {
-            let mut entries = vec![];
-            collect_entries(u, 0, &mut entries);
-            UniverseInfo {
-                id: u.id,
-                name: u.name.clone(),
-                entries,
-            }
-        })
-        .collect();
+    let trees =
+        e.c.universes
+            .iter()
+            .map(|u| {
+                let mut entries = vec![];
+                collect_entries(u, 0, &mut entries);
+                UniverseInfo {
+                    id: u.id,
+                    name: u.name.clone(),
+                    entries,
+                }
+            })
+            .collect();
     e.profiles = Some(Profiles {
         hwnd,
         trees,

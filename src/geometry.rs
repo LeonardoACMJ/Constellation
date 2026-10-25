@@ -159,7 +159,15 @@ pub fn visible_from(
         center = center.polar(config.layout.radius * config.layout.distance, s.angle);
         direction = s.angle;
         node = child;
-        fan(node, profile, depth + 1, center, direction, config.layout, &mut out);
+        fan(
+            node,
+            profile,
+            depth + 1,
+            center,
+            direction,
+            config.layout,
+            &mut out,
+        );
     }
     out
 }

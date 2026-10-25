@@ -376,7 +376,10 @@ fn a_second_universe_switches_the_file_shape_and_survives_a_reload() {
     assert!(written.contains("universes"), "{written}");
     let reloaded = storage::read(&root).unwrap();
     assert_eq!(reloaded, c);
-    assert_eq!(reloaded.universe_of(&reloaded.profiles[0]).unwrap().id, second.id);
+    assert_eq!(
+        reloaded.universe_of(&reloaded.profiles[0]).unwrap().id,
+        second.id
+    );
 }
 
 #[test]
@@ -396,8 +399,19 @@ fn a_profile_opens_its_own_universe_and_entry_node() {
     let mut engine = Engine::default();
     assert!(engine.open(0, &c));
     assert_eq!(engine.entry(&c).unwrap().id, branch.id);
-    let shown: Vec<u64> = engine.sectors.iter().filter(|s| s.depth == 0).map(|s| s.id).collect();
-    let expected: Vec<u64> = branch.children.as_ref().unwrap().iter().map(|n| n.id).collect();
+    let shown: Vec<u64> = engine
+        .sectors
+        .iter()
+        .filter(|s| s.depth == 0)
+        .map(|s| s.id)
+        .collect();
+    let expected: Vec<u64> = branch
+        .children
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|n| n.id)
+        .collect();
     assert_eq!(shown, expected);
 }
 
@@ -467,7 +481,11 @@ fn a_restricted_item_shows_only_for_the_profile_that_owns_it() {
     let ids = |profile: usize| -> Vec<u64> {
         let mut e = Engine::default();
         assert!(e.open(profile, &c));
-        e.sectors.iter().filter(|s| s.depth == 0).map(|s| s.id).collect()
+        e.sectors
+            .iter()
+            .filter(|s| s.depth == 0)
+            .map(|s| s.id)
+            .collect()
     };
     assert_eq!(ids(0), vec![2], "the plain binding never sees the extra");
     assert_eq!(ids(1), vec![2, 3]);
@@ -483,13 +501,28 @@ fn hiding_a_child_does_not_shift_sectors_onto_the_wrong_item() {
         1,
         "Universe",
         Some(vec![
-            node(2, "Hidden branch", Some(vec![node(3, "Never", None, vec![])]), vec![9]),
-            node(4, "Real branch", Some(vec![node(5, "Wanted", None, vec![])]), vec![]),
+            node(
+                2,
+                "Hidden branch",
+                Some(vec![node(3, "Never", None, vec![])]),
+                vec![9],
+            ),
+            node(
+                4,
+                "Real branch",
+                Some(vec![node(5, "Wanted", None, vec![])]),
+                vec![],
+            ),
         ]),
         vec![],
     );
     c.profiles[0].id = 1;
-    c.profiles.push(Profile { id: 9, name: "Other".into(), binding: "F13".into(), ..c.profiles[0].clone() });
+    c.profiles.push(Profile {
+        id: 9,
+        name: "Other".into(),
+        binding: "F13".into(),
+        ..c.profiles[0].clone()
+    });
     assert!(c.validate().is_ok());
     let tree = c.universes[0].clone();
     let full: Vec<(usize, u64)> = geometry::full_from(&c, &tree, Some(1))
@@ -503,7 +536,10 @@ fn hiding_a_child_does_not_shift_sectors_onto_the_wrong_item() {
     e.motion(&c, geometry::Point { x: 0., y: 0. });
     let deep = geometry::visible_from(&c, &tree, Some(1), &[4]);
     assert!(deep.iter().any(|s| s.depth == 1 && s.id == 5));
-    assert!(!deep.iter().any(|s| s.id == 3), "hidden branch stayed hidden");
+    assert!(
+        !deep.iter().any(|s| s.id == 3),
+        "hidden branch stayed hidden"
+    );
 }
 
 #[test]
@@ -513,20 +549,34 @@ fn a_constellation_emptied_by_filtering_disappears_but_an_authored_empty_one_sta
         1,
         "Universe",
         Some(vec![
-            node(2, "All restricted", Some(vec![node(3, "Only other", None, vec![9])]), vec![]),
+            node(
+                2,
+                "All restricted",
+                Some(vec![node(3, "Only other", None, vec![9])]),
+                vec![],
+            ),
             node(4, "Authored empty", Some(vec![]), vec![]),
         ]),
         vec![],
     );
     c.profiles[0].id = 1;
-    c.profiles.push(Profile { id: 9, name: "Other".into(), binding: "F13".into(), ..c.profiles[0].clone() });
+    c.profiles.push(Profile {
+        id: 9,
+        name: "Other".into(),
+        binding: "F13".into(),
+        ..c.profiles[0].clone()
+    });
     assert!(c.validate().is_ok());
     let tree = c.universes[0].clone();
     let shown: Vec<u64> = geometry::visible_from(&c, &tree, Some(1), &[])
         .iter()
         .map(|s| s.id)
         .collect();
-    assert_eq!(shown, vec![4], "an empty fan is a dead end, an authored one is a choice");
+    assert_eq!(
+        shown,
+        vec![4],
+        "an empty fan is a dead end, an authored one is a choice"
+    );
 }
 
 #[test]
@@ -551,14 +601,23 @@ fn an_item_may_share_its_parents_name() {
     c.universes[0] = node(
         1,
         "Universe",
-        Some(vec![node(10, "Yeetus", Some(vec![node(24, "ModHub V2", None, vec![])]), vec![])]),
+        Some(vec![node(
+            10,
+            "Yeetus",
+            Some(vec![node(24, "ModHub V2", None, vec![])]),
+            vec![],
+        )]),
         vec![],
     );
     let id = c.max_node_id() + 1;
     assert_eq!(id, 25);
     assert!(c.find(id).is_none(), "a fresh ID must not already exist");
     let parent = c.universes[0].find_mut(10).unwrap();
-    parent.children.as_mut().unwrap().push(node(id, "Yeetus", None, vec![]));
+    parent
+        .children
+        .as_mut()
+        .unwrap()
+        .push(node(id, "Yeetus", None, vec![]));
     assert!(c.validate().is_ok(), "{:?}", c.validate());
     // The two must stay tellable apart by ID, which is what the editor maps clicks to.
     assert_eq!(c.find(10).unwrap().name, "Yeetus");
