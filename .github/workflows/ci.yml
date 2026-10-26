@@ -22,7 +22,9 @@ jobs:
         timeout-minutes: 2
         run: |
           cargo test --lib lifecycle_tests --locked -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --lib native_modal_tests --locked -- --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --lib render_tests --locked -- --ignored --test-threads=1
       - name: Build Windows portable binary
         if: runner.os == 'Windows'

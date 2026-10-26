@@ -21,7 +21,10 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::{Gdi::*, GdiPlus::*},
     Storage::FileSystem::{FILE_ATTRIBUTE_NORMAL, SearchPathW},
-    System::Com::*,
+    System::{
+        Com::*, Environment::ExpandEnvironmentStringsW,
+        WindowsProgramming::GetPrivateProfileStringW,
+    },
     UI::{Shell::*, WindowsAndMessaging::*},
 };
 
@@ -298,6 +301,55 @@ unsafe fn icon_pixels(icon: Icon) -> Option<Pixels> {
 /// image. In particular, .url handlers can add a white document corner even
 /// without SHGFI_LINKOVERLAY. Keep all Shell work on the existing icon worker.
 unsafe fn shortcut_icon(path: &Path) -> Option<Pixels> {
+    // Internet shortcuts store IconFile/IconIndex in their INI metadata.
+    // Reading it also works on systems without a registered .url icon handler.
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("url"))
+    {
+        let mut file = vec![0u16; 32768];
+        let count = GetPrivateProfileStringW(
+            wide("InternetShortcut").as_ptr(),
+            wide("IconFile").as_ptr(),
+            wide("").as_ptr(),
+            file.as_mut_ptr(),
+            file.len() as u32,
+            wide(path).as_ptr(),
+        );
+        if count > 0 && (count as usize) < file.len() - 1 {
+            let mut expanded = vec![0u16; 32768];
+            let size = ExpandEnvironmentStringsW(
+                file.as_ptr(),
+                expanded.as_mut_ptr(),
+                expanded.len() as u32,
+            );
+            if size > 0 && size as usize <= expanded.len() {
+                let raw = String::from_utf16_lossy(&expanded[..size as usize - 1]);
+                let resource = PathBuf::from(raw.trim_matches('"'));
+                let resource = if resource.is_absolute() {
+                    resource
+                } else {
+                    path.parent()?.join(resource)
+                };
+                let mut index = [0u16; 32];
+                let count = GetPrivateProfileStringW(
+                    wide("InternetShortcut").as_ptr(),
+                    wide("IconIndex").as_ptr(),
+                    wide("0").as_ptr(),
+                    index.as_mut_ptr(),
+                    index.len() as u32,
+                    wide(path).as_ptr(),
+                );
+                let index = String::from_utf16_lossy(&index[..count as usize])
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+                if let Some(image) = resource_icon(&resource, index) {
+                    return Some(image);
+                }
+            }
+        }
+    }
     let mut info: SHFILEINFOW = zeroed();
     if SHGetFileInfoW(
         wide(path).as_ptr(),

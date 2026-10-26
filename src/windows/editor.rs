@@ -2045,6 +2045,42 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_NOTIFY if l != 0 && (*(l as *const NMHDR)).idFrom == TREE as usize => {
             let header = &*(l as *const NMHDR);
             match header.code {
+                TVN_ITEMEXPANDINGW | TVN_ITEMEXPANDEDW => {
+                    let change = &*(l as *const NMTREEVIEWW);
+                    if change.action == TVE_COLLAPSE {
+                        if let Some(id) = e.tree_id(change.itemNew.hItem) {
+                            let hides_selection = id != e.selected
+                                && e.c.find(id).is_some_and(|n| n.find(e.selected).is_some());
+                            if hides_selection {
+                                if header.code == TVN_ITEMEXPANDINGW {
+                                    let dirty = e.item_dirty;
+                                    if let Err(message) = e.apply_item(false) {
+                                        e.status = message;
+                                        set(hwnd, ADVICE, &e.status);
+                                        return 1;
+                                    }
+                                    e.tree_refresh_pending |= dirty;
+                                } else {
+                                    // Native collapse may retain the hidden child's caret.
+                                    // Keep the item panel and visible selection together.
+                                    e.selected = id;
+                                    send(
+                                        hwnd,
+                                        TREE,
+                                        TVM_SELECTITEM,
+                                        TVGN_CARET as usize,
+                                        change.itemNew.hItem,
+                                    );
+                                    e.selection_to_controls();
+                                    if e.tree_refresh_pending {
+                                        PostMessageW(hwnd, REFRESH_TREE, 0, 0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    0
+                }
                 TVN_SELCHANGINGW => {
                     // Never rebuild native items while TreeView owns handles
                     // on its selection stack. Validate now; refresh after it returns.
@@ -3544,12 +3580,32 @@ mod lifecycle_tests {
                 TVGN_CARET as usize,
                 (*EDITOR).tree_handle(6).unwrap(),
             );
-            SendMessageW(
-                tree,
-                TVM_EXPAND,
-                TVE_COLLAPSE as usize,
-                (*EDITOR).tree_handle(2).unwrap(),
-            );
+            // Exercise the native expand button, not TVM_EXPAND: after the
+            // first expansion, that programmatic message omits notifications.
+            MoveWindow(tree, 0, 0, 260, 300, 0);
+            let mut button = None;
+            for y in 0..300 {
+                for x in 0..65 {
+                    let mut hit = TVHITTESTINFO {
+                        pt: POINT { x, y },
+                        ..zeroed()
+                    };
+                    SendMessageW(tree, TVM_HITTEST, 0, &mut hit as *mut _ as isize);
+                    if hit.hItem == (*EDITOR).tree_handle(2).unwrap()
+                        && hit.flags & TVHT_ONITEMBUTTON != 0
+                    {
+                        button = Some((x, y));
+                        break;
+                    }
+                }
+                if button.is_some() {
+                    break;
+                }
+            }
+            let (x, y) = button.expect("Native collapse button is visible");
+            let point = x as isize | ((y as isize) << 16);
+            SendMessageW(tree, WM_LBUTTONDOWN, 1, point);
+            SendMessageW(tree, WM_LBUTTONUP, 0, point);
             assert_eq!((*EDITOR).selected, 2);
             assert!(!state(2));
             assert_eq!(IsWindowVisible(owner), 0);

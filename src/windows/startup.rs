@@ -282,12 +282,12 @@ mod render_tests {
             assert!(CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) >= 0);
             let expected = item_icons::resource_icon(&exe, 0).unwrap();
             let url_image = item_icons::load(&root, &Source::File("app.url".into()), false).unwrap();
-            assert_eq!(url_image.bytes, expected.bytes, "URL shortcut contains a Shell decoration");
+            assert!(url_image.bytes == expected.bytes, "URL shortcut contains a Shell decoration");
             let actual = item_icons::load(&root, &Source::File("app.lnk".into()), false).unwrap();
-            assert_eq!(actual.bytes, expected.bytes, "Shortcut image differs from its program resource");
+            assert!(actual.bytes == expected.bytes, "Shortcut image differs from its program resource");
             assert!(actual.bytes.chunks_exact(4).any(|p| p[3] > 0));
             let from_software = item_icons::load(&root, &Source::Program("app.lnk".into()), false).unwrap();
-            assert_eq!(from_software.bytes, expected.bytes);
+            assert!(from_software.bytes == expected.bytes);
             std::fs::write(root.join("invalid.lnk"), b"invalid link").unwrap();
             let _ = item_icons::load(&root, &Source::File("invalid.lnk".into()), false);
             assert!(item_icons::load(&root, &Source::File("absent.lnk".into()), false).is_none());
