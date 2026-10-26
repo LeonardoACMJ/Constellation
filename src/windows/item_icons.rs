@@ -294,6 +294,45 @@ unsafe fn icon_pixels(icon: Icon) -> Option<Pixels> {
     }
     Some(Pixels { bytes })
 }
+/// Ask for the underlying resource rather than the Shell-composited shortcut
+/// image. In particular, .url handlers can add a white document corner even
+/// without SHGFI_LINKOVERLAY. Keep all Shell work on the existing icon worker.
+unsafe fn shortcut_icon(path: &Path) -> Option<Pixels> {
+    let mut info: SHFILEINFOW = zeroed();
+    if SHGetFileInfoW(
+        wide(path).as_ptr(),
+        0,
+        &mut info,
+        size_of::<SHFILEINFOW>() as u32,
+        SHGFI_ICONLOCATION,
+    ) == 0
+    {
+        return None;
+    }
+    let len = info.szDisplayName.iter().position(|v| *v == 0)?;
+    if len == 0 {
+        return None;
+    }
+    let resource = PathBuf::from(String::from_utf16_lossy(&info.szDisplayName[..len]));
+    resource_icon(&resource, info.iIcon)
+}
+pub(super) unsafe fn resource_icon(path: &Path, index: i32) -> Option<Pixels> {
+    let mut handle = null_mut();
+    // Zero flags deliberately excludes GIL_SIMULATEDOC (the document badge).
+    let result = SHDefExtractIconW(
+        wide(path).as_ptr(),
+        index,
+        0,
+        &mut handle,
+        null_mut(),
+        SIZE as u32,
+    );
+    let icon = Icon(handle);
+    if result != S_OK || icon.0.is_null() {
+        return None;
+    }
+    icon_pixels(icon)
+}
 unsafe fn shell_icon(path: &Path, association: bool) -> Option<Pixels> {
     let mut info: SHFILEINFOW = zeroed();
     let flags = SHGFI_ICON
@@ -423,6 +462,15 @@ pub(super) unsafe fn load(root: &Path, key: &Source, gdiplus: bool) -> Option<Pi
             if !network && !path.exists() {
                 return None;
             }
+            if !network
+                && path.extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("lnk") || ext.eq_ignore_ascii_case("url")
+                })
+            {
+                if let Some(image) = shortcut_icon(&path) {
+                    return Some(image);
+                }
+            }
             shell_icon(&path, network)
         }
         Source::Program(path) => {
@@ -432,7 +480,7 @@ pub(super) unsafe fn load(root: &Path, key: &Source, gdiplus: bool) -> Option<Pi
             }
             let local = root.join(path);
             if local.is_file() {
-                return shell_icon(&local, false);
+                return load(root, &Source::File(path.clone()), gdiplus);
             }
             let mut result = [0u16; 32768];
             let len = SearchPathW(

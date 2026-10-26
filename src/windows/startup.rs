@@ -262,3 +262,37 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod render_tests {
+    use super::super::item_icons::{self, Source};
+    use super::*;
+    #[test]
+    #[ignore = "native shortcut icon extraction; run on Windows CI"]
+    fn shortcut_icons_match_the_resource_without_document_or_arrow_badges() {
+        std::thread::spawn(|| unsafe {
+            let root = std::env::current_dir().unwrap().join("target/shortcut-icon-test");
+            std::fs::create_dir_all(&root).unwrap();
+            let exe = PathBuf::from(std::env::var_os("ComSpec").unwrap());
+            let link = root.join("app.lnk");
+            write(&link, &exe, exe.parent().unwrap(), "").unwrap();
+            // .url shortcuts are common for games and web-app launchers too.
+            let url = root.join("app.url");
+            std::fs::write(&url, format!("[InternetShortcut]\r\nURL=https://example.invalid/\r\nIconFile={}\r\nIconIndex=0\r\n", exe.display())).unwrap();
+            assert!(CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) >= 0);
+            let expected = item_icons::resource_icon(&exe, 0).unwrap();
+            let url_image = item_icons::load(&root, &Source::File("app.url".into()), false).unwrap();
+            assert_eq!(url_image.bytes, expected.bytes, "URL shortcut contains a Shell decoration");
+            let actual = item_icons::load(&root, &Source::File("app.lnk".into()), false).unwrap();
+            assert_eq!(actual.bytes, expected.bytes, "Shortcut image differs from its program resource");
+            assert!(actual.bytes.chunks_exact(4).any(|p| p[3] > 0));
+            let from_software = item_icons::load(&root, &Source::Program("app.lnk".into()), false).unwrap();
+            assert_eq!(from_software.bytes, expected.bytes);
+            std::fs::write(root.join("invalid.lnk"), b"invalid link").unwrap();
+            let _ = item_icons::load(&root, &Source::File("invalid.lnk".into()), false);
+            assert!(item_icons::load(&root, &Source::File("absent.lnk".into()), false).is_none());
+            CoUninitialize();
+            for name in ["app.lnk", "app.url", "invalid.lnk"] { std::fs::remove_file(root.join(name)).unwrap(); }
+        }).join().unwrap();
+    }
+}
