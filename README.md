@@ -20,10 +20,17 @@ Constellation currently supports **Windows x64**. This is a beta; see the [relea
 - Add programs, Windows shortcuts, folders, websites and scripts.
 - Choose your own icons, including icons taken from a different program.
 - Give each shortcut its own menu and behaviour: press once to keep the menu open, or hold and release to choose an item.
-- Keep several independent menus as **universes**, or let a shortcut open directly inside an existing Constellation.
 - Adjust spacing with a preview, choose a sound or silence, and use a small white dot or your usual cursor.
 
 The launcher stays in the tray when you close Settings. It leaves fullscreen applications alone. **Quit** in the tray menu closes it completely.
+
+## Separate menus with universes
+
+Keep work links, personal apps and games in separate **universes**. Each universe has its own Stars and Constellations, and each keyboard or mouse shortcut can open the universe you choose.
+
+Create one with **+ Universe** in Settings. The selector above the tree chooses which universe you are editing. In **Shortcut profiles → Opens universe**, choose the menu each shortcut opens, then **Done → Save**. For example, one binding can open your personal menu and another your work menu.
+
+You can also use **Opens at** to start a shortcut inside an existing Constellation, without copying its contents. See [universes and shortcut profiles](docs/USER-GUIDE.md#universes-entry-points-and-visibility) for more options.
 
 ## A folder you control
 
