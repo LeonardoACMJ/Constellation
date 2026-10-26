@@ -2,6 +2,36 @@ use constellation::{
     config::{Config, Target},
     editing::{self, History},
 };
+
+#[test]
+fn ctrl_backspace_boundaries_cover_words_paths_whitespace_and_unicode() {
+    for (text, remaining) in [
+        ("first second", "first "),
+        ("first second  ", "first "),
+        ("C:/Work/msedge.exe", "C:/Work/msedge."),
+        ("https://example.org/page", "https://example.org/"),
+        ("one_two", ""),
+        ("nome café", "nome "),
+        ("hello 😀", "hello "),
+        ("hello 😀😀  ", "hello "),
+        ("hello...", "hello"),
+        ("   ", ""),
+        ("", ""),
+        ("first\r\nsecond", "first\r\n"),
+    ] {
+        let utf16: Vec<_> = text.encode_utf16().collect();
+        let start = editing::previous_word_start(&utf16, utf16.len());
+        assert_eq!(
+            String::from_utf16(&utf16[..start]).unwrap(),
+            remaining,
+            "{text:?}"
+        );
+    }
+    let text: Vec<_> = "alpha beta".encode_utf16().collect();
+    assert_eq!(editing::previous_word_start(&text, 3), 0);
+    assert_eq!(editing::previous_word_start(&text, 0), 0);
+    assert_eq!(editing::previous_word_start(&text, usize::MAX), 6);
+}
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},

@@ -20,6 +20,8 @@ The sample tree includes Calculator, Notepad, the portable folder, a GitHub URL,
 
 ## Configure
 
+Text fields support **Ctrl+A** to select all and **Ctrl+Backspace** to delete the selection or previous word. Field-level Undo retains these deletions; the read-only item path can be selected/copied but cannot be edited.
+
 The left panel is an expandable tree: use the branch buttons or Left/Right arrow keys to open and close Constellations. A single click selects an item for editing; several branches can stay open. Subtle lines connect parents and children, and the original item order is preserved. Expansion, selection and scrolling are remembered per universe while this editor is open. Editing and Save preserve your place; newly added items reveal their ancestors.
 
 Above the item fields, the read-only path shows the selected item’s complete ancestry, including repeated names. You can select/copy it or scroll horizontally through a long path.

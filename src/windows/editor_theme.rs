@@ -74,6 +74,9 @@ pub unsafe fn control(hwnd: HWND, class: &str) {
             SendMessageW(hwnd, WM_SETFONT, t.font as usize, 0);
         }
     });
+    if class == "EDIT" {
+        SetWindowSubclass(hwnd, Some(edit_proc), 2, 0);
+    }
     if class == "SysTreeView32" {
         SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
         SendMessageW(hwnd, TVM_SETBKCOLOR, 0, INPUT as isize);
@@ -190,6 +193,71 @@ pub unsafe fn panel(dc: HDC, r: RECT) {
     DeleteObject(pen);
 }
 
+/// Classic EDIT does not provide the expected Ctrl+A / Ctrl+Backspace
+/// behaviour. Handle their translated characters without global key hooks,
+/// clipboard access, or replacing the control's native undo machinery.
+unsafe extern "system" fn edit_proc(
+    hwnd: HWND,
+    msg: u32,
+    w: WPARAM,
+    l: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    match msg {
+        WM_CHAR if w == 1 => {
+            SendMessageW(hwnd, EM_SETSEL, 0, -1);
+            0
+        }
+        WM_CHAR if w == 0x7f => {
+            if GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & ES_READONLY as u32 != 0
+                || IsWindowEnabled(hwnd) == 0
+            {
+                return 0;
+            }
+            let length = GetWindowTextLengthW(hwnd).max(0) as usize;
+            let mut text = vec![0u16; length + 1];
+            let read = GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32).max(0) as usize;
+            text.truncate(read);
+            let (mut start, mut end) = (0u32, 0u32);
+            SendMessageW(
+                hwnd,
+                EM_GETSEL,
+                &mut start as *mut _ as usize,
+                &mut end as *mut _ as isize,
+            );
+            let mut start = (start as usize).min(read);
+            let mut end = (end as usize).min(read);
+            // Also tolerate a programmatically placed caret inside a pair.
+            let inside_pair = |p: usize| {
+                p > 0
+                    && p < text.len()
+                    && (0xd800..=0xdbff).contains(&text[p - 1])
+                    && (0xdc00..=0xdfff).contains(&text[p])
+            };
+            if inside_pair(start) {
+                start -= 1;
+            }
+            if inside_pair(end) {
+                end += 1;
+            }
+            if start == end {
+                start = crate::editing::previous_word_start(&text, start);
+            }
+            if start < end {
+                SendMessageW(hwnd, EM_SETSEL, start, end as isize);
+                SendMessageW(hwnd, EM_REPLACESEL, 1, wide("").as_ptr() as isize);
+            }
+            0
+        }
+        WM_NCDESTROY => {
+            RemoveWindowSubclass(hwnd, Some(edit_proc), id);
+            DefSubclassProc(hwnd, msg, w, l)
+        }
+        _ => DefSubclassProc(hwnd, msg, w, l),
+    }
+}
+
 unsafe extern "system" fn slider_proc(
     hwnd: HWND,
     msg: u32,
@@ -251,5 +319,91 @@ unsafe fn draw_slider(hwnd: HWND, dc: HDC) {
         GetClientRect(hwnd, &mut bounds);
         InflateRect(&mut bounds, -1, -1);
         DrawFocusRect(dc, &bounds);
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use std::ptr::{null, null_mut};
+    #[test]
+    #[ignore = "hidden native EDIT shortcuts; run on Windows CI"]
+    fn text_shortcuts_select_all_delete_words_and_preserve_native_undo() {
+        std::thread::spawn(|| unsafe {
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                400,
+                200,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null(),
+            );
+            assert!(!parent.is_null());
+            install();
+            let edit = CreateWindowExW(
+                0,
+                wide("EDIT").as_ptr(),
+                wide("first second 😀").as_ptr(),
+                WS_CHILD | ES_AUTOHSCROLL as u32,
+                0,
+                0,
+                300,
+                30,
+                parent,
+                null_mut(),
+                null_mut(),
+                null(),
+            );
+            assert!(!edit.is_null());
+            control(edit, "EDIT");
+            let get = || {
+                let mut text = vec![0u16; GetWindowTextLengthW(edit) as usize + 1];
+                let count = GetWindowTextW(edit, text.as_mut_ptr(), text.len() as i32);
+                String::from_utf16(&text[..count as usize]).unwrap()
+            };
+            // WM_CHAR is local to this hidden fixture, not system input.
+            SendMessageW(edit, WM_CHAR, 1, 0);
+            let (mut start, mut end) = (0u32, 0u32);
+            SendMessageW(
+                edit,
+                EM_GETSEL,
+                &mut start as *mut _ as usize,
+                &mut end as *mut _ as isize,
+            );
+            assert_eq!(
+                (start, end),
+                (0, "first second 😀".encode_utf16().count() as u32)
+            );
+            SendMessageW(edit, WM_CHAR, 0x7f, 0);
+            assert_eq!(get(), "");
+            assert_ne!(SendMessageW(edit, EM_UNDO, 0, 0), 0);
+            assert_eq!(get(), "first second 😀");
+            SendMessageW(edit, EM_SETSEL, end as usize, end as isize);
+            SendMessageW(edit, WM_CHAR, 0x7f, 0);
+            assert_eq!(get(), "first second ");
+            SendMessageW(edit, WM_CHAR, 0x7f, 0);
+            assert_eq!(get(), "first ");
+            SendMessageW(edit, EM_SETSEL, 0, 5);
+            SendMessageW(edit, WM_CHAR, 0x7f, 0);
+            assert_eq!(get(), " ");
+            SendMessageW(edit, WM_CHAR, 8, 0);
+            assert_eq!(get(), " ", "Backspace at the beginning must remain a no-op");
+            SetWindowTextW(edit, wide("Read only").as_ptr());
+            SendMessageW(edit, EM_SETREADONLY, 1, 0);
+            SendMessageW(edit, WM_CHAR, 1, 0);
+            SendMessageW(edit, WM_CHAR, 0x7f, 0);
+            assert_eq!(get(), "Read only");
+            assert_eq!(IsWindowVisible(parent), 0);
+            DestroyWindow(parent);
+            shutdown();
+        })
+        .join()
+        .unwrap();
     }
 }

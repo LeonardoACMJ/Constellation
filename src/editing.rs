@@ -13,6 +13,30 @@ pub fn note_input(text: &str) -> String {
         .collect()
 }
 
+/// Ctrl+Backspace boundary in the UTF-16 offsets used by native EDIT controls.
+/// Consume trailing whitespace, then a word or punctuation run. A surrogate
+/// pair is one character, so emoji are never split into invalid UTF-16.
+pub fn previous_word_start(text: &[u16], caret: usize) -> usize {
+    let caret = caret.min(text.len());
+    let prefix = String::from_utf16_lossy(&text[..caret]);
+    let mut chars = prefix.chars().rev().peekable();
+    let mut start = caret;
+    while chars.peek().is_some_and(|c| c.is_whitespace()) {
+        start -= chars.next().unwrap().len_utf16();
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    if let Some(&last) = chars.peek() {
+        let kind = word(last);
+        while chars
+            .peek()
+            .is_some_and(|c| !c.is_whitespace() && word(*c) == kind)
+        {
+            start -= chars.next().unwrap().len_utf16();
+        }
+    }
+    start
+}
+
 /// Double quotes group arguments; backslashes before quotes use Windows/CRT
 /// escaping. This is a string-vector editor, never a shell command evaluator.
 pub fn parse_arguments(text: &str) -> Result<Vec<String>, String> {
