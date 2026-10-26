@@ -33,7 +33,13 @@ struct ShellLinkVtbl {
     query_interface: unsafe extern "system" fn(*mut Link, *const GUID, *mut *mut c_void) -> HRESULT,
     add_ref: Unused,
     release: unsafe extern "system" fn(*mut Link) -> u32,
-    get_path: Unused,
+    get_path: unsafe extern "system" fn(
+        *mut Link,
+        *mut u16,
+        i32,
+        *mut windows_sys::Win32::Storage::FileSystem::WIN32_FIND_DATAW,
+        u32,
+    ) -> HRESULT,
     get_id_list: Unused,
     set_id_list: Unused,
     get_description: Unused,
@@ -46,7 +52,7 @@ struct ShellLinkVtbl {
     set_hotkey: Unused,
     get_show_cmd: Unused,
     set_show_cmd: Unused,
-    get_icon_location: Unused,
+    get_icon_location: unsafe extern "system" fn(*mut Link, *mut u16, i32, *mut i32) -> HRESULT,
     set_icon_location: Unused,
     set_relative_path: Unused,
     resolve: Unused,
@@ -65,7 +71,7 @@ struct PersistFileVtbl {
     release: unsafe extern "system" fn(*mut PersistFile) -> u32,
     get_class_id: Unused,
     is_dirty: Unused,
-    load: Unused,
+    load: unsafe extern "system" fn(*mut PersistFile, PCWSTR, u32) -> HRESULT,
     save: unsafe extern "system" fn(*mut PersistFile, PCWSTR, i32) -> HRESULT,
     save_completed: Unused,
     get_cur_file: Unused,
@@ -193,6 +199,74 @@ unsafe fn write(link_path: &Path, exe: &Path, folder: &Path, args: &str) -> Resu
         if started >= 0 {
             CoUninitialize();
         }
+        result
+    }
+}
+
+/// Read-only shortcut metadata. Caller supplies an initialized COM apartment.
+/// No Resolve call: never search for targets, launch programs or show a dialog.
+pub(super) unsafe fn icon_source(path: &Path) -> Option<(PathBuf, i32)> {
+    unsafe {
+        let mut link: *mut Link = std::ptr::null_mut();
+        if CoCreateInstance(
+            &ShellLink,
+            std::ptr::null_mut(),
+            CLSCTX_INPROC_SERVER,
+            &IID_SHELL_LINK_W,
+            (&mut link as *mut *mut Link).cast(),
+        ) < 0
+            || link.is_null()
+        {
+            return None;
+        }
+        let v = &*(*link).vtbl;
+        let result = (|| {
+            let mut file: *mut PersistFile = std::ptr::null_mut();
+            if (v.query_interface)(
+                link,
+                &IID_PERSIST_FILE,
+                (&mut file as *mut *mut PersistFile).cast(),
+            ) < 0
+                || file.is_null()
+            {
+                return None;
+            }
+            let loaded = ((*(*file).vtbl).load)(file, wide(path).as_ptr(), 0);
+            ((*(*file).vtbl).release)(file);
+            if loaded < 0 {
+                return None;
+            }
+            let mut resource = vec![0u16; 32768];
+            let mut index = 0;
+            let icon = (v.get_icon_location)(
+                link,
+                resource.as_mut_ptr(),
+                resource.len() as i32,
+                &mut index,
+            );
+            if icon < 0 || resource[0] == 0 {
+                resource.fill(0);
+                index = 0;
+                if (v.get_path)(
+                    link,
+                    resource.as_mut_ptr(),
+                    resource.len() as i32,
+                    std::ptr::null_mut(),
+                    windows_sys::Win32::UI::Shell::SLGP_RAWPATH as u32,
+                ) < 0
+                {
+                    return None;
+                }
+            }
+            let len = resource.iter().position(|v| *v == 0)?;
+            (len > 0).then(|| {
+                (
+                    PathBuf::from(String::from_utf16_lossy(&resource[..len])),
+                    index,
+                )
+            })
+        })();
+        (v.release)(link);
         result
     }
 }

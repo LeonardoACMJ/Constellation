@@ -301,6 +301,16 @@ unsafe fn icon_pixels(icon: Icon) -> Option<Pixels> {
 /// image. In particular, .url handlers can add a white document corner even
 /// without SHGFI_LINKOVERLAY. Keep all Shell work on the existing icon worker.
 unsafe fn shortcut_icon(path: &Path) -> Option<Pixels> {
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
+    {
+        if let Some((resource, index)) = super::startup::icon_source(path) {
+            if let Some(image) = resource_icon(&resource, index) {
+                return Some(image);
+            }
+        }
+    }
     // Internet shortcuts store IconFile/IconIndex in their INI metadata.
     // Reading it also works on systems without a registered .url icon handler.
     if path
@@ -369,10 +379,19 @@ unsafe fn shortcut_icon(path: &Path) -> Option<Pixels> {
     resource_icon(&resource, info.iIcon)
 }
 pub(super) unsafe fn resource_icon(path: &Path, index: i32) -> Option<Pixels> {
+    let mut expanded = vec![0u16; 32768];
+    let size = ExpandEnvironmentStringsW(
+        wide(path).as_ptr(),
+        expanded.as_mut_ptr(),
+        expanded.len() as u32,
+    );
+    if size == 0 || size as usize > expanded.len() {
+        return None;
+    }
     let mut handle = null_mut();
     // Zero flags deliberately excludes GIL_SIMULATEDOC (the document badge).
     let result = SHDefExtractIconW(
-        wide(path).as_ptr(),
+        expanded.as_ptr(),
         index,
         0,
         &mut handle,
