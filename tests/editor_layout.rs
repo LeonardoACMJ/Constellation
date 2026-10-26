@@ -226,3 +226,24 @@ fn paired_item_rows_stay_side_by_side_inside_their_column() {
         );
     }
 }
+
+#[test]
+fn create_and_duplicate_buttons_share_a_row_without_overlap() {
+    use constellation::editor_layout::CREATE_CONTROLS;
+    for (width, height) in [(680, 500), (1050, 996), (1920, 1080), (3840, 2160)] {
+        let layout = Layout::new(width, height, 17, 17);
+        let buttons: Vec<_> = CREATE_CONTROLS
+            .iter()
+            .map(|(id, _, base)| layout.control(*base, *id))
+            .collect();
+        for button in &buttons {
+            assert!(button.x >= 20 && button.x + button.w <= 20 + layout.side_width);
+            assert_eq!((button.y, button.h), (buttons[0].y, 30));
+        }
+        assert!(
+            buttons
+                .windows(2)
+                .all(|pair| pair[0].x + pair[0].w < pair[1].x)
+        );
+    }
+}

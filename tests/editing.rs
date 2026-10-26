@@ -274,3 +274,104 @@ fn item_paths_follow_ids_through_duplicate_names_and_moves() {
     );
     assert_eq!(editing::node_path(&c.universes[0], 1).len(), 1);
 }
+
+#[test]
+fn duplicate_star_preserves_launch_fields_and_uses_global_ids() {
+    use constellation::config::ItemIcon;
+    let mut c = Config::default();
+    let profile = c.profiles[0].id;
+    let n = c.universes[0].find_mut(3).unwrap();
+    n.target = Some(Target::Program {
+        path: "C:/Program Files/Edge/msedge.exe".into(),
+        args: vec!["https://work.example/".into()],
+        cwd: Some("C:/Work".into()),
+    });
+    n.note = "Work browser".into();
+    n.icon = ItemIcon::Software {
+        path: "icons/browser.exe".into(),
+    };
+    n.visible_in = vec![profile];
+    let original = n.clone();
+    let mut other = c.universes[0].clone();
+    other.id = 10000;
+    other.children = Some(vec![]);
+    other.visible_in.clear();
+    c.universes.push(other);
+    let id = editing::duplicate_node(&mut c, 0, 3).unwrap();
+    assert_eq!(id, 10001);
+    let mut expected = original.clone();
+    expected.id = id;
+    expected.name.push_str(" (copy)");
+    assert_eq!(c.find(id).unwrap(), &expected);
+    assert_eq!(c.find(3).unwrap(), &original);
+    let siblings = c.find(2).unwrap().children.as_ref().unwrap();
+    assert_eq!(
+        siblings.iter().map(|n| n.id).collect::<Vec<_>>(),
+        vec![3, id, 4, 5]
+    );
+    if let Some(Target::Program { args, .. }) = &mut c.universes[0].find_mut(id).unwrap().target {
+        args[0] = "https://another.example/".into();
+    }
+    assert_eq!(
+        c.find(3).unwrap(),
+        &original,
+        "Editing a copy altered its source"
+    );
+    c.validate().unwrap();
+}
+
+#[test]
+fn duplicate_constellation_copies_every_descendant_and_roundtrips_history() {
+    use constellation::config::Node;
+    let mut c = Config::default();
+    c.universes[0].find_mut(5).unwrap().note = "Nested note".into();
+    let before = c.clone();
+    let maximum = c.max_node_id();
+    let original = c.find(2).unwrap().clone();
+    let id = editing::duplicate_node(&mut c, 0, 2).unwrap();
+    let mut ids = std::collections::HashSet::new();
+    fn compare(a: &Node, b: &Node, max: u64, ids: &mut std::collections::HashSet<u64>, top: bool) {
+        assert!(b.id > max && ids.insert(b.id));
+        let mut expected = a.clone();
+        expected.id = b.id;
+        if top {
+            expected.name.push_str(" (copy)");
+        }
+        expected.children = b.children.clone();
+        assert_eq!(&expected, b);
+        let old = a.children.as_deref().unwrap_or_default();
+        let new = b.children.as_deref().unwrap_or_default();
+        assert_eq!(old.len(), new.len());
+        for (a, b) in old.iter().zip(new) {
+            compare(a, b, max, ids, false);
+        }
+    }
+    compare(&original, c.find(id).unwrap(), maximum, &mut ids, true);
+    assert_eq!(c.find(2).unwrap(), &original);
+    let mut history = History::default();
+    history.record(&before, &c);
+    assert_eq!(history.undo(&c).unwrap(), before);
+    assert_eq!(history.redo(&before).unwrap(), c);
+    let json = serde_json::to_vec(&c).unwrap();
+    assert_eq!(constellation::storage::parse_config(&json).unwrap(), c);
+    let child = c.find(id).unwrap().children.as_ref().unwrap()[0].id;
+    c.universes[0].find_mut(child).unwrap().name = "Independent".into();
+    assert_eq!(c.find(2).unwrap(), &original);
+}
+
+#[test]
+fn failed_duplication_never_changes_the_draft() {
+    let mut c = Config::default();
+    let mut other = c.universes[0].clone();
+    other.id = u64::MAX - 1;
+    other.children = Some(vec![]);
+    c.universes.push(other);
+    let before = c.clone();
+    // There is room for one ID but not the complete branch: failure is atomic.
+    assert!(editing::duplicate_node(&mut c, 0, 2).is_err());
+    assert_eq!(c, before);
+    for (universe, node) in [(0, 1), (0, 999), (999, 2)] {
+        assert!(editing::duplicate_node(&mut c, universe, node).is_err());
+        assert_eq!(c, before);
+    }
+}

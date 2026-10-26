@@ -58,6 +58,7 @@ const ADD_UNIVERSE: i32 = 307;
 const APPLY: i32 = 301;
 const ADD_STAR: i32 = 302;
 const ADD_FOLDER: i32 = 303;
+const DUPLICATE: i32 = 308;
 const DELETE: i32 = 304;
 const UP: i32 = 305;
 const DOWN: i32 = 306;
@@ -400,9 +401,10 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             TVS_EX_DOUBLEBUFFER as usize,
             TVS_EX_DOUBLEBUFFER as isize,
         );
+        for (id, title, rect) in crate::editor_layout::CREATE_CONTROLS {
+            control(hwnd, "BUTTON", title, id, rect.x, rect.y, rect.w, rect.h, 0);
+        }
         for (id, title, x, y, w) in [
-            (ADD_STAR, "+ Star", 20, 525, 80),
-            (ADD_FOLDER, "+ Constellation", 110, 525, 170),
             (DELETE, "Delete", 20, 565, 80),
             (UP, "Up", 110, 565, 80),
             (DOWN, "Down", 200, 565, 80),
@@ -1034,6 +1036,10 @@ impl Editor {
         self.note_counter();
     }
     unsafe fn enable_fields(&self) {
+        EnableWindow(
+            GetDlgItem(self.hwnd, DUPLICATE),
+            (self.selected != self.c.universes[self.universe].id) as i32,
+        );
         set(
             self.hwnd,
             ICON_BROWSE,
@@ -1792,6 +1798,18 @@ impl Editor {
         self.refresh();
         Ok(())
     }
+    unsafe fn duplicate(&mut self) -> Result<(), String> {
+        self.apply()?;
+        let mut candidate = self.c.clone();
+        let id = editing::duplicate_node(&mut candidate, self.universe, self.selected)?;
+        self.commit(candidate);
+        self.selected = id;
+        self.refresh();
+        self.status = "Duplicated independently. Edit the copy, then Save.".into();
+        SetFocus(GetDlgItem(self.hwnd, NAME));
+        send(self.hwnd, NAME, EM_SETSEL, 0, -1);
+        Ok(())
+    }
     unsafe fn reorder(&mut self, down: bool) -> Result<(), String> {
         self.apply()?;
         let before = self.c.clone();
@@ -2319,6 +2337,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 APPLY => e.apply(),
                 ADD_STAR => e.add(false),
                 ADD_FOLDER => e.add(true),
+                DUPLICATE => e.duplicate(),
                 ADD_UNIVERSE => (|| {
                     e.apply()?;
                     let mut c = e.c.clone();
@@ -3437,6 +3456,26 @@ mod lifecycle_tests {
             );
             control(owner, "STATIC", "", ADVICE, 300, 180, 300, 80, 0);
             control(owner, "STATIC", "", NOTE_COUNT, 300, 260, 300, 20, 0);
+            for (id, title, rect) in crate::editor_layout::CREATE_CONTROLS {
+                let button = control(
+                    owner, "BUTTON", title, id, rect.x, rect.y, rect.w, rect.h, 0,
+                );
+                let dc = GetDC(button);
+                let font = SendMessageW(button, WM_GETFONT, 0, 0);
+                let old_font = SelectObject(dc, font as _);
+                let text = wide(title);
+                let mut extent: SIZE = zeroed();
+                assert_ne!(
+                    GetTextExtentPoint32W(dc, text.as_ptr(), text.len() as i32 - 1, &mut extent),
+                    0
+                );
+                assert!(
+                    extent.cx + 6 <= rect.w,
+                    "Creation button label is clipped: {title}"
+                );
+                SelectObject(dc, old_font);
+                ReleaseDC(button, dc);
+            }
             let mut config = Config::default();
             fn symbols(n: &mut Node) {
                 n.icon = ItemIcon::Symbol;
@@ -3608,6 +3647,30 @@ mod lifecycle_tests {
             SendMessageW(tree, WM_LBUTTONUP, 0, point);
             assert_eq!((*EDITOR).selected, 2);
             assert!(!state(2));
+            let original = (*EDITOR).c.find(2).unwrap().clone();
+            let maximum = (*EDITOR).c.max_node_id();
+            SendMessageW(
+                owner,
+                WM_COMMAND,
+                DUPLICATE as usize,
+                GetDlgItem(owner, DUPLICATE) as isize,
+            );
+            let copy = (*EDITOR).selected;
+            assert!(copy > maximum);
+            assert_eq!((*EDITOR).c.find(2).unwrap(), &original);
+            assert_eq!(
+                (*EDITOR)
+                    .c
+                    .find(copy)
+                    .unwrap()
+                    .children
+                    .as_ref()
+                    .unwrap()
+                    .len(),
+                original.children.as_ref().unwrap().len()
+            );
+            assert_eq!(get(owner, NAME), format!("{} (copy)", original.name));
+            assert!((*EDITOR).dirty);
             assert_eq!(IsWindowVisible(owner), 0);
             drop(Box::from_raw(EDITOR));
             EDITOR = null_mut();

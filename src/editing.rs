@@ -294,3 +294,40 @@ pub fn node_path(root: &Node, id: u64) -> Vec<&Node> {
     walk(root, id, &mut path);
     path
 }
+
+/// Duplicate a node beside its source, with fresh IDs throughout its subtree.
+/// Work on a candidate so validation/ID exhaustion never partly changes a draft.
+pub fn duplicate_node(config: &mut Config, universe: usize, id: u64) -> Result<u64, String> {
+    let root = config.universes.get(universe).ok_or("Choose a universe")?;
+    let path = node_path(root, id);
+    if path.len() < 2 {
+        return Err("Select a Star or Constellation inside the universe to duplicate".into());
+    }
+    let parent = path[path.len() - 2].id;
+    let mut copy = (*path.last().unwrap()).clone();
+    let mut next = config.max_node_id();
+    fn renew(node: &mut Node, next: &mut u64) -> Result<(), String> {
+        *next = next.checked_add(1).ok_or("Item ID space exhausted")?;
+        node.id = *next;
+        for child in node.children.iter_mut().flatten() {
+            renew(child, next)?;
+        }
+        Ok(())
+    }
+    renew(&mut copy, &mut next)?;
+    copy.name.push_str(" (copy)");
+    let new_id = copy.id;
+    let mut candidate = config.clone();
+    let children = candidate.universes[universe]
+        .find_mut(parent)
+        .and_then(|n| n.children.as_mut())
+        .ok_or("Parent is not a constellation")?;
+    let index = children
+        .iter()
+        .position(|n| n.id == id)
+        .ok_or("Select an item")?;
+    children.insert(index + 1, copy);
+    candidate.validate()?;
+    *config = candidate;
+    Ok(new_id)
+}

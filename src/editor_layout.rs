@@ -8,6 +8,39 @@ pub struct Rect {
     pub w: i32,
     pub h: i32,
 }
+/// First sidebar action row, shared with the native editor and layout checks.
+pub const CREATE_CONTROLS: [(i32, &str, Rect); 3] = [
+    (
+        302,
+        "+ Star",
+        Rect {
+            x: 20,
+            y: 525,
+            w: 60,
+            h: 30,
+        },
+    ),
+    (
+        303,
+        "+ Constellation",
+        Rect {
+            x: 84,
+            y: 525,
+            w: 118,
+            h: 30,
+        },
+    ),
+    (
+        308,
+        "Duplicate",
+        Rect {
+            x: 206,
+            y: 525,
+            w: 74,
+            h: 30,
+        },
+    ),
+];
 /// Shared with the native editor and layout checks.
 pub const STARTUP_CONTROL: Rect = Rect {
     x: 20,
