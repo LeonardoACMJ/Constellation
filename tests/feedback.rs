@@ -286,3 +286,166 @@ fn none_sound_preserves_legacy_mute_volume_and_last_instrument() {
     assert_eq!(loaded.sound.instrument, Instrument::PluckedStrings);
     assert_eq!(loaded.sound.volume, 0.37);
 }
+
+// Six root sectors reproduce the Yeetus/Web overlap: the child fan's inner
+// hole crosses an older sibling even though its outward direction is correct.
+fn guarded_fan_fixture() -> Config {
+    use constellation::config::Node;
+    let mut c = Config::default();
+    let star = c.find(3).unwrap().clone();
+    let nodes = (0..6)
+        .map(|i| {
+            let mut child = star.clone();
+            child.id = 100 + i;
+            Node {
+                id: 10 + i,
+                name: format!("Branch {i}"),
+                note: String::new(),
+                icon: Default::default(),
+                visible_in: vec![],
+                target: None,
+                children: Some(vec![child]),
+            }
+        })
+        .collect();
+    c.universes[0].children = Some(nodes);
+    c
+}
+
+#[test]
+fn open_fan_guards_both_edges_without_delays_or_stale_launches() {
+    use constellation::config::Mode;
+    for directional in [false, true] {
+        for hover in [false, true] {
+            for side in [-1., 1.] {
+                let mut c = guarded_fan_fixture();
+                c.profiles[0].directional = directional;
+                c.profiles[0].hover = hover;
+                let mut e = Engine::default();
+                e.open(0, &c);
+                let parent = e.sectors.iter().find(|s| s.id == 14).unwrap().clone();
+                e.motion(&c, parent.dot);
+                if !hover {
+                    e.select(&c);
+                }
+                let child = e.sectors.iter().find(|s| s.id == 104).unwrap().clone();
+                e.motion(&c, child.dot);
+                assert_eq!(e.select(&c), Action::Launch(104));
+                // Both inside the angular corridor and 4° beyond its edge.
+                for offset in [-4_f64, 4.] {
+                    let p = child.center.polar(
+                        60.,
+                        parent.angle + side * (c.layout.spread / 2. + offset).to_radians(),
+                    );
+                    let raw = geometry::hit(&e.sectors, p).unwrap();
+                    assert_eq!(raw.depth, 0);
+                    assert_ne!(raw.id, parent.id);
+                    let (_, chime) = e.motion_with_feedback(&c, p);
+                    assert!(!chime);
+                    assert_eq!(e.path, vec![14]);
+                    assert_eq!(e.hovered, None);
+                    assert_eq!(e.select(&c), Action::None);
+                }
+                // 11° beyond the edge crosses the 8° margin immediately.
+                let outside = child.center.polar(
+                    60.,
+                    parent.angle + side * (c.layout.spread / 2. + 11.).to_radians(),
+                );
+                let sibling = geometry::hit(&e.sectors, outside).unwrap().id;
+                let (_, chime) = e.motion_with_feedback(&c, outside);
+                assert!(chime);
+                assert_eq!(e.hovered, Some(sibling));
+                if hover {
+                    assert_eq!(e.path, vec![sibling]);
+                } else {
+                    assert_eq!(e.path, vec![14]);
+                    e.select(&c);
+                    assert_eq!(e.path, vec![sibling]);
+                }
+                e.root(&c);
+                e.motion(&c, parent.dot);
+                if !hover {
+                    e.select(&c);
+                }
+                e.motion(&c, Point::default());
+                assert_eq!(e.hovered, None);
+                e.back(&c);
+                assert!(e.path.is_empty());
+                // A blocked corridor never launches the child on Hold release.
+                c.profiles[0].mode = Mode::Hold;
+                e.motion(&c, parent.dot);
+                if !hover {
+                    e.select(&c);
+                }
+                e.motion(&c, child.dot);
+                let p = child.center.polar(
+                    60.,
+                    parent.angle + side * (c.layout.spread / 2. + 4.).to_radians(),
+                );
+                e.motion(&c, p);
+                assert_eq!(e.release(&c), Action::Changed);
+                assert!(e.profile.is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_fans_do_not_guard_older_siblings() {
+    let mut c = guarded_fan_fixture();
+    c.universes[0].find_mut(14).unwrap().children = Some(vec![]);
+    let mut e = Engine::default();
+    e.open(0, &c);
+    let parent = e.sectors.iter().find(|s| s.id == 14).unwrap().clone();
+    e.motion(&c, parent.dot);
+    assert_eq!(e.path, vec![14]);
+    let center = parent
+        .center
+        .polar(c.layout.radius * c.layout.distance, parent.angle);
+    let p = center.polar(60., parent.angle + (c.layout.spread / 2. + 4.).to_radians());
+    let sibling = geometry::hit(&e.sectors, p).unwrap().id;
+    e.motion(&c, p);
+    assert_eq!(e.hovered, Some(sibling));
+    assert_eq!(e.path, vec![sibling]);
+}
+
+#[test]
+fn nested_fan_protects_against_ancestor_stars() {
+    let mut c = guarded_fan_fixture();
+    c.layout.distance = 0.2;
+    let mut nested = c.find(14).unwrap().clone();
+    nested.id = 104;
+    for node in nested.children.as_mut().unwrap() {
+        node.id = 204;
+    }
+    c.universes[0].find_mut(14).unwrap().children = Some(vec![nested]);
+    // Root siblings are Stars, so a stray hover would collapse both fans.
+    for node in c.universes[0].children.as_mut().unwrap() {
+        if node.id != 14 {
+            node.target = node.children.as_ref().unwrap()[0].target.clone();
+            node.children = None;
+        }
+    }
+    let mut e = Engine::default();
+    e.open(0, &c);
+    for id in [14, 104, 204] {
+        let p = e.sectors.iter().find(|s| s.id == id).unwrap().dot;
+        e.motion(&c, p);
+    }
+    assert_eq!(e.path, vec![14, 104]);
+    let parent = e.sectors.iter().find(|s| s.id == 104).unwrap().clone();
+    let child = e.sectors.iter().find(|s| s.id == 204).unwrap().clone();
+    let p = child
+        .center
+        .polar(60., parent.angle + (c.layout.spread / 2. + 4.).to_radians());
+    let raw = geometry::hit(&e.sectors, p).unwrap();
+    assert_eq!(raw.depth, 0);
+    assert!(c.find(raw.id).unwrap().target.is_some());
+    assert_eq!(e.motion_with_feedback(&c, p), (Action::Changed, false));
+    assert_eq!(e.path, vec![14, 104]);
+    assert_eq!(e.select(&c), Action::None);
+    e.back(&c);
+    assert_eq!(e.path, vec![14]);
+    e.root(&c);
+    assert!(e.path.is_empty());
+}

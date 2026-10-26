@@ -45,6 +45,43 @@ impl Engine {
             None => vec![],
         };
     }
+    /// Keep an open fan's approach corridor from selecting an older-level
+    /// sibling through its inner hole. This is spatial hysteresis, not a timer.
+    fn protected_by_open_fan(&self, c: &Config, candidate: &Sector, p: Point) -> bool {
+        use std::f64::consts::{PI, TAU};
+        if self.path.contains(&candidate.id) {
+            return false;
+        }
+        let spread = c.layout.spread.to_radians();
+        // A full circle has no angular exit edge; leave its hit testing alone.
+        if spread >= TAU {
+            return false;
+        }
+        let margin = 8_f64.to_radians().min((TAU - spread) / 4.);
+        self.path
+            .iter()
+            .enumerate()
+            .skip(candidate.depth)
+            .any(|(depth, id)| {
+                let Some(parent) = self
+                    .sectors
+                    .iter()
+                    .find(|s| s.depth == depth && s.id == *id)
+                else {
+                    return false;
+                };
+                let Some(child) = self
+                    .sectors
+                    .iter()
+                    .find(|s| s.depth == depth + 1 && s.sweep > 0.)
+                else {
+                    return false;
+                };
+                let angle = (p.y - child.center.y).atan2(p.x - child.center.x);
+                let delta = (angle - parent.angle + PI).rem_euclid(TAU) - PI;
+                delta.abs() <= spread / 2. + margin
+            })
+    }
     pub fn motion(&mut self, c: &Config, p: Point) -> Action {
         self.motion_with_feedback(c, p).0
     }
@@ -61,7 +98,8 @@ impl Engine {
             geometry::directional_hit(&self.sectors, p).cloned()
         } else {
             geometry::hit(&self.sectors, p).cloned()
-        };
+        }
+        .filter(|s| !self.protected_by_open_fan(c, s, p));
         let id = item.as_ref().map(|s| s.id);
         if id == self.hovered {
             return (Action::None, false);

@@ -8,7 +8,7 @@ The app/tray icon is a mint four-point star. Individual Stars use one star; Cons
 ## Open and launch
 
 - Press **Ctrl+Q**. The cursor and radial move to the usable center of the monitor containing the cursor.
-- Hover a Constellation to reveal its children immediately. Click a Star or press Space over it to launch.
+- Hover a Constellation to reveal its children immediately. Click a Star or press Space over it to launch. An open child fan protects its approach corridor: move beyond its edge and a small angular margin to switch to a sibling on an older wheel.
 - Escape, right click, or click an untargeted gap to cancel. Click the center to return to root; Backspace closes the deepest branch. With directional targeting enabled, moving beyond the circle still targets the item in that direction; clicking there selects it.
 - Each shortcut profile chooses where the cursor ends: its original position, the menu center, or the selection position.
 - Another shortcut profile is ignored while one is active. Pressing the active Click binding again closes the radial.

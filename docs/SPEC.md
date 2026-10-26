@@ -81,11 +81,12 @@ These are **Proposed unless marked Agreed**, based on the prototype and subseque
 
 | ID | Event | Result |
 |---|---|---|
-| NAV-01 | Enter another Constellation at an existing level | Replace that level's active branch and its descendants; preserve ancestors. |
+| NAV-01 | Enter another Constellation at an existing level outside NAV-06 protection | Replace that level's active branch and its descendants; preserve ancestors. |
 | NAV-02 | Cross a gap while approaching a child | Preserve the open branch; never close it solely because the pointer left its parent sector. |
-| NAV-03 | Hover an ancestor-level Star | **Agreed:** collapse deeper descendants with no intentional delay (CFG-06); retain the Star as the candidate. |
+| NAV-03 | Hover an ancestor-level Star outside NAV-06 protection | **Agreed:** collapse deeper descendants with no intentional delay (CFG-06); retain the Star as the candidate. |
 | NAV-04 | Backspace / click center hub | Backspace closes the deepest child fan; hub returns to root. Neither launches a Star. |
 | NAV-05 | Enter an empty Constellation | Show an empty state with a route back; do not launch or dismiss. |
+| NAV-06 | **Agreed:** approach an open child fan across an older-level sibling | Preserve the branch inside the child fan’s angular corridor plus a small edge margin. Suppress that sibling’s highlight, sound and launch candidate; never retain a stale candidate. Crossing the margin makes it eligible immediately, without a timer. Real child hits and active ancestors remain accessible; hub/Backspace retain NAV-04. Empty/fully gapped fans have no guard. Initial implementation tuning (proposed): 8° per edge, reduced for spreads approaching 360° to retain an inward exit; a full 360° fan has no angular guard. |
 | END-01 | Escape / unassigned right click / left click in an untargeted region | Close without launch and apply CUR-02. A mouse button bound to invocation takes precedence over dismissal. |
 | END-02 | Invoke the same Click profile again | Toggle closed. Ignore key-repeat events so holding a Click binding cannot repeatedly toggle. |
 | END-03 | Foreground application changes or session interrupted | Cancel selection, close, and apply restoration where possible. Never launch from a late release event. The Windows overlay keeps the invocation’s foreground app active and receives radial commands through its input worker. |
@@ -255,7 +256,7 @@ These describe acceptance criteria; the [manual checklist](MANUAL-CHECKS.md) ide
 | Check | Covers | Observable pass condition |
 |---|---|---|
 | A-01 | CFG-01–06, INT-01–09 | Two profiles retain different settings. Click survives binding release; Hold completes on release of its single bound input or any required key in a combination, ignores unrelated releases, and selects only the eligible hovered Star. |
-| A-02 | CORE-04, CFG-06, LAY-02–03, LAY-07, NAV-01–05 | Traverse at least three nested Constellations with fast mouse gestures, cross gaps, return, and switch branches without an unintended launch or deliberate dwell. Hover opening and ancestor-Star collapse add no intentional wait; empty branches remain escapable. |
+| A-02 | CORE-04, CFG-06, LAY-02–03, LAY-07, NAV-01–06 | Traverse at least three nested Constellations with fast mouse gestures, cross gaps, return, and switch branches without an unintended launch or deliberate dwell. Approach an edge child across an older sibling: keep the branch inside its corridor and margin, then switch immediately beyond the margin; a blocked corridor cannot launch a stale Star. Hover opening and ancestor-Star collapse add no intentional wait; empty branches remain escapable. |
 | A-03 | CUR-01–04, CFG-04–05, CFG-07 | Invoke each profile from an off-center position on each monitor; both cursor and root open at the pointer monitor's work-area center excluding the taskbar. Test all three cursor-end choices after launch/cancellation; no recentering during child navigation. |
 | A-04 | END-01–05, RUN-01 | Repeat, cancel, interrupt focus, and release after explicit selection. No duplicate or late launch occurs. Invoke another profile while open: the active profile, navigation path, and saved restoration position remain unchanged. Interrupt via display/cursor/input failure: cancel without dispatching a launch. |
 | A-05 | LAY-01, LAY-04–06, LAY-08–09, LAY-13–14 | Add many items and verify continued subdivision without paging or an item-count cap for target size. Across deep branches, display edges, and DPI settings, preserve saved geometry. User-chosen visibility/reachability compromises produce advisory warnings rather than forced corrections. |
