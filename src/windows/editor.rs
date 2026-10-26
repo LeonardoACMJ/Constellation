@@ -13,6 +13,7 @@ use crate::{
 };
 use std::{
     cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
     io::Write,
     mem::{size_of, zeroed},
     path::PathBuf,
@@ -28,6 +29,8 @@ use windows_sys::Win32::{
 // windows-sys omits the TBM_GETPOS alias (WM_USER + 0).
 const TBM_GETPOS: u32 = WM_USER;
 const TREE: i32 = 100;
+const ITEM_PATH: i32 = 223;
+const REFRESH_TREE: u32 = WM_APP + 40;
 const BROWSE_TARGET: i32 = 211;
 const BROWSE_RUNNER: i32 = 212;
 const BROWSE_CWD: i32 = 213;
@@ -109,7 +112,10 @@ struct Editor {
     c: Config,
     /// Index into `c.universes` of the tree being edited.
     universe: usize,
-    rows: Vec<u64>,
+    tree_items: Vec<(u64, HTREEITEM)>,
+    tree_universe: Option<u64>,
+    tree_views: HashMap<u64, TreeViewState>,
+    tree_refresh_pending: bool,
     parents: Vec<u64>,
     selected: u64,
     displays: Vec<Display>,
@@ -134,6 +140,13 @@ struct Editor {
     layout_applied: bool,
     icons: super::item_icons::Cache,
     icon_draft: ItemIcon,
+}
+#[derive(Default)]
+struct TreeViewState {
+    expanded: HashSet<u64>,
+    selected: u64,
+    first_visible: Option<u64>,
+    horizontal: i32,
 }
 struct PreviewCache {
     config: Config,
@@ -282,10 +295,10 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         }
         let controls = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_BAR_CLASSES,
+            dwICC: ICC_BAR_CLASSES | ICC_TREEVIEW_CLASSES,
         };
         if InitCommonControlsEx(&controls) == 0 {
-            return Err("Cannot initialize layout sliders".into());
+            return Err("Cannot initialize editor controls".into());
         }
         if CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) < 0 {
             return Err("Cannot initialize folder picker".into());
@@ -365,14 +378,27 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         label(hwnd, "STARS & CONSTELLATIONS", 20, 74, 270);
         control(
             hwnd,
-            "LISTBOX",
+            "SysTreeView32",
             "",
             TREE,
             20,
             98,
             260,
             417,
-            WS_BORDER | WS_VSCROLL | LBS_NOTIFY as u32,
+            WS_BORDER
+                | WS_TABSTOP
+                | TVS_HASBUTTONS
+                | TVS_HASLINES
+                | TVS_LINESATROOT
+                | TVS_SHOWSELALWAYS
+                | TVS_DISABLEDRAGDROP,
+        );
+        send(
+            hwnd,
+            TREE,
+            TVM_SETEXTENDEDSTYLE,
+            TVS_EX_DOUBLEBUFFER as usize,
+            TVS_EX_DOUBLEBUFFER as isize,
         );
         for (id, title, x, y, w) in [
             (ADD_STAR, "+ Star", 20, 525, 80),
@@ -383,7 +409,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         ] {
             control(hwnd, "BUTTON", title, id, x, y, w, 30, 0);
         }
-        label(hwnd, "ITEM", 305, 18, 340);
+        // Read-only but selectable: long paths can be scrolled/copied without
+        // truncating ancestor names or making the item form taller.
+        control(
+            hwnd,
+            "EDIT",
+            "",
+            ITEM_PATH,
+            305,
+            14,
+            360,
+            25,
+            ES_READONLY as u32 | ES_AUTOHSCROLL as u32 | WS_TABSTOP,
+        );
         // Name/Kind and Parent/Icon share a row each, the way the layout fields
         // below already do, which is what frees the band for "Visible in".
         for (id, title, x, y, w) in [
@@ -767,7 +805,10 @@ impl Editor {
             form: FormLayout::new(1380, 870, 17, 17),
             controls: vec![],
             c,
-            rows: vec![],
+            tree_items: vec![],
+            tree_universe: None,
+            tree_views: HashMap::new(),
+            tree_refresh_pending: false,
             parents: vec![],
             selected,
             displays,
@@ -1258,9 +1299,55 @@ impl Editor {
         }
     }
 
+    unsafe fn capture_tree_view(&mut self) {
+        let Some(universe) = self.tree_universe else {
+            return;
+        };
+        let tree = GetDlgItem(self.hwnd, TREE);
+        let first = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_FIRSTVISIBLE as usize, 0);
+        let selected = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as usize, 0);
+        let view = self.tree_views.entry(universe).or_default();
+        view.expanded.clear();
+        for &(id, handle) in &self.tree_items {
+            let mut item = TVITEMW {
+                mask: TVIF_STATE,
+                hItem: handle,
+                stateMask: TVIS_EXPANDED,
+                ..zeroed()
+            };
+            SendMessageW(tree, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
+            if item.state & TVIS_EXPANDED != 0 {
+                view.expanded.insert(id);
+            }
+            if handle == first {
+                view.first_visible = Some(id);
+            }
+            if handle == selected {
+                view.selected = id;
+            }
+        }
+        view.horizontal = GetScrollPos(tree, SB_HORZ);
+    }
+    fn tree_handle(&self, id: u64) -> Option<HTREEITEM> {
+        self.tree_items
+            .iter()
+            .find(|(node, _)| *node == id)
+            .map(|(_, handle)| *handle)
+    }
+    fn tree_id(&self, handle: HTREEITEM) -> Option<u64> {
+        self.tree_items
+            .iter()
+            .find(|(_, item)| *item == handle)
+            .map(|(id, _)| *id)
+    }
     unsafe fn refresh(&mut self) {
-        send(self.hwnd, TREE, LB_RESETCONTENT, 0, 0);
-        self.rows.clear();
+        self.tree_refresh_pending = false;
+        self.capture_tree_view();
+        self.universe = self.universe.min(self.c.universes.len() - 1);
+        let tree = GetDlgItem(self.hwnd, TREE);
+        SendMessageW(tree, WM_SETREDRAW, 0, 0);
+        SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as isize);
+        self.tree_items.clear();
         self.parents.clear();
         send(self.hwnd, PARENT, CB_RESETCONTENT, 0, 0);
         send(self.hwnd, UNIVERSE, CB_RESETCONTENT, 0, 0);
@@ -1274,58 +1361,95 @@ impl Editor {
             );
         }
         send(self.hwnd, UNIVERSE, CB_SETCURSEL, self.universe, 0);
-        fn walk(
+        unsafe fn walk(
+            hwnd: HWND,
             n: &Node,
+            parent: HTREEITEM,
             depth: usize,
-            rows: &mut Vec<(u64, String)>,
-            parents: &mut Vec<(u64, String)>,
+            items: &mut Vec<(u64, HTREEITEM)>,
+            parents: &mut Vec<u64>,
         ) {
-            let text = format!(
-                "{}{} {}",
-                "  ".repeat(depth),
+            let mut text = wide(format!(
+                "{} {}",
                 if n.children.is_some() { "✧" } else { "✦" },
                 n.name
-            );
-            rows.push((n.id, text.clone()));
-            if let Some(cs) = &n.children {
-                parents.push((n.id, text));
-                for c in cs {
-                    walk(c, depth + 1, rows, parents);
+            ));
+            let insert = TVINSERTSTRUCTW {
+                hParent: parent,
+                hInsertAfter: TVI_LAST,
+                Anonymous: TVINSERTSTRUCTW_0 {
+                    item: TVITEMW {
+                        mask: TVIF_TEXT | TVIF_PARAM,
+                        pszText: text.as_mut_ptr(),
+                        lParam: n.id as isize,
+                        ..zeroed()
+                    },
+                },
+            };
+            let handle = send(hwnd, TREE, TVM_INSERTITEMW, 0, &insert as *const _ as isize);
+            items.push((n.id, handle));
+            if let Some(children) = &n.children {
+                parents.push(n.id);
+                let label = wide(format!("{}✧ {}", "  ".repeat(depth), n.name));
+                send(hwnd, PARENT, CB_ADDSTRING, 0, label.as_ptr() as isize);
+                for child in children {
+                    walk(hwnd, child, handle, depth + 1, items, parents);
                 }
             }
         }
-        let mut rows = vec![];
-        let mut parents = vec![];
-        walk(&self.c.universes[self.universe], 0, &mut rows, &mut parents);
-        for (id, text) in rows {
-            self.rows.push(id);
-            send(
-                self.hwnd,
-                TREE,
-                LB_ADDSTRING,
-                0,
-                wide(text).as_ptr() as isize,
-            );
+        let root = &self.c.universes[self.universe];
+        let root_id = root.id;
+        walk(
+            self.hwnd,
+            root,
+            TVI_ROOT,
+            0,
+            &mut self.tree_items,
+            &mut self.parents,
+        );
+        if root.find(self.selected).is_none() {
+            self.selected = root_id;
         }
-        for (id, text) in parents {
-            self.parents.push(id);
-            send(
-                self.hwnd,
-                PARENT,
-                CB_ADDSTRING,
-                0,
-                wide(text).as_ptr() as isize,
-            );
+        let view = self
+            .tree_views
+            .entry(root_id)
+            .or_insert_with(|| TreeViewState {
+                expanded: HashSet::from([root_id]),
+                selected: root_id,
+                ..Default::default()
+            });
+        // Adding/moving/undoing a selected item reveals its ancestors only.
+        let path = editing::node_path(root, self.selected);
+        for node in path.iter().take(path.len().saturating_sub(1)) {
+            view.expanded.insert(node.id);
         }
-        let index = self
-            .rows
-            .iter()
-            .position(|id| *id == self.selected)
-            .unwrap_or(0);
-        self.selected = self.rows[index];
-        send(self.hwnd, TREE, LB_SETCURSEL, index, 0);
+        for &(id, handle) in &self.tree_items {
+            if view.expanded.contains(&id) {
+                SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as usize, handle);
+            }
+        }
+        let first = (view.selected == self.selected)
+            .then_some(view.first_visible)
+            .flatten();
+        let horizontal = view.horizontal;
+        if let Some(handle) = self.tree_handle(self.selected) {
+            SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as usize, handle);
+        }
+        if let Some(handle) = first.and_then(|id| self.tree_handle(id)) {
+            SendMessageW(tree, TVM_SELECTITEM, TVGN_FIRSTVISIBLE as usize, handle);
+        }
+        // TVM_SELECTITEM can scroll horizontally to the label; restore the view.
+        SendMessageW(
+            tree,
+            WM_HSCROLL,
+            SB_THUMBPOSITION as usize | ((horizontal as usize) << 16),
+            0,
+        );
+        self.tree_universe = Some(root_id);
+        SendMessageW(tree, WM_SETREDRAW, 1, 0);
+        InvalidateRect(tree, null(), 0);
         self.selection_to_controls();
-        InvalidateRect(self.hwnd, null(), 1);
+        InvalidateRect(self.hwnd, null(), 0);
     }
     /// Profiles that open the universe being edited, as (id, name).
     fn audience(&self) -> Vec<(u64, String)> {
@@ -1341,6 +1465,14 @@ impl Editor {
         let Some(n) = self.c.find(self.selected) else {
             return;
         };
+        let path = editing::node_path(&self.c.universes[self.universe], self.selected)
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" › ");
+        set(self.hwnd, ITEM_PATH, &path);
+        send(self.hwnd, ITEM_PATH, EM_SETSEL, 0, 0);
+        send(self.hwnd, ITEM_PATH, EM_SCROLLCARET, 0, 0);
         set(self.hwnd, NAME, &n.name);
         set(self.hwnd, NOTE, &n.note);
         self.note_counter();
@@ -1497,6 +1629,9 @@ impl Editor {
         Ok(())
     }
     unsafe fn apply(&mut self) -> Result<(), String> {
+        self.apply_item(true)
+    }
+    unsafe fn apply_item(&mut self, refresh: bool) -> Result<(), String> {
         if !self.item_dirty {
             return Ok(());
         }
@@ -1599,7 +1734,9 @@ impl Editor {
         candidate.validate()?;
         self.commit(candidate);
         self.item_dirty = false;
-        self.refresh();
+        if refresh {
+            self.refresh();
+        }
         Ok(())
     }
     unsafe fn add(&mut self, folder: bool) -> Result<(), String> {
@@ -1892,6 +2029,51 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     };
     let e = &mut *EDITOR;
     match msg {
+        REFRESH_TREE => {
+            if e.tree_refresh_pending {
+                // A newly typed edit must survive even if it arrives before
+                // this posted refresh. Invalid fields keep their current form.
+                if let Err(message) = e.apply_item(false) {
+                    e.status = message;
+                    set(hwnd, ADVICE, &e.status);
+                    return 0;
+                }
+                e.refresh();
+            }
+            0
+        }
+        WM_NOTIFY if l != 0 && (*(l as *const NMHDR)).idFrom == TREE as usize => {
+            let header = &*(l as *const NMHDR);
+            match header.code {
+                TVN_SELCHANGINGW => {
+                    // Never rebuild native items while TreeView owns handles
+                    // on its selection stack. Validate now; refresh after it returns.
+                    e.checkpoint_settings();
+                    let dirty = e.item_dirty;
+                    if let Err(message) = e.apply_item(false) {
+                        e.status = message;
+                        set(hwnd, ADVICE, &e.status);
+                        return 1;
+                    }
+                    if dirty {
+                        e.tree_refresh_pending = true;
+                    }
+                    0
+                }
+                TVN_SELCHANGEDW => {
+                    let change = &*(l as *const NMTREEVIEWW);
+                    if let Some(id) = e.tree_id(change.itemNew.hItem) {
+                        e.selected = id;
+                        e.selection_to_controls();
+                    }
+                    if e.tree_refresh_pending {
+                        PostMessageW(hwnd, REFRESH_TREE, 0, 0);
+                    }
+                    0
+                }
+                _ => 0,
+            }
+        }
         super::item_icons::READY => {
             e.icons.acknowledge();
             e.preview_cache = None;
@@ -1971,7 +2153,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     match e.apply() {
                         Ok(()) => {
                             e.universe = index as usize;
-                            e.selected = e.c.universes[e.universe].id;
+                            let root = e.c.universes[e.universe].id;
+                            e.selected = e.tree_views.get(&root).map_or(root, |v| v.selected);
                             e.refresh();
                         }
                         Err(message) => {
@@ -1992,29 +2175,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if matches!(id, KIND | PARENT | ICON_MODE) && notify == CBN_SELCHANGE as u32 {
                 e.item_dirty = true;
                 e.enable_fields();
-                return 0;
-            }
-            if id == TREE && notify == LBN_SELCHANGE as u32 {
-                let next = e
-                    .rows
-                    .get(send(hwnd, TREE, LB_GETCURSEL, 0, 0) as usize)
-                    .copied();
-                e.checkpoint_settings();
-                if let Some(next) = next {
-                    match e.apply() {
-                        Ok(()) => {
-                            e.selected = next;
-                            e.selection_to_controls();
-                        }
-                        Err(message) => {
-                            e.status = message;
-                            set(hwnd, ADVICE, &e.status);
-                            let index = e.rows.iter().position(|id| *id == e.selected).unwrap_or(0);
-                            send(hwnd, TREE, LB_SETCURSEL, index, 0);
-                        }
-                    }
-                }
-                InvalidateRect(hwnd, null(), 1);
                 return 0;
             }
             if id == INSTRUMENT && notify == CBN_SELCHANGE as u32 {
@@ -3094,6 +3254,7 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    static NATIVE_EDITOR: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
     #[ignore = "offscreen native preview regression; run on Windows CI"]
     fn switching_universes_rebuilds_cached_preview_without_editing_config() {
@@ -3145,11 +3306,269 @@ mod lifecycle_tests {
         .unwrap();
     }
 
+    #[test]
+    #[ignore = "hidden native tree interactions; run on Windows CI"]
+    fn tree_preserves_context_and_validates_before_native_selection() {
+        let _serial = NATIVE_EDITOR.lock().unwrap();
+        std::thread::spawn(|| unsafe {
+            let common = INITCOMMONCONTROLSEX {
+                dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
+                dwICC: ICC_TREEVIEW_CLASSES,
+            };
+            assert_ne!(InitCommonControlsEx(&common), 0);
+            let module = GetModuleHandleW(null());
+            let class = wide("Constellation.Test.Tree");
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                hInstance: module,
+                lpszClassName: class.as_ptr(),
+                ..zeroed()
+            };
+            assert_ne!(RegisterClassW(&wc), 0);
+            // The owner remains hidden for the entire test. No input synthesis.
+            let owner = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                wide("tree test").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                800,
+                500,
+                null_mut(),
+                null_mut(),
+                module,
+                null(),
+            );
+            assert!(!owner.is_null());
+            theme::install();
+            let tree = control(
+                owner,
+                "SysTreeView32",
+                "",
+                TREE,
+                0,
+                0,
+                260,
+                90,
+                TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+            );
+            for id in [NAME, NOTE, TARGET, ARGS, RUNNER, CWD, ITEM_PATH] {
+                control(owner, "EDIT", "", id, 300, 10, 300, 25, 0);
+            }
+            for id in [KIND, PARENT, ICON_MODE, UNIVERSE] {
+                control(
+                    owner,
+                    "COMBOBOX",
+                    "",
+                    id,
+                    300,
+                    40,
+                    300,
+                    100,
+                    CBS_DROPDOWNLIST as u32,
+                );
+            }
+            for label in [
+                "Constellation",
+                "Program",
+                "Shortcut",
+                "URL",
+                "Folder",
+                "Script",
+            ] {
+                send(owner, KIND, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
+            }
+            for label in ["Automatic", "Symbol", "Image", "Software"] {
+                send(
+                    owner,
+                    ICON_MODE,
+                    CB_ADDSTRING,
+                    0,
+                    wide(label).as_ptr() as isize,
+                );
+            }
+            control(
+                owner,
+                "LISTBOX",
+                "",
+                VISIBLE,
+                300,
+                80,
+                200,
+                90,
+                LBS_MULTIPLESEL as u32,
+            );
+            control(owner, "STATIC", "", ADVICE, 300, 180, 300, 80, 0);
+            control(owner, "STATIC", "", NOTE_COUNT, 300, 260, 300, 20, 0);
+            let mut config = Config::default();
+            fn symbols(n: &mut Node) {
+                n.icon = ItemIcon::Symbol;
+                for child in n.children.iter_mut().flatten() {
+                    symbols(child);
+                }
+            }
+            symbols(&mut config.universes[0]);
+            let mut second = config.universes[0].clone();
+            fn renumber(n: &mut Node) {
+                n.id += 1000;
+                for child in n.children.iter_mut().flatten() {
+                    renumber(child);
+                }
+            }
+            renumber(&mut second);
+            config.universes.push(second);
+            EDITOR = Box::into_raw(Box::new(Editor::new(
+                owner,
+                PathBuf::new(),
+                config.clone(),
+                vec![],
+            )));
+            {
+                let _guard = super::super::DispatchGuard::enter().unwrap();
+                (*EDITOR).refresh();
+            }
+            let state = |id| {
+                let mut item = TVITEMW {
+                    mask: TVIF_STATE,
+                    hItem: (*EDITOR).tree_handle(id).unwrap(),
+                    stateMask: TVIS_EXPANDED,
+                    ..zeroed()
+                };
+                SendMessageW(tree, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
+                item.state & TVIS_EXPANDED != 0
+            };
+            assert!(state(1));
+            assert!(!state(2));
+            SendMessageW(
+                tree,
+                TVM_EXPAND,
+                TVE_EXPAND as usize,
+                (*EDITOR).tree_handle(2).unwrap(),
+            );
+            assert_eq!((*EDITOR).selected, 1, "Expansion button selected the row");
+            SendMessageW(
+                tree,
+                TVM_EXPAND,
+                TVE_EXPAND as usize,
+                (*EDITOR).tree_handle(5).unwrap(),
+            );
+            assert!(!(*EDITOR).dirty && !(*EDITOR).item_dirty);
+            SendMessageW(
+                tree,
+                TVM_SELECTITEM,
+                TVGN_CARET as usize,
+                (*EDITOR).tree_handle(6).unwrap(),
+            );
+            assert_eq!((*EDITOR).selected, 6);
+            let expected = editing::node_path(&config.universes[0], 6)
+                .iter()
+                .map(|n| n.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" › ");
+            assert_eq!(get(owner, ITEM_PATH), expected);
+            // User can keep a different sibling visible while editing this node.
+            SendMessageW(
+                tree,
+                TVM_SELECTITEM,
+                TVGN_FIRSTVISIBLE as usize,
+                (*EDITOR).tree_handle(5).unwrap(),
+            );
+            let top = (*EDITOR).tree_id(SendMessageW(
+                tree,
+                TVM_GETNEXTITEM,
+                TVGN_FIRSTVISIBLE as usize,
+                0,
+            ));
+            {
+                let _guard = super::super::DispatchGuard::enter().unwrap();
+                (*EDITOR).refresh();
+            }
+            assert_eq!((*EDITOR).selected, 6);
+            assert!(state(2) && state(5));
+            assert_eq!(
+                (*EDITOR).tree_id(SendMessageW(
+                    tree,
+                    TVM_GETNEXTITEM,
+                    TVGN_FIRSTVISIBLE as usize,
+                    0
+                )),
+                top
+            );
+            set(owner, NAME, "");
+            SendMessageW(
+                tree,
+                TVM_SELECTITEM,
+                TVGN_CARET as usize,
+                (*EDITOR).tree_handle(8).unwrap(),
+            );
+            assert_eq!((*EDITOR).selected, 6, "Invalid edit was lost on selection");
+            assert_eq!(get(owner, NAME), "");
+            set(owner, NAME, "Renamed child");
+            SendMessageW(
+                tree,
+                TVM_SELECTITEM,
+                TVGN_CARET as usize,
+                (*EDITOR).tree_handle(8).unwrap(),
+            );
+            assert_eq!((*EDITOR).selected, 8);
+            assert!((*EDITOR).tree_refresh_pending);
+            assert_eq!((*EDITOR).c.find(6).unwrap().name, "Renamed child");
+            SendMessageW(owner, REFRESH_TREE, 0, 0);
+            assert!(!(*EDITOR).tree_refresh_pending);
+            assert_eq!((*EDITOR).selected, 8);
+            assert!(state(2) && state(5));
+            // Universe switching restores that universe's own view and selection.
+            send(owner, UNIVERSE, CB_SETCURSEL, 1, 0);
+            SendMessageW(
+                owner,
+                WM_COMMAND,
+                UNIVERSE as usize | ((CBN_SELCHANGE as usize) << 16),
+                GetDlgItem(owner, UNIVERSE) as isize,
+            );
+            assert_eq!((*EDITOR).selected, 1001);
+            assert!(state(1001) && !state(1002));
+            send(owner, UNIVERSE, CB_SETCURSEL, 0, 0);
+            SendMessageW(
+                owner,
+                WM_COMMAND,
+                UNIVERSE as usize | ((CBN_SELCHANGE as usize) << 16),
+                GetDlgItem(owner, UNIVERSE) as isize,
+            );
+            assert_eq!((*EDITOR).selected, 8);
+            assert!(state(2) && state(5));
+            // Collapsing the selected node's ancestor keeps the editor in sync.
+            SendMessageW(
+                tree,
+                TVM_SELECTITEM,
+                TVGN_CARET as usize,
+                (*EDITOR).tree_handle(6).unwrap(),
+            );
+            SendMessageW(
+                tree,
+                TVM_EXPAND,
+                TVE_COLLAPSE as usize,
+                (*EDITOR).tree_handle(2).unwrap(),
+            );
+            assert_eq!((*EDITOR).selected, 2);
+            assert!(!state(2));
+            assert_eq!(IsWindowVisible(owner), 0);
+            drop(Box::from_raw(EDITOR));
+            EDITOR = null_mut();
+            DestroyWindow(owner);
+            UnregisterClassW(class.as_ptr(), module);
+            theme::shutdown();
+        })
+        .join()
+        .unwrap();
+    }
+
     // Run on the remote Windows CI runner only. No visible windows, hooks,
     // mouse/keyboard synthesis or user configuration are involved.
     #[test]
     #[ignore = "hidden native window lifecycle; run on Windows CI"]
     fn default_native_resize_and_close_deliver_layout_and_reenable_owner() {
+        let _serial = NATIVE_EDITOR.lock().unwrap();
         std::thread::spawn(|| unsafe {
             let module = GetModuleHandleW(null());
             let owner_class = wide("Constellation.Test.OwnerClose");

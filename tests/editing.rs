@@ -240,3 +240,37 @@ fn ten_thousand_stars_remain_individually_selectable_without_paging() {
     }
     assert!(!geometry::warnings(&c, 1920., 1080.).is_empty());
 }
+
+#[test]
+fn item_paths_follow_ids_through_duplicate_names_and_moves() {
+    let mut c = Config::default();
+    c.universes[0].name = "Same".into();
+    c.universes[0].find_mut(2).unwrap().name = "Same".into();
+    c.universes[0].find_mut(5).unwrap().name = "Same".into();
+    let path = editing::node_path(&c.universes[0], 6);
+    assert_eq!(
+        path.iter().map(|n| n.id).collect::<Vec<_>>(),
+        vec![1, 2, 5, 6]
+    );
+    assert_eq!(
+        path.iter().map(|n| n.name.as_str()).collect::<Vec<_>>()[..3],
+        ["Same", "Same", "Same"]
+    );
+    assert!(editing::node_path(&c.universes[0], u64::MAX).is_empty());
+    let moved = c.universes[0]
+        .find_mut(5)
+        .unwrap()
+        .children
+        .as_mut()
+        .unwrap()
+        .remove(0);
+    c.universes[0].children.as_mut().unwrap().push(moved);
+    assert_eq!(
+        editing::node_path(&c.universes[0], 6)
+            .iter()
+            .map(|n| n.id)
+            .collect::<Vec<_>>(),
+        vec![1, 6]
+    );
+    assert_eq!(editing::node_path(&c.universes[0], 1).len(), 1);
+}

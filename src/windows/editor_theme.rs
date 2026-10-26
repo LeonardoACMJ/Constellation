@@ -74,6 +74,14 @@ pub unsafe fn control(hwnd: HWND, class: &str) {
             SendMessageW(hwnd, WM_SETFONT, t.font as usize, 0);
         }
     });
+    if class == "SysTreeView32" {
+        SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
+        SendMessageW(hwnd, TVM_SETBKCOLOR, 0, INPUT as isize);
+        SendMessageW(hwnd, TVM_SETTEXTCOLOR, 0, TEXT as isize);
+        SendMessageW(hwnd, TVM_SETLINECOLOR, 0, render::rgb(65, 81, 105) as isize);
+        SendMessageW(hwnd, TVM_SETINDENT, 20, 0);
+        SendMessageW(hwnd, TVM_SETITEMHEIGHT, 24, 0);
+    }
     if class == "msctls_trackbar32" {
         // Preserve native input/accessibility; replace only the paint path.
         SetWindowSubclass(hwnd, Some(slider_proc), 1, 0);

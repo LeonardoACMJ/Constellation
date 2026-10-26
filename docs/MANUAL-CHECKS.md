@@ -1,15 +1,16 @@
-# Constellation 0.1.38 — manual checks
+# Constellation 0.1.39 — manual checks
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
 If Quit fails in an older build, save and close Configure, then end the resident `constellation.exe` in Task Manager before updating.
 
-When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.38**.
+When updating, close Configure and choose **Quit** in the current tray app. Copy the files from the ZIP's `Constellation` directory into your existing app directory, keeping `data/`. Do not start a separate empty staging folder if you want to keep your existing settings. The configuration title should show **0.1.39**.
 
 Start `constellation.exe`; right-click its tray icon → **Configure / Visualize…**. Settings persist with **Save**. Profile changes need **Done**, then **Save** in the main editor.
 
 | Check | Steps | Expected |
 |---|---|---|
+| Configuration tree | Expand several branches with their buttons, select Stars with one click, and use Left/Right arrows while the tree has focus. Select nested items with repeated names; inspect the path above the fields. Edit/Apply/Save, switch universes and return. Try switching with an invalid field, then collapse the selected item’s ancestor. | Hollow/filled stars and subtle connector lines remain clear. Branch expansion does not select a different item. Path follows the exact selected node and can be scrolled/copied. Edits/Save retain the view; each universe retains its own session view. Invalid edits stay put. Collapsing a selected descendant selects its ancestor. |
 | Configuration opening size | Open Configure through the tray, a Settings Star or --configure. Restore its size, then open it again through another route. | Opens maximized; reuses and maximizes the existing editor, with its draft preserved. Restore and resize remain available. |
 | Universe preview refresh | Switch between two universes with different content, then back, without Save or changing spacing. | The right-hand preview and advisory warnings immediately follow the selected universe; switching does not modify the draft or require a reload. |
 | Universes and entry points | Create a second universe; in Shortcut profiles choose Opens universe and a nested Constellation under Opens at. Save/reopen and invoke each binding. Try deleting a referenced universe. | Independent trees persist, each binding opens its chosen entry without copying items, and referenced/last universes cannot be deleted. |

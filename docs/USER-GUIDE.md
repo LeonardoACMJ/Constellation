@@ -20,6 +20,10 @@ The sample tree includes Calculator, Notepad, the portable folder, a GitHub URL,
 
 ## Configure
 
+The left panel is an expandable tree: use the branch buttons or Left/Right arrow keys to open and close Constellations. A single click selects an item for editing; several branches can stay open. Subtle lines connect parents and children, and the original item order is preserved. Expansion, selection and scrolling are remembered per universe while this editor is open. Editing and Save preserve your place; newly added items reveal their ancestors.
+
+Above the item fields, the read-only path shows the selected item’s complete ancestry, including repeated names. You can select/copy it or scroll horizontally through a long path.
+
 The configuration window opens maximized. Opening it again brings the existing window forward and maximizes it; you can still restore or resize it normally.
 
 Every item, including root and nested Constellations, has a **Note** field below Name. Use it for short prerequisites or consequences (for example, “needs ssh-agent running” or “deletes the source”). The live counter caps typing/paste at 140 Unicode characters; pasted line breaks become spaces. **Apply item → Save** persists it. Notes participate in undo/redo and configuration import/export; clearing a note removes its JSON field.

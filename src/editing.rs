@@ -271,3 +271,26 @@ pub fn export(path: &Path, c: &Config) -> Result<(), String> {
     }
     result.map_err(|e| format!("Cannot export configuration: {e}"))
 }
+
+/// Full ancestry by stable ID, including the selected item. Names may repeat.
+pub fn node_path(root: &Node, id: u64) -> Vec<&Node> {
+    fn walk<'a>(node: &'a Node, id: u64, path: &mut Vec<&'a Node>) -> bool {
+        path.push(node);
+        if node.id == id {
+            return true;
+        }
+        if node
+            .children
+            .iter()
+            .flatten()
+            .any(|child| walk(child, id, path))
+        {
+            return true;
+        }
+        path.pop();
+        false
+    }
+    let mut path = Vec::new();
+    walk(root, id, &mut path);
+    path
+}
