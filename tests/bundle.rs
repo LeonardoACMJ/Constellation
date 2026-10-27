@@ -125,3 +125,16 @@ fn original_asset_references_never_become_destination_paths() {
     assert!(!path.contains(".."));
     assert!(destination.join(path).is_file());
 }
+
+#[test]
+fn import_detects_json_or_bundle_contents_even_with_changed_extensions() {
+    let source = sandbox();
+    let destination = sandbox();
+    let c = configured(&source);
+    let bundle = source.join("bundle-renamed.json");
+    bundle::export(&bundle, &source, &c).unwrap();
+    assert_eq!(bundle::read_import(&bundle, &destination).unwrap(), c);
+    let json = source.join("json-renamed.constellation");
+    constellation::editing::export(&json, &c).unwrap();
+    assert_eq!(bundle::read_import(&json, &destination).unwrap(), c);
+}

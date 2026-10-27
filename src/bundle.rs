@@ -108,7 +108,7 @@ pub fn export(path: &Path, root: &Path, c: &Config) -> Result<(), String> {
     }
     editing::export_bytes(path, &bytes)
 }
-pub fn import(path: &Path, root: &Path) -> Result<Config, String> {
+fn read_document(path: &Path) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .map_err(|e| e.to_string())?
@@ -116,10 +116,24 @@ pub fn import(path: &Path, root: &Path) -> Result<Config, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > DOCUMENT {
-        return Err("Bundle document is too large".into());
+        return Err("Import document is too large".into());
     }
-    let document: Bundle =
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid bundle: {e}"))?;
+    Ok(bytes)
+}
+/// Detect the contents, so renaming a document cannot select the wrong importer.
+pub fn read_import(path: &Path, root: &Path) -> Result<Config, String> {
+    let bytes = read_document(path)?;
+    match serde_json::from_slice::<Bundle>(&bytes) {
+        Ok(document) => import_document(document, root),
+        Err(_) => storage::parse_config(&bytes),
+    }
+}
+pub fn import(path: &Path, root: &Path) -> Result<Config, String> {
+    let document = serde_json::from_slice(&read_document(path)?)
+        .map_err(|e| format!("Invalid bundle: {e}"))?;
+    import_document(document, root)
+}
+fn import_document(document: Bundle, root: &Path) -> Result<Config, String> {
     if document.format != "constellation-bundle" || document.version != 1 {
         return Err("Unsupported bundle format/version".into());
     }

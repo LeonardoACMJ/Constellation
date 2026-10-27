@@ -58,7 +58,9 @@ pub unsafe fn choose(hwnd: HWND, root: &Path, pick: Pick) -> Result<Option<PathB
             "Icon images (PNG, JPEG, BMP, ICO)\0*.png;*.jpg;*.jpeg;*.bmp;*.ico\0All files\0*.*\0"
         } else if matches!(pick, Pick::Software) {
             "Software icons (EXE, COM, LNK)\0*.exe;*.com;*.lnk\0All files\0*.*\0"
-        } else if matches!(pick, Pick::Import | Pick::Export) {
+        } else if matches!(pick, Pick::Import) {
+            "Configurations and bundles\0*.json;*.constellation\0All files\0*.*\0"
+        } else if matches!(pick, Pick::Export) {
             "Portable bundle (*.constellation)\0*.constellation\0Configuration JSON (*.json)\0*.json\0All files\0*.*\0"
         } else {
             "Applications, shortcuts and scripts\0*.exe;*.com;*.lnk;*.url;*.ps1;*.py;*.cmd;*.bat\0All files\0*.*\0"

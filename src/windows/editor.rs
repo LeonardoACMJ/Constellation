@@ -1288,15 +1288,7 @@ impl Editor {
                     self.status = "Exported portable bundle with custom images. Launch targets are not copied.".into();
                 }
             } else {
-                let c = if path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("constellation"))
-                {
-                    crate::bundle::import(&path, &self.root)?
-                } else {
-                    editing::read_import(&path)?
-                };
+                let c = crate::bundle::read_import(&path, &self.root)?;
                 self.commit(c);
                 self.universe = self.universe.min(self.c.universes.len() - 1);
                 self.selected = self.c.universes[self.universe].id;
