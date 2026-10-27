@@ -94,4 +94,4 @@ The small-screen footer/layout redesign remains outside this release.
 | Open Web browser and the unsaved-close prompt from a moved/maximized Settings window. | Both center over Settings and remain inside its monitor’s usable work area. |
 | With the tree/button focused, duplicate/edit an item, then Ctrl+Z and Ctrl+Y. Repeat inside a text field after typing. | Draft history outside fields, field undo/redo inside. Repeated Redo cannot undo a fresh edit; new typing clears field Redo. |
 
-The user confirmed .44 Save on close and Ctrl+S/Ctrl+D/F2. Bundle transfer remains manually unverified; do not require a second installation to continue ordinary use. Its automated round-trip and malformed-document checks pass.
+Save on close and Ctrl+S/tree Ctrl+D/F2 have been manually checked. Bundle transfer remains manually unverified; do not require a second installation to continue ordinary use. Its automated round-trip and malformed-document checks pass.
