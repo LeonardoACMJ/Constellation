@@ -667,15 +667,21 @@ impl Renderer {
             .icons
             .get_or_insert_with(|| super::item_icons::Cache::new(hwnd, root.to_path_buf()));
         let images = cache.collect(
-            std::iter::once(start).chain(
-                sectors
-                    .iter()
-                    .filter(|s| {
-                        (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
-                            && (s.outer - s.inner) * scale >= 18.
-                    })
-                    .filter_map(|s| c.find(s.id)),
-            ),
+            hover
+                .and_then(|id| c.find(id))
+                .into_iter()
+                .chain(path.iter().rev().filter_map(|id| c.find(*id)))
+                .chain(std::iter::once(start))
+                .chain(
+                    sectors
+                        .iter()
+                        .rev()
+                        .filter(|s| {
+                            (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
+                                && (s.outer - s.inner) * scale >= 18.
+                        })
+                        .filter_map(|s| c.find(s.id)),
+                ),
         );
         let surface = self.surface.as_mut().unwrap();
         surface.draw_with_icons(
@@ -721,6 +727,11 @@ impl Renderer {
     }
     pub fn release_frame(&mut self) {
         self.surface = None;
+    }
+    pub fn invalidate_icons(&self) {
+        if let Some(cache) = &self.icons {
+            cache.invalidate();
+        }
     }
     pub fn icons_ready(&self) {
         if let Some(cache) = &self.icons {

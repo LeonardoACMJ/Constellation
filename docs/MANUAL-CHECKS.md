@@ -60,3 +60,16 @@ The white-dot cursor can be disabled per shortcut profile. Subjective audio qual
 
 If maximize → restore still stalls, close Configure and launch the same installed executable with `--configure --trace-editor`. Manually maximize/restore once and inspect `data/editor-trace.log` in the app folder. It records elapsed timestamps around resize, scrollbar, control placement and preview painting, capped at 4,096 entries. No configuration values or target paths are recorded. This mode is optional and creates no hooks or input automation; ordinary launches do not open the trace file. A missing `.end` identifies the last unfinished stage; repeated resize events suggest queue churn. Timing under diagnostics includes log-write overhead and is not a latency benchmark.
 
+
+## Configuration safety and responsiveness (0.1.43)
+
+| Check | Expected result |
+|---|---|
+| In a disposable portable copy, change config.json externally while Settings has a draft, then Save. | Save refuses the conflict and retains the draft. Export to a separate file before Reload. Repeat with Advanced JSON. |
+| In that copy, corrupt config.json after creating a valid backup, then reopen. | Informational tray notice, recovered-backup title marker and inline advice. Original remains untouched until Save; valid Save/Reload clears the marker. |
+| Point a shortcut profile at a nested Constellation, then delete it or its ancestor. | Refusal names the dependent profile; the tree is unchanged. Choose another Opens at entry to allow deletion. |
+| Browse a large tree, rename and change a note/target. | Expansion/selection/scroll remain stable. Notes and sound changes do not rebuild the fan-out preview. |
+| Visit branches after the first 128 icon sources; share one icon across many Stars. Change an image at its existing path, then Save or Reload. | Active branch icons load, shared images reuse the cache, and explicit refresh sees changed files. |
+| Check an unavailable mapped-drive target and launch a slow target. | Availability checks and launch dispatch do not block the radial/input thread. Save, Import and file pickers still perform their requested file operations. |
+
+These checks require manual review on real setups; CI does not establish mapped-drive latency or foreground behaviour for every application.

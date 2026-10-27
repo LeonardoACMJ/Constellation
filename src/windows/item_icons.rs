@@ -7,7 +7,7 @@ use crate::{
     storage,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     mem::{size_of, zeroed},
     path::{Path, PathBuf},
     ptr::{null, null_mut},
@@ -16,6 +16,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::{SyncSender, sync_channel},
     },
+    time::{Duration, Instant},
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -61,15 +62,32 @@ struct Entry {
     image: Option<Arc<Pixels>>,
     pending: bool,
     used: u64,
+    generation: u64,
+    refreshed: Instant,
 }
 #[derive(Default)]
 struct State {
     entries: HashMap<Source, Entry>,
     clock: u64,
 }
+impl State {
+    fn complete(&mut self, key: &Source, generation: u64, image: Option<Arc<Pixels>>) -> bool {
+        let Some(entry) = self
+            .entries
+            .get_mut(key)
+            .filter(|e| e.generation == generation)
+        else {
+            return false;
+        };
+        entry.image = image;
+        entry.pending = false;
+        entry.refreshed = Instant::now();
+        true
+    }
+}
 pub struct Cache {
     state: Arc<Mutex<State>>,
-    channel: Option<SyncSender<Source>>,
+    channel: Option<SyncSender<(Source, u64)>>,
     alive: Arc<AtomicBool>,
     notified: Arc<AtomicBool>,
 }
@@ -78,7 +96,7 @@ impl Cache {
         let state = Arc::new(Mutex::new(State::default()));
         let alive = Arc::new(AtomicBool::new(true));
         let notified = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = sync_channel::<Source>(CAPACITY);
+        let (tx, rx) = sync_channel::<(Source, u64)>(CAPACITY);
         let (worker_state, worker_alive, worker_notified) =
             (state.clone(), alive.clone(), notified.clone());
         let window = hwnd as usize;
@@ -97,16 +115,26 @@ impl Cache {
                     },
                     null_mut(),
                 ) == Ok;
-                while let Result::Ok(key) = rx.recv() {
+                while let Result::Ok((key, generation)) = rx.recv() {
                     if !worker_alive.load(Ordering::Acquire) {
                         break;
                     }
+                    if !worker_state.lock().ok().is_some_and(
+                        |s: std::sync::MutexGuard<'_, State>| {
+                            s.entries
+                                .get(&key)
+                                .is_some_and(|e| e.generation == generation)
+                        },
+                    ) {
+                        continue;
+                    }
                     let image = load(&root, &key, gdiplus).map(Arc::new);
-                    if let Result::Ok(mut state) = worker_state.lock() {
-                        if let Some(entry) = state.entries.get_mut(&key) {
-                            entry.image = image;
-                            entry.pending = false;
-                        }
+                    let completed = worker_state
+                        .lock()
+                        .ok()
+                        .is_some_and(|mut state| state.complete(&key, generation, image));
+                    if !completed {
+                        continue;
                     }
                     if worker_alive.load(Ordering::Acquire)
                         && !worker_notified.swap(true, Ordering::AcqRel)
@@ -145,40 +173,69 @@ impl Cache {
                 .is_some_and(|entry| !entry.pending && entry.image.is_none())
         })
     }
-    fn get(&self, node: &Node) -> Option<Arc<Pixels>> {
+    pub fn invalidate(&self) {
+        if let Result::Ok(mut state) = self.state.lock() {
+            state.entries.clear();
+        }
+    }
+    fn get(&self, node: &Node, pinned: &HashSet<Source>) -> Option<Arc<Pixels>> {
         let key = source(node)?;
         let mut state = self.state.try_lock().ok()?;
         state.clock = state.clock.wrapping_add(1);
         let used = state.clock;
-        if let Some(entry) = state.entries.get_mut(&key) {
+        let old = if let Some(entry) = state.entries.get_mut(&key) {
             entry.used = used;
-            return entry.image.clone();
-        }
-        if state.entries.len() >= CAPACITY {
+            let image = entry.image.clone();
+            let ttl = if image.is_some() { 60 } else { 30 };
+            if entry.pending || entry.refreshed.elapsed() < Duration::from_secs(ttl) {
+                return image;
+            }
+            image
+        } else {
+            None
+        };
+        if !state.entries.contains_key(&key) && state.entries.len() >= CAPACITY {
             let oldest = state
                 .entries
                 .iter()
-                .filter(|(_, e)| !e.pending)
+                .filter(|(k, e)| !e.pending && !pinned.contains(*k))
                 .min_by_key(|(_, e)| e.used)
                 .map(|(key, _)| key.clone());
             state.entries.remove(&oldest?);
         }
-        self.channel.as_ref()?.try_send(key.clone()).ok()?;
-        state.entries.insert(
-            key,
-            Entry {
-                image: None,
-                pending: true,
-                used,
-            },
-        );
-        None
+        if self.channel.as_ref()?.try_send((key.clone(), used)).is_ok() {
+            state.entries.insert(
+                key,
+                Entry {
+                    image: old.clone(),
+                    pending: true,
+                    used,
+                    generation: used,
+                    refreshed: Instant::now(),
+                },
+            );
+        }
+        old
     }
+    /// Caller supplies active/visible nodes first. Capacity counts distinct
+    /// images, so symbols and repeated software icons consume no extra slots.
     pub fn collect<'a>(&self, nodes: impl IntoIterator<Item = &'a Node>) -> Images {
+        let mut pinned = HashSet::new();
+        let nodes: Vec<_> = nodes
+            .into_iter()
+            .filter(|node| {
+                let Some(key) = source(node) else {
+                    return false;
+                };
+                if pinned.contains(&key) {
+                    return true;
+                }
+                pinned.len() < CAPACITY && pinned.insert(key)
+            })
+            .collect();
         nodes
             .into_iter()
-            .take(CAPACITY)
-            .filter_map(|node| self.get(node).map(|image| (node.id, image)))
+            .filter_map(|node| self.get(node, &pinned).map(|image| (node.id, image)))
             .collect()
     }
 }
@@ -694,6 +751,86 @@ mod cache_tests {
             rx.try_recv().is_err(),
             "A large preview must not continuously evict and reload icons"
         );
+        assert_eq!(cache.state.lock().unwrap().entries.len(), CAPACITY);
+    }
+    #[test]
+    fn symbols_and_shared_icons_do_not_exhaust_the_image_budget() {
+        let (tx, rx) = sync_channel(CAPACITY);
+        let cache = Cache {
+            state: Arc::new(Mutex::new(State::default())),
+            channel: Some(tx),
+            alive: Arc::new(AtomicBool::new(true)),
+            notified: Arc::new(AtomicBool::new(false)),
+        };
+        let mut items: Vec<_> = (1..300).map(node).collect();
+        for item in &mut items[..200] {
+            item.icon = ItemIcon::Symbol;
+        }
+        for item in &mut items[200..] {
+            item.icon = ItemIcon::Software {
+                path: "shared.exe".into(),
+            };
+        }
+        cache.collect(&items);
+        let (key, generation) = rx.try_recv().unwrap();
+        assert!(rx.try_recv().is_err());
+        cache.state.lock().unwrap().complete(
+            &key,
+            generation,
+            Some(Arc::new(Pixels {
+                bytes: vec![0; SIZE * SIZE * 4],
+            })),
+        );
+        assert_eq!(cache.collect(&items).len(), items.len() - 200);
+    }
+    #[test]
+    fn retries_expire_and_invalidation_rejects_stale_completions() {
+        let (tx, rx) = sync_channel(CAPACITY);
+        let cache = Cache {
+            state: Arc::new(Mutex::new(State::default())),
+            channel: Some(tx),
+            alive: Arc::new(AtomicBool::new(true)),
+            notified: Arc::new(AtomicBool::new(false)),
+        };
+        let item = node(1);
+        cache.collect([&item]);
+        let (key, old) = rx.try_recv().unwrap();
+        cache.state.lock().unwrap().complete(&key, old, None);
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .get_mut(&key)
+            .unwrap()
+            .refreshed = Instant::now() - Duration::from_secs(31);
+        cache.collect([&item]);
+        let (_, retry) = rx.try_recv().unwrap();
+        assert_ne!(old, retry);
+        cache.invalidate();
+        cache.collect([&item]);
+        let (_, fresh) = rx.try_recv().unwrap();
+        let mut state = cache.state.lock().unwrap();
+        assert!(!state.complete(&key, retry, None));
+        assert!(state.complete(&key, fresh, None));
+    }
+    #[test]
+    fn a_new_visible_branch_evicts_old_completed_images() {
+        let (tx, rx) = sync_channel(CAPACITY);
+        let cache = Cache {
+            state: Arc::new(Mutex::new(State::default())),
+            channel: Some(tx),
+            alive: Arc::new(AtomicBool::new(true)),
+            notified: Arc::new(AtomicBool::new(false)),
+        };
+        let items: Vec<_> = (1..=CAPACITY as u64).map(node).collect();
+        cache.collect(&items);
+        for (key, generation) in rx.try_iter() {
+            cache.state.lock().unwrap().complete(&key, generation, None);
+        }
+        let next = node(9999);
+        cache.collect([&next]);
+        assert!(rx.try_recv().is_ok());
         assert_eq!(cache.state.lock().unwrap().entries.len(), CAPACITY);
     }
 }

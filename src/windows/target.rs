@@ -535,3 +535,137 @@ public static class InputProbe {
         );
     }
 }
+
+/// Shell extensions and slow targets cannot stall the resident input thread.
+/// The bounded FIFO preserves launch order; errors return through the window.
+pub struct Dispatcher {
+    requests: Option<std::sync::mpsc::SyncSender<Target>>,
+    results: std::sync::mpsc::Receiver<Result<(), String>>,
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+pub const READY: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 61;
+impl Dispatcher {
+    pub fn new(hwnd: windows_sys::Win32::Foundation::HWND, root: std::path::PathBuf) -> Self {
+        Self::new_using(hwnd, root, launch)
+    }
+    fn new_using(
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        root: std::path::PathBuf,
+        mut open: impl FnMut(&Path, &Target) -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc::sync_channel,
+        };
+        let (tx, rx) = sync_channel::<Target>(16);
+        let (done, results) = sync_channel(17);
+        let alive = Arc::new(AtomicBool::new(true));
+        let active = alive.clone();
+        let window = hwnd as usize;
+        let started = std::thread::Builder::new()
+            .name("constellation-launch".into())
+            .stack_size(512 * 1024)
+            .spawn(move || unsafe {
+                use windows_sys::Win32::{System::Com::*, UI::WindowsAndMessaging::PostMessageW};
+                let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+                while let Ok(target) = rx.recv() {
+                    if !active.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let result = if com < 0 {
+                        Err("Cannot initialize launch worker".into())
+                    } else {
+                        open(&root, &target)
+                    };
+                    if !active.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if done.send(result).is_err() {
+                        break;
+                    }
+                    if window != 0 {
+                        PostMessageW(window as _, READY, 0, 0);
+                    }
+                }
+                if com >= 0 {
+                    CoUninitialize();
+                }
+            })
+            .is_ok();
+        Self {
+            requests: started.then_some(tx),
+            results,
+            alive,
+        }
+    }
+    pub fn launch(&self, target: Target) -> Result<(), String> {
+        self.requests
+            .as_ref()
+            .ok_or("Launch worker unavailable")?
+            .try_send(target)
+            .map_err(|_| "Launch queue is busy; please try again".into())
+    }
+    pub fn results(&self) -> impl Iterator<Item = Result<(), String>> + '_ {
+        self.results.try_iter()
+    }
+}
+impl Drop for Dispatcher {
+    fn drop(&mut self) {
+        self.alive
+            .store(false, std::sync::atomic::Ordering::Release);
+        self.requests.take();
+    }
+}
+
+#[cfg(test)]
+mod dispatcher_tests {
+    use super::*;
+    use std::{
+        sync::{Arc, Mutex, mpsc},
+        time::Duration,
+    };
+    #[test]
+    fn slow_dispatch_does_not_block_submission_and_fifo_rejects_overflow() {
+        let (entered, waiting) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let calls = seen.clone();
+        let worker = Dispatcher::new_using(
+            std::ptr::null_mut(),
+            std::path::PathBuf::new(),
+            move |_, target| {
+                let Target::Url { url } = target else {
+                    panic!()
+                };
+                if url == "1" {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                }
+                calls.lock().unwrap().push(url.clone());
+                Ok(())
+            },
+        );
+        let target = |i: usize| Target::Url { url: i.to_string() };
+        worker.launch(target(1)).unwrap();
+        waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        for i in 2..=17 {
+            worker.launch(target(i)).unwrap();
+        }
+        assert!(worker.launch(target(18)).is_err());
+        release.send(()).unwrap();
+        for _ in 1..=17 {
+            assert!(
+                worker
+                    .results
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .is_ok()
+            );
+        }
+        assert_eq!(
+            *seen.lock().unwrap(),
+            (1..=17).map(|i| i.to_string()).collect::<Vec<_>>()
+        );
+    }
+}

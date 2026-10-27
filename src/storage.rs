@@ -19,6 +19,34 @@ pub fn resolve(root: &Path, path: &str) -> PathBuf {
         root.join(p)
     }
 }
+/// Exact on-disk baseline; missing files are distinct from empty files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Revision(Option<Vec<u8>>);
+impl Revision {
+    pub fn exists(&self) -> bool {
+        self.0.is_some()
+    }
+}
+pub fn revision(root: &Path) -> Result<Revision, String> {
+    match fs::read(root.join("data/config.json")) {
+        Ok(bytes) => Ok(Revision(Some(bytes))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Revision(None)),
+        Err(e) => Err(format!("Cannot inspect portable config: {e}")),
+    }
+}
+pub fn recovery_notice(root: &Path) -> Option<String> {
+    read(root)
+        .err()
+        .filter(|_| root.join("data/recovery.txt").is_file())
+        .map(|_| "Recovered from backup. The original config is damaged; Save to repair it.".into())
+}
+pub fn save_checked(root: &Path, c: &Config, expected: &Revision) -> Result<Revision, String> {
+    let mut c = c.clone();
+    c.assign_profile_ids()?;
+    let bytes = serde_json::to_vec_pretty(&c).map_err(|e| e.to_string())?;
+    save_inner(root, &c, Some(expected))?;
+    Ok(Revision(Some(bytes)))
+}
 pub fn read(root: &Path) -> Result<Config, String> {
     let bytes = fs::read(root.join("data/config.json"))
         .map_err(|e| format!("Cannot read portable config: {e}"))?;
@@ -93,6 +121,21 @@ pub fn load_or_create(root: &Path) -> Result<Config, String> {
 }
 static SAVE_ID: AtomicU64 = AtomicU64::new(0);
 pub fn save(root: &Path, c: &Config) -> Result<(), String> {
+    save_inner(root, c, None)
+}
+fn save_inner(root: &Path, c: &Config, expected: Option<&Revision>) -> Result<(), String> {
+    let check = || -> io::Result<()> {
+        if let Some(expected) = expected {
+            let current = revision(root).map_err(io::Error::other)?;
+            if &current != expected {
+                return Err(io::Error::other(
+                    "Configuration changed outside this editor. Your draft is preserved. Export it before Reload, then reconcile the two versions.",
+                ));
+            }
+        }
+        Ok(())
+    };
+    check().map_err(|e| e.to_string())?;
     let mut c = c.clone();
     c.assign_profile_ids()?;
     c.validate()?;
@@ -120,12 +163,16 @@ pub fn save(root: &Path, c: &Config) -> Result<(), String> {
         if path.exists() && read(root).is_ok() {
             fs::copy(&path, dir.join("config.backup.json"))?;
         }
+        check()?;
         replace(&temp, &path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    result.map_err(|e| format!("Could not save inside portable folder; no external fallback: {e}"))
+    result
+        .map_err(|e| format!("Could not save inside portable folder; no external fallback: {e}"))?;
+    let _ = fs::remove_file(dir.join("recovery.txt"));
+    Ok(())
 }
 #[cfg(not(windows))]
 pub(crate) fn replace(from: &Path, to: &Path) -> io::Result<()> {

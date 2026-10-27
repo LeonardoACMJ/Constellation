@@ -31,6 +31,7 @@ const TBM_GETPOS: u32 = WM_USER;
 const TREE: i32 = 100;
 const ITEM_PATH: i32 = 223;
 const REFRESH_TREE: u32 = WM_APP + 40;
+const ADVICE_READY: u32 = WM_APP + 60;
 const BROWSE_TARGET: i32 = 211;
 const BROWSE_RUNNER: i32 = 212;
 const BROWSE_CWD: i32 = 213;
@@ -114,6 +115,7 @@ struct Editor {
     /// Index into `c.universes` of the tree being edited.
     universe: usize,
     tree_items: Vec<(u64, HTREEITEM)>,
+    tree_rows: Vec<editing::TreeRow>,
     tree_universe: Option<u64>,
     tree_views: HashMap<u64, TreeViewState>,
     tree_refresh_pending: bool,
@@ -129,6 +131,8 @@ struct Editor {
     scroll_x: i32,
     scroll_y: i32,
     saved: Config,
+    disk_revision: Result<storage::Revision, String>,
+    recovery: Option<String>,
     history: History,
     settings_before: Option<Config>,
     item_dirty: bool,
@@ -141,6 +145,7 @@ struct Editor {
     layout_applied: bool,
     icons: super::item_icons::Cache,
     icon_draft: ItemIcon,
+    advice_worker: Option<crate::background::Latest<Target, String>>,
 }
 #[derive(Default)]
 struct TreeViewState {
@@ -151,6 +156,7 @@ struct TreeViewState {
 }
 struct PreviewCache {
     config: Config,
+    selected: u64,
     universe: usize,
     monitor: usize,
     width: i32,
@@ -304,7 +310,15 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         if CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) < 0 {
             return Err("Cannot initialize folder picker".into());
         }
+        let before_load = storage::revision(&root)?;
         let c = storage::load_or_create(&root)?;
+        let loaded_revision = storage::revision(&root)?;
+        let recovery = storage::recovery_notice(&root);
+        if storage::read(&root).is_ok_and(|disk| disk != c)
+            || (before_load != loaded_revision && before_load.exists())
+        {
+            return Err("Configuration changed while opening the editor; please reopen".into());
+        }
         theme::install();
         let module = GetModuleHandleW(null());
         let class = wide("Constellation.Config");
@@ -352,6 +366,8 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             &mut displays as *mut Vec<Display> as isize,
         );
         EDITOR = Box::into_raw(Box::new(Editor::new(hwnd, root, c, displays)));
+        (*EDITOR).disk_revision = Ok(loaded_revision);
+        (*EDITOR).recovery = recovery;
         let startup_guard = super::DispatchGuard::enter().expect("editor startup dispatch");
         label(hwnd, "UNIVERSE", 20, 18, 270);
         control(
@@ -789,11 +805,22 @@ unsafe extern "system" fn monitor_callback(
 impl Editor {
     fn new(hwnd: HWND, root: PathBuf, c: Config, displays: Vec<Display>) -> Self {
         let selected = c.universes.first().map_or(0, |u| u.id);
+        let advice_root = root.clone();
+        let window = hwnd as usize;
+        let advice_worker = crate::background::Latest::new(
+            move |target| editing::target_advice(&advice_root, target).join(" "),
+            move || unsafe {
+                PostMessageW(window as HWND, ADVICE_READY, 0, 0);
+            },
+        )
+        .ok();
         Self {
             hwnd,
             universe: 0,
             root: root.clone(),
             saved: c.clone(),
+            disk_revision: Err("No loaded disk baseline; Reload before saving".into()),
+            recovery: None,
             history: History::default(),
             settings_before: None,
             item_dirty: false,
@@ -803,11 +830,13 @@ impl Editor {
             layout_applied: false,
             icons: super::item_icons::Cache::new(hwnd, root),
             icon_draft: ItemIcon::Automatic,
+            advice_worker,
             wheel_delta: 0,
             form: FormLayout::new(1380, 870, 17, 17),
             controls: vec![],
             c,
             tree_items: vec![],
+            tree_rows: vec![],
             tree_universe: None,
             tree_views: HashMap::new(),
             tree_refresh_pending: false,
@@ -877,14 +906,23 @@ impl Editor {
         SelectObject(dc, oldb);
         DeleteObject(pen);
         let images = e.icons.collect(
-            std::iter::once(&e.c.universes[e.universe]).chain(
-                all.iter()
-                    .filter(|s| {
-                        (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
-                            && (s.outer - s.inner) * scale >= 18.
-                    })
-                    .filter_map(|s| e.c.find(s.id)),
-            ),
+            e.c.find(e.selected)
+                .into_iter()
+                .chain(
+                    e.c.find(e.selected)
+                        .and_then(|n| n.children.as_ref())
+                        .into_iter()
+                        .flatten(),
+                )
+                .chain(std::iter::once(&e.c.universes[e.universe]))
+                .chain(
+                    all.iter()
+                        .filter(|s| {
+                            (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
+                                && (s.outer - s.inner) * scale >= 18.
+                        })
+                        .filter_map(|s| e.c.find(s.id)),
+                ),
         );
         render::draw_with_icons(
             dc,
@@ -933,7 +971,8 @@ impl Editor {
         let width = (r.right - r.left).max(1);
         let height = (r.bottom - r.top + 110).max(1);
         let valid = self.preview_cache.as_ref().is_some_and(|v| {
-            v.config == self.c
+            editing::preview_equal(&v.config, &self.c, self.universe)
+                && v.selected == self.selected
                 && v.universe == self.universe
                 && v.monitor == self.monitor
                 && v.width == width
@@ -960,6 +999,7 @@ impl Editor {
             DeleteDC(memory);
             self.preview_cache = Some(PreviewCache {
                 config: self.c.clone(),
+                selected: self.selected,
                 universe: self.universe,
                 monitor: self.monitor,
                 width,
@@ -989,17 +1029,38 @@ impl Editor {
         self.dirty = self.c != self.saved;
     }
     unsafe fn advice(&self) {
+        SetWindowTextW(
+            self.hwnd,
+            wide(format!(
+                "Constellation {} — Configure & Visualize{}",
+                env!("CARGO_PKG_VERSION"),
+                if self.recovery.is_some() {
+                    " [Recovered backup]"
+                } else {
+                    ""
+                }
+            ))
+            .as_ptr(),
+        );
         let mut warning = self
             .c
             .find(self.selected)
             .and_then(|n| n.target.as_ref())
-            .map(|t| editing::target_advice(&self.root, t).join(" "))
+            .map(|t| {
+                self.advice_worker
+                    .as_ref()
+                    .map(|worker| worker.get(t).unwrap_or_else(|| "Checking target...".into()))
+                    .unwrap_or_else(|| "Target checks unavailable".into())
+            })
             .unwrap_or_default();
         if self.c.find(self.selected).is_some_and(|n| {
             matches!(n.icon, ItemIcon::Custom { .. } | ItemIcon::Software { .. })
                 && self.icons.failed(n)
         }) {
             warning = format!("Icon unavailable; showing symbol. {warning}");
+        }
+        if let Some(recovery) = &self.recovery {
+            warning = format!("{recovery} {warning}");
         }
         set(self.hwnd, ADVICE, &warning);
     }
@@ -1352,10 +1413,36 @@ impl Editor {
         self.universe = self.universe.min(self.c.universes.len() - 1);
         let tree = GetDlgItem(self.hwnd, TREE);
         SendMessageW(tree, WM_SETREDRAW, 0, 0);
-        SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as isize);
-        self.tree_items.clear();
-        self.parents.clear();
-        send(self.hwnd, PARENT, CB_RESETCONTENT, 0, 0);
+        let rows = editing::tree_rows(&self.c.universes[self.universe]);
+        let labels_changed = self.tree_rows != rows;
+        let reuse = self.tree_universe == Some(self.c.universes[self.universe].id)
+            && editing::same_tree_structure(&self.tree_rows, &rows);
+        if reuse {
+            for (old, row) in self.tree_rows.iter().zip(&rows) {
+                if old.name != row.name {
+                    let mut text = wide(format!(
+                        "{} {}",
+                        if row.branch { "✧" } else { "✦" },
+                        row.name
+                    ));
+                    let item = TVITEMW {
+                        mask: TVIF_TEXT,
+                        hItem: self.tree_handle(row.id).unwrap(),
+                        pszText: text.as_mut_ptr(),
+                        ..zeroed()
+                    };
+                    SendMessageW(tree, TVM_SETITEMW, 0, &item as *const _ as isize);
+                }
+            }
+        } else {
+            SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as isize);
+            self.tree_items.clear();
+        }
+        self.tree_rows = rows;
+        if labels_changed {
+            self.parents.clear();
+            send(self.hwnd, PARENT, CB_RESETCONTENT, 0, 0);
+        }
         send(self.hwnd, UNIVERSE, CB_RESETCONTENT, 0, 0);
         for u in &self.c.universes {
             send(
@@ -1374,6 +1461,8 @@ impl Editor {
             depth: usize,
             items: &mut Vec<(u64, HTREEITEM)>,
             parents: &mut Vec<u64>,
+            reuse: bool,
+            handles: &HashMap<u64, HTREEITEM>,
         ) {
             let mut text = wide(format!(
                 "{} {}",
@@ -1392,27 +1481,46 @@ impl Editor {
                     },
                 },
             };
-            let handle = send(hwnd, TREE, TVM_INSERTITEMW, 0, &insert as *const _ as isize);
-            items.push((n.id, handle));
+            let handle = if reuse {
+                handles[&n.id]
+            } else {
+                let handle = send(hwnd, TREE, TVM_INSERTITEMW, 0, &insert as *const _ as isize);
+                items.push((n.id, handle));
+                handle
+            };
             if let Some(children) = &n.children {
                 parents.push(n.id);
                 let label = wide(format!("{}✧ {}", "  ".repeat(depth), n.name));
                 send(hwnd, PARENT, CB_ADDSTRING, 0, label.as_ptr() as isize);
                 for child in children {
-                    walk(hwnd, child, handle, depth + 1, items, parents);
+                    walk(
+                        hwnd,
+                        child,
+                        handle,
+                        depth + 1,
+                        items,
+                        parents,
+                        reuse,
+                        handles,
+                    );
                 }
             }
         }
         let root = &self.c.universes[self.universe];
         let root_id = root.id;
-        walk(
-            self.hwnd,
-            root,
-            TVI_ROOT,
-            0,
-            &mut self.tree_items,
-            &mut self.parents,
-        );
+        if labels_changed || !reuse {
+            let handles = self.tree_items.iter().copied().collect();
+            walk(
+                self.hwnd,
+                root,
+                TVI_ROOT,
+                0,
+                &mut self.tree_items,
+                &mut self.parents,
+                reuse,
+                &handles,
+            );
+        }
         if root.find(self.selected).is_none() {
             self.selected = root_id;
         }
@@ -1965,7 +2073,16 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_COMMAND if w & 0xffff == JSON_SAVE as usize => {
             let result = (|| -> Result<(), String> {
                 let c = storage::parse_config(get(hwnd, JSON_TEXT).as_bytes())?;
-                storage::save(&e.root, &c)?;
+                e.disk_revision = Ok(storage::save_checked(
+                    &e.root,
+                    &c,
+                    e.disk_revision.as_ref().map_err(Clone::clone)?,
+                )?);
+                e.recovery = None;
+                e.icons.invalidate();
+                if let Some(worker) = &e.advice_worker {
+                    worker.invalidate();
+                }
                 notify_resident();
                 e.commit(c.clone());
                 e.saved = c;
@@ -2030,7 +2147,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         if matches!(
             msg,
-            WM_HSCROLL | WM_VSCROLL | WM_DROPFILES | super::item_icons::READY
+            WM_HSCROLL | WM_VSCROLL | WM_DROPFILES | ADVICE_READY | super::item_icons::READY
         ) || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
         {
             super::defer_message(hwnd, msg, w, l);
@@ -2127,6 +2244,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 }
                 _ => 0,
             }
+        }
+        ADVICE_READY => {
+            e.advice();
+            0
         }
         super::item_icons::READY => {
             e.icons.acknowledge();
@@ -2389,6 +2510,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         e.status = "Universe deleted from draft. Undo restores it.".into();
                         return Ok(());
                     }
+                    editing::check_delete(&e.c, e.selected)?;
                     let mut c = e.c.clone();
                     remove(&mut c.universes[e.universe], e.selected);
                     e.commit(c);
@@ -2404,10 +2526,20 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     e.apply()?;
                     e.controls_to_settings()?;
                     e.checkpoint_settings();
-                    storage::save(&e.root, &e.c)?;
+                    e.disk_revision = Ok(storage::save_checked(
+                        &e.root,
+                        &e.c,
+                        e.disk_revision.as_ref().map_err(Clone::clone)?,
+                    )?);
+                    e.recovery = None;
+                    e.icons.invalidate();
+                    if let Some(worker) = &e.advice_worker {
+                        worker.invalidate();
+                    }
                     notify_resident();
                     e.saved = e.c.clone();
                     e.dirty = false;
+                    e.advice();
                     e.status = "Saved. New settings apply on the next radial invocation.".into();
                     Ok(())
                 })(),
@@ -2422,7 +2554,17 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     {
                         return Ok(());
                     }
+                    let baseline = storage::revision(&e.root)?;
                     let c = storage::read(&e.root)?;
+                    if storage::revision(&e.root)? != baseline {
+                        return Err("Configuration changed during Reload; please retry".into());
+                    }
+                    e.disk_revision = Ok(baseline);
+                    e.recovery = None;
+                    e.icons.invalidate();
+                    if let Some(worker) = &e.advice_worker {
+                        worker.invalidate();
+                    }
                     e.commit(c.clone());
                     e.saved = c;
                     e.dirty = false;
@@ -3311,6 +3453,95 @@ mod lifecycle_tests {
     use super::*;
     static NATIVE_EDITOR: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
+    #[ignore = "hidden large native tree measurement; run on Windows CI"]
+    fn large_tree_rename_updates_text_without_recreating_items() {
+        let _serial = NATIVE_EDITOR.lock().unwrap();
+        std::thread::spawn(|| unsafe {
+            let common = INITCOMMONCONTROLSEX {
+                dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
+                dwICC: ICC_TREEVIEW_CLASSES,
+            };
+            assert_ne!(InitCommonControlsEx(&common), 0);
+            let owner = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("tree measurement").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                800,
+                500,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            assert!(!owner.is_null());
+            let tree = control(
+                owner,
+                "SysTreeView32",
+                "",
+                TREE,
+                0,
+                0,
+                260,
+                300,
+                TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT,
+            );
+            let mut config = Config::default();
+            let sample = config.universes[0]
+                .children
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|n| n.children.is_none())
+                .unwrap()
+                .clone();
+            config.universes[0].children = Some(
+                (0..10000)
+                    .map(|i| {
+                        let mut n = sample.clone();
+                        n.id = 100 + i;
+                        n.name = format!("Star {i}");
+                        n.icon = ItemIcon::Symbol;
+                        n
+                    })
+                    .collect(),
+            );
+            let mut editor = Editor::new(owner, PathBuf::new(), config, vec![]);
+            let start = std::time::Instant::now();
+            editor.refresh();
+            let build = start.elapsed();
+            let handles = editor.tree_items.clone();
+            editor.c.universes[0].find_mut(500).unwrap().name = "Renamed".into();
+            let start = std::time::Instant::now();
+            editor.refresh();
+            let rename = start.elapsed();
+            assert_eq!(editor.tree_items, handles);
+            let mut text = [0u16; 256];
+            let mut item = TVITEMW {
+                mask: TVIF_TEXT,
+                hItem: editor.tree_handle(500).unwrap(),
+                pszText: text.as_mut_ptr(),
+                cchTextMax: text.len() as i32,
+                ..zeroed()
+            };
+            assert_ne!(
+                SendMessageW(tree, TVM_GETITEMW, 0, &mut item as *mut _ as isize),
+                0
+            );
+            assert!(String::from_utf16_lossy(&text).contains("Renamed"));
+            eprintln!(
+                "10,001 native items: build={build:?}, rename={rename:?}; no recreated items"
+            );
+            drop(editor);
+            DestroyWindow(owner);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     #[ignore = "offscreen native preview regression; run on Windows CI"]
     fn switching_universes_rebuilds_cached_preview_without_editing_config() {
         std::thread::spawn(|| unsafe {
@@ -3549,6 +3780,7 @@ mod lifecycle_tests {
                 TVGN_FIRSTVISIBLE as usize,
                 (*EDITOR).tree_handle(5).unwrap(),
             );
+            let retained_handles = (*EDITOR).tree_items.clone();
             let top = (*EDITOR).tree_id(SendMessageW(
                 tree,
                 TVM_GETNEXTITEM,
@@ -3560,6 +3792,11 @@ mod lifecycle_tests {
                 (*EDITOR).refresh();
             }
             assert_eq!((*EDITOR).selected, 6);
+            assert_eq!(
+                (*EDITOR).tree_items,
+                retained_handles,
+                "Unchanged trees retain native handles"
+            );
             assert!(state(2) && state(5));
             assert_eq!(
                 (*EDITOR).tree_id(SendMessageW(
@@ -3591,6 +3828,11 @@ mod lifecycle_tests {
             assert_eq!((*EDITOR).c.find(6).unwrap().name, "Renamed child");
             SendMessageW(owner, REFRESH_TREE, 0, 0);
             assert!(!(*EDITOR).tree_refresh_pending);
+            assert_eq!(
+                (*EDITOR).tree_items,
+                retained_handles,
+                "Renaming retains native handles"
+            );
             assert_eq!((*EDITOR).selected, 8);
             assert!(state(2) && state(5));
             // Universe switching restores that universe's own view and selection.

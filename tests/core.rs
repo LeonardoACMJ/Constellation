@@ -668,3 +668,48 @@ fn preview_warnings_follow_selected_universe_sectors() {
     );
     assert_eq!(c, snapshot);
 }
+
+#[test]
+fn checked_save_preserves_external_edits_and_missing_file_conflicts() {
+    let root = sandbox();
+    let mut c = Config::default();
+    storage::save(&root, &c).unwrap();
+    let original = storage::revision(&root).unwrap();
+    c.universes[0].name = "External".into();
+    storage::save(&root, &c).unwrap();
+    let external = std::fs::read(root.join("data/config.json")).unwrap();
+    c.universes[0].name = "Draft".into();
+    assert!(
+        storage::save_checked(&root, &c, &original)
+            .unwrap_err()
+            .contains("changed outside")
+    );
+    assert_eq!(
+        std::fs::read(root.join("data/config.json")).unwrap(),
+        external
+    );
+    let current = storage::revision(&root).unwrap();
+    let next = storage::save_checked(&root, &c, &current).unwrap();
+    assert_ne!(current, next);
+    std::fs::remove_file(root.join("data/config.json")).unwrap();
+    assert!(storage::save_checked(&root, &c, &next).is_err());
+    assert!(!root.join("data/config.json").exists());
+}
+#[test]
+fn recovery_notice_survives_until_repaired_save() {
+    let root = sandbox();
+    let c = Config::default();
+    storage::save(&root, &c).unwrap();
+    storage::save(&root, &c).unwrap();
+    std::fs::write(root.join("data/config.json"), b"broken").unwrap();
+    storage::load_or_create(&root).unwrap();
+    assert!(storage::recovery_notice(&root).is_some());
+    let baseline = storage::revision(&root).unwrap();
+    storage::save_checked(&root, &c, &baseline).unwrap();
+    assert!(storage::recovery_notice(&root).is_none());
+    assert!(!root.join("data/recovery.txt").exists());
+    assert!(
+        storage::parse_config(&std::fs::read(root.join("data/config.backup.json")).unwrap())
+            .is_ok()
+    );
+}

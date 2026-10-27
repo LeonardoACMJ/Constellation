@@ -59,6 +59,7 @@ struct Runtime {
     menu_open: bool,
     source_foreground: HWND,
     renderer: smooth::Renderer,
+    launches: target::Dispatcher,
     cursor: super::cursor::DotCursor,
     session_blocked: bool,
     sleeping: bool,
@@ -152,6 +153,9 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
         if !add_tray(hwnd) {
             cleanup();
             return Err("Could not add Constellation to the notification area".into());
+        }
+        if let Some(message) = storage::recovery_notice(&a.root) {
+            a.notice_kind(&message, NIIF_INFO);
         }
         a.session_notifications =
             WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) != 0;
@@ -253,6 +257,7 @@ impl Runtime {
         unsafe {
             Self {
                 hwnd,
+                launches: target::Dispatcher::new(hwnd, root.clone()),
                 root,
                 config,
                 bindings,
@@ -290,6 +295,9 @@ impl Runtime {
         }
     }
     unsafe fn notice(&self, s: &str) {
+        self.notice_kind(s, NIIF_ERROR);
+    }
+    unsafe fn notice_kind(&self, s: &str, flags: u32) {
         let _ = std::fs::write(self.root.join("data/last-error.txt"), s);
         let mut tray: NOTIFYICONDATAW = zeroed();
         tray.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
@@ -302,7 +310,7 @@ impl Runtime {
         for (to, from) in tray.szInfoTitle.iter_mut().zip(wide("Constellation")) {
             *to = from;
         }
-        tray.dwInfoFlags = NIIF_ERROR;
+        tray.dwInfoFlags = flags;
         Shell_NotifyIconW(NIM_MODIFY, &tray);
     }
     unsafe fn reload(&mut self) {
@@ -314,6 +322,7 @@ impl Runtime {
                     .map(|p| Binding::parse(&p.binding).expect("validated binding"))
                     .collect();
                 self.config = c;
+                self.renderer.invalidate_icons();
                 self.resync_input();
                 self.refresh_registration();
                 self.reload_requested = false;
@@ -505,7 +514,7 @@ impl Runtime {
                 let t = self.config.find(id).and_then(|n| n.target.clone());
                 self.dismiss(!foreground_blocks_launcher(self.hwnd));
                 if let Some(t) = t {
-                    if let Err(e) = target::launch(&self.root, &t) {
+                    if let Err(e) = self.launches.launch(t) {
                         self.notice(&e);
                     }
                 }
@@ -624,6 +633,7 @@ unsafe fn defer_runtime_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> O
             | WM_CAPTURECHANGED
             | RELOAD_CONFIG
             | super::item_icons::READY
+            | target::READY
             | TRAY_MENU_DONE
             | FOREGROUND
             | INVOKE
@@ -677,6 +687,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         return 0;
     }
     match msg {
+        target::READY => {
+            for result in a.launches.results() {
+                if let Err(error) = result {
+                    a.notice(&error);
+                }
+            }
+            0
+        }
         super::item_icons::READY => {
             a.renderer.icons_ready();
             if a.engine.profile.is_some() {

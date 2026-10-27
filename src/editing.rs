@@ -355,3 +355,76 @@ pub fn duplicate_node(config: &mut Config, universe: usize, id: u64) -> Result<u
     *config = candidate;
     Ok(new_id)
 }
+
+/// Refuse deletion before a draft can acquire dangling profile entries.
+pub fn check_delete(config: &Config, id: u64) -> Result<(), String> {
+    let node = config.find(id).ok_or("Item no longer exists")?;
+    let affected: Vec<_> = config
+        .profiles
+        .iter()
+        .filter(|p| p.root_id.is_some_and(|entry| node.find(entry).is_some()))
+        .map(|p| p.name.as_str())
+        .collect();
+    if !affected.is_empty() {
+        return Err(format!(
+            "Used as an entry by: {}. Change Opens at in Shortcut profiles before deleting this branch.",
+            affected.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeRow {
+    pub id: u64,
+    pub parent: Option<u64>,
+    pub name: String,
+    pub branch: bool,
+}
+pub fn tree_rows(root: &Node) -> Vec<TreeRow> {
+    fn walk(n: &Node, parent: Option<u64>, out: &mut Vec<TreeRow>) {
+        out.push(TreeRow {
+            id: n.id,
+            parent,
+            name: n.name.clone(),
+            branch: n.children.is_some(),
+        });
+        if let Some(children) = &n.children {
+            for child in children {
+                walk(child, Some(n.id), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, None, &mut out);
+    out
+}
+pub fn same_tree_structure(a: &[TreeRow], b: &[TreeRow]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(a, b)| (a.id, a.parent, a.branch) == (b.id, b.parent, b.branch))
+}
+
+/// The full preview has no profile filter and never displays notes or sound.
+/// Keep metadata edits from rerasterizing the whole fan-out.
+pub fn preview_equal(a: &Config, b: &Config, universe: usize) -> bool {
+    fn nodes(a: &Node, b: &Node) -> bool {
+        a.id == b.id
+            && a.name == b.name
+            && a.icon == b.icon
+            && (!matches!(a.icon, crate::config::ItemIcon::Automatic) || a.target == b.target)
+            && match (&a.children, &b.children) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| nodes(a, b))
+                }
+                _ => false,
+            }
+    }
+    a.layout == b.layout
+        && a.universes
+            .get(universe)
+            .zip(b.universes.get(universe))
+            .is_some_and(|(a, b)| nodes(a, b))
+}

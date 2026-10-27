@@ -10,3 +10,5 @@ pub mod windows;
 pub mod editing;
 pub mod editor_layout;
 pub mod sound;
+
+pub mod background;

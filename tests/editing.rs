@@ -405,3 +405,63 @@ fn failed_duplication_never_changes_the_draft() {
         assert_eq!(c, before);
     }
 }
+
+#[test]
+fn deletion_protects_nested_profile_entries_without_mutating_draft() {
+    let mut c = Config::default();
+    let branch = c.universes[0]
+        .children
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|n| n.children.is_some())
+        .unwrap()
+        .id;
+    c.profiles[0].root_id = Some(branch);
+    let before = c.clone();
+    assert!(
+        editing::check_delete(&c, branch)
+            .unwrap_err()
+            .contains(&c.profiles[0].name)
+    );
+    assert!(editing::check_delete(&c, c.universes[0].id).is_err());
+    let leaf = c.universes[0]
+        .children
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|n| n.children.is_none())
+        .unwrap()
+        .id;
+    assert!(editing::check_delete(&c, leaf).is_ok());
+    assert_eq!(c, before);
+}
+#[test]
+fn tree_structure_distinguishes_rename_from_reparent_or_kind_change() {
+    let mut c = Config::default();
+    let before = editing::tree_rows(&c.universes[0]);
+    c.universes[0].name = "Renamed".into();
+    assert!(editing::same_tree_structure(
+        &before,
+        &editing::tree_rows(&c.universes[0])
+    ));
+    c.universes[0].children.as_mut().unwrap().reverse();
+    assert!(!editing::same_tree_structure(
+        &before,
+        &editing::tree_rows(&c.universes[0])
+    ));
+}
+
+#[test]
+fn preview_ignores_notes_sound_and_other_universes_but_not_icons_or_geometry() {
+    let original = Config::default();
+    let mut c = original.clone();
+    c.universes[0].note = "Internal only".into();
+    c.sound.volume = 0.4;
+    assert!(editing::preview_equal(&original, &c, 0));
+    c.universes[0].icon = constellation::config::ItemIcon::Symbol;
+    assert!(!editing::preview_equal(&original, &c, 0));
+    c = original.clone();
+    c.layout.radius += 1.;
+    assert!(!editing::preview_equal(&original, &c, 0));
+}
