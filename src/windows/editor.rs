@@ -2080,6 +2080,7 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 )?);
                 e.recovery = None;
                 e.icons.invalidate();
+                e.preview_cache = None;
                 if let Some(worker) = &e.advice_worker {
                     worker.invalidate();
                 }
@@ -2533,6 +2534,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     )?);
                     e.recovery = None;
                     e.icons.invalidate();
+                    e.preview_cache = None;
                     if let Some(worker) = &e.advice_worker {
                         worker.invalidate();
                     }
@@ -2562,6 +2564,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     e.disk_revision = Ok(baseline);
                     e.recovery = None;
                     e.icons.invalidate();
+                    e.preview_cache = None;
                     if let Some(worker) = &e.advice_worker {
                         worker.invalidate();
                     }
