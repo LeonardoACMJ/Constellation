@@ -203,6 +203,8 @@ The prototype switches to Previous/More sectors above its capacity thresholds; t
 
 **DATA-11 migration:** new builds read existing files unchanged. Older builds with `deny_unknown_fields` reject a `note` field. A pre-note `data/config.backup.json` may allow recovery; subsequent saves may put notes in that backup too. Preserve a compatible copy before downgrading, or remove `note` from every node. No second scripts-folder index/README is maintained.
 
+**Browser compatibility (0.1.44):** absent preferences remain omitted, preserving existing configurations. Once a non-default `browser` field is saved, older builds that deny unknown Node fields reject it. Preserve a compatible copy before downgrading or remove browser fields from all nodes. No format-version change is needed for this defaulted field. Bundle documents require a supporting build; ordinary JSON exports remain available.
+
 **Editor presentation — agreed goals; initial native styling:**
 
 | ID | Requirement |
@@ -295,4 +297,3 @@ An earlier browser experiment simulated launches and could not validate native h
 
 Automatic, custom-image and From Software item icons are implemented. Themes, editable colors, larger background images and compatible-program action adapters remain proposals for later work.
 
-**Browser compatibility (0.1.44):** absent preferences remain omitted, preserving existing configurations. Once a non-default `browser` field is saved, older builds that deny unknown Node fields reject it. Preserve a compatible copy before downgrading or remove browser fields from all nodes. No format-version change is needed for this defaulted field. Bundle documents require a supporting build; ordinary JSON exports remain available.
