@@ -704,6 +704,11 @@ fn recovery_notice_survives_until_repaired_save() {
     std::fs::write(root.join("data/config.json"), b"broken").unwrap();
     storage::load_or_create(&root).unwrap();
     assert!(storage::recovery_notice(&root).is_some());
+    std::fs::remove_file(root.join("data/recovery.txt")).unwrap();
+    assert!(
+        storage::recovery_notice(&root).is_some(),
+        "Recovery marker does not depend on a writable diagnostic file"
+    );
     let baseline = storage::revision(&root).unwrap();
     storage::save_checked(&root, &c, &baseline).unwrap();
     assert!(storage::recovery_notice(&root).is_none());

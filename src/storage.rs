@@ -37,7 +37,12 @@ pub fn revision(root: &Path) -> Result<Revision, String> {
 pub fn recovery_notice(root: &Path) -> Option<String> {
     read(root)
         .err()
-        .filter(|_| root.join("data/recovery.txt").is_file())
+        .filter(|_| {
+            fs::read(root.join("data/config.backup.json"))
+                .ok()
+                .and_then(|bytes| parse_config(&bytes).ok())
+                .is_some()
+        })
         .map(|_| "Recovered from backup. The original config is damaged; Save to repair it.".into())
 }
 pub fn save_checked(root: &Path, c: &Config, expected: &Revision) -> Result<Revision, String> {
