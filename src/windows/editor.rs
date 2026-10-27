@@ -3531,9 +3531,9 @@ mod lifecycle_tests {
                 0
             );
             assert!(String::from_utf16_lossy(&text).contains("Renamed"));
-            eprintln!(
-                "10,001 native items: build={build:?}, rename={rename:?}; no recreated items"
-            );
+            let report = serde_json::json!({"items":10001,"build_ms":build.as_secs_f64()*1000.,"rename_ms":rename.as_secs_f64()*1000.,"recreated_items":0,"conditions":"Hidden native Windows tree, debug build; includes view capture and field refresh, excludes preview rasterization and display scanout"});
+            std::fs::create_dir_all(".local/render-review").unwrap();
+            std::fs::write(".local/render-review/tree-refresh.json", serde_json::to_vec_pretty(&report).unwrap()).unwrap();
             drop(editor);
             DestroyWindow(owner);
         })

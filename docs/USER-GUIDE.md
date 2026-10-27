@@ -130,7 +130,7 @@ Stop the resident app using **Quit** in its tray menu. Closing the configuration
 
 ## Preview limits
 
-This is the first native build. The configuration UI is functional and deliberately plain. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.
+This is a Windows beta. The configuration UI uses native Windows controls. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.
 
 Themes and application-action adapters remain future work; item icons are available in Configure.
 
