@@ -51,6 +51,7 @@ fn subdivision_keeps_every_target_without_pages() {
     c.universes[0].children = Some(
         (10..210)
             .map(|id| Node {
+                browser: None,
                 note: String::new(),
                 icon: Default::default(),
                 visible_in: vec![],
@@ -286,6 +287,7 @@ fn legacy_profiles_get_stable_ids_across_rename_reorder_and_relocation() {
 #[test]
 fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
     let star = |id| Node {
+        browser: None,
         note: String::new(),
         icon: Default::default(),
         visible_in: vec![],
@@ -296,6 +298,7 @@ fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
     };
     let mut c = Config::default();
     c.universes[0].children = Some(vec![Node {
+        browser: None,
         note: String::new(),
         icon: Default::default(),
         visible_in: vec![],
@@ -310,6 +313,7 @@ fn overlap_warning_is_advisory_and_ignores_normal_ancestor_stacking() {
             .any(|s| s.contains("overlap"))
     );
     c.universes[0].children.as_mut().unwrap().push(Node {
+        browser: None,
         note: String::new(),
         icon: Default::default(),
         visible_in: vec![],
@@ -361,6 +365,7 @@ fn a_second_universe_switches_the_file_shape_and_survives_a_reload() {
     let root = sandbox();
     let mut c = storage::load_or_create(&root).unwrap();
     let second = Node {
+        browser: None,
         note: String::new(),
         icon: Default::default(),
         visible_in: vec![],
@@ -441,6 +446,7 @@ fn validate_rejects_entry_points_that_are_not_constellations_of_that_universe() 
 
 fn node(id: u64, name: &str, children: Option<Vec<Node>>, visible_in: Vec<u64>) -> Node {
     Node {
+        browser: None,
         note: String::new(),
         icon: Default::default(),
         visible_in,

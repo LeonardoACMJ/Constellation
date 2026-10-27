@@ -73,3 +73,15 @@ If maximize → restore still stalls, close Configure and launch the same instal
 | Check an unavailable mapped-drive target and launch a slow target. | Availability checks and launch dispatch do not block the radial/input thread. Save, Import and file pickers still perform their requested file operations. |
 
 These checks require manual review on real setups; CI does not establish mapped-drive latency or foreground behaviour for every application.
+
+## Browser and editing conveniences (0.1.44)
+
+| Check | Expected result |
+|---|---|
+| Select a universe root → Web browser → Custom executable → choose Edge → Apply to draft → Save. Open two URL Stars, including one through a nested profile entry. | Both use the chosen browser. Other universes retain their own preference. |
+| On one URL Star choose System default, then a different executable, then Inherit universe. Duplicate it and undo/redo; Save/reopen and transfer it through JSON/bundle. | Overrides persist independently, inherit uses the current universe, and the URL stays one argument after optional browser arguments. |
+| Ctrl+S in an edited field, Ctrl+D/F2 in the tree, and Ctrl+D/F2 in a text field. Repeat in Advanced JSON and while recording a binding. | Saves use normal validation; only tree focus enables Duplicate/Rename. Text editing and binding recording remain independent. |
+| Close a dirty editor and exercise Save, Discard and Cancel. Try Save with invalid fields and with an external-file conflict. | Save closes only after success; Discard does not write; Cancel and failed Save retain the draft. |
+| Export a .constellation bundle with shared/custom icons; import into a disposable portable copy without the source files. Repeat selecting the JSON file type and an existing export destination. | Bundle restores images under the destination data/icons; JSON keeps references. Existing destinations require overwrite confirmation, including when the file-type choice changes the extension. Import remains undoable and unsaved until Save. |
+
+The small-screen footer/layout redesign remains outside this release.

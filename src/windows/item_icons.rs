@@ -662,6 +662,7 @@ mod cache_tests {
     use super::*;
     fn node(id: u64) -> Node {
         Node {
+            browser: None,
             id,
             visible_in: vec![],
             name: format!("App {id}"),

@@ -195,6 +195,7 @@ fn export_roundtrip_and_failed_import_never_replace_live_data() {
 fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
     use constellation::config::Node;
     let mut node = Node {
+        browser: None,
         note: String::new(),
         icon: Default::default(),
         visible_in: vec![],
@@ -205,6 +206,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
     };
     for id in (1..=64).rev() {
         node = Node {
+            browser: None,
             note: String::new(),
             icon: Default::default(),
             visible_in: vec![],
@@ -248,6 +250,7 @@ fn ten_thousand_stars_remain_individually_selectable_without_paging() {
     c.universes[0].children = Some(
         (2..10002)
             .map(|id| Node {
+                browser: None,
                 note: String::new(),
                 icon: Default::default(),
                 visible_in: vec![],
@@ -464,4 +467,16 @@ fn preview_ignores_notes_sound_and_other_universes_but_not_icons_or_geometry() {
     c = original.clone();
     c.layout.radius += 1.;
     assert!(!editing::preview_equal(&original, &c, 0));
+}
+
+#[test]
+fn editor_shortcuts_respect_text_fields_and_modifier_combinations() {
+    use editing::{EditorShortcut as S, editor_shortcut as key};
+    assert_eq!(key(0x53, true, false, false, false), Some(S::Save));
+    assert_eq!(key(0x44, true, false, false, true), Some(S::Duplicate));
+    assert_eq!(key(0x71, false, false, false, true), Some(S::Rename));
+    assert_eq!(key(0x44, true, false, false, false), None);
+    assert_eq!(key(0x71, false, false, false, false), None);
+    assert_eq!(key(0x53, true, true, false, true), None);
+    assert_eq!(key(0x53, true, false, true, true), None);
 }

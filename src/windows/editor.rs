@@ -5,7 +5,9 @@ use super::{
     render, wide,
 };
 use crate::{
-    config::{Binding, Config, CursorEnd, Instrument, ItemIcon, Mode, Node, Profile, Target},
+    config::{
+        Binding, Browser, Config, CursorEnd, Instrument, ItemIcon, Mode, Node, Profile, Target,
+    },
     editing::{self, History},
     editor_layout::{Layout as FormLayout, Rect as FormRect},
     geometry::{self, Point},
@@ -30,6 +32,8 @@ use windows_sys::Win32::{
 const TBM_GETPOS: u32 = WM_USER;
 const TREE: i32 = 100;
 const ITEM_PATH: i32 = 223;
+const BROWSER: i32 = 225;
+const RENAME: i32 = 309;
 const REFRESH_TREE: u32 = WM_APP + 40;
 const ADVICE_READY: u32 = WM_APP + 60;
 const BROWSE_TARGET: i32 = 211;
@@ -125,6 +129,7 @@ struct Editor {
     monitor: usize,
     json: HWND,
     profiles: Option<Profiles>,
+    aux: Option<Aux>,
     status: String,
     preview: RECT,
     dirty: bool,
@@ -498,6 +503,17 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                     },
             );
         }
+        control(
+            hwnd,
+            "BUTTON",
+            "Web browser…",
+            BROWSER,
+            535,
+            166,
+            130,
+            25,
+            WS_TABSTOP,
+        );
         send(
             hwnd,
             NOTE,
@@ -767,8 +783,16 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             let e = &*EDITOR;
-            let dialog = e.profiles.as_ref().map_or(hwnd, |p| p.hwnd);
+            let dialog = e
+                .aux
+                .as_ref()
+                .map(|a| a.hwnd)
+                .or_else(|| e.profiles.as_ref().map(|p| p.hwnd))
+                .unwrap_or(if e.json.is_null() { hwnd } else { e.json });
             let recording = e.profiles.as_ref().is_some_and(|p| p.recording);
+            if !recording && editor_accelerator(&msg, hwnd, e) {
+                continue;
+            }
             if recording || IsDialogMessageW(dialog, &msg) == 0 {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
@@ -846,6 +870,7 @@ impl Editor {
             monitor: 0,
             json: null_mut(),
             profiles: None,
+            aux: None,
             status: "Edit items, tune spacing or shortcut profiles, then Save.".into(),
             preview: RECT {
                 left: 700,
@@ -1044,8 +1069,8 @@ impl Editor {
         );
         let mut warning = self
             .c
-            .find(self.selected)
-            .and_then(|n| n.target.as_ref())
+            .launch_target(self.selected)
+            .as_ref()
             .map(|t| {
                 self.advice_worker
                     .as_ref()
@@ -1111,6 +1136,10 @@ impl Editor {
             },
         );
         let kind = send(self.hwnd, KIND, CB_GETCURSEL, 0, 0);
+        EnableWindow(
+            GetDlgItem(self.hwnd, BROWSER),
+            (kind == 3 || self.selected == self.c.universes[self.universe].id) as i32,
+        );
         for (id, on) in [
             (TARGET, kind != 0),
             (ARGS, matches!(kind, 1 | 5)),
@@ -1206,6 +1235,28 @@ impl Editor {
         }
         Ok(())
     }
+    unsafe fn save(&mut self) -> Result<(), String> {
+        self.apply()?;
+        self.controls_to_settings()?;
+        self.checkpoint_settings();
+        self.disk_revision = Ok(storage::save_checked(
+            &self.root,
+            &self.c,
+            self.disk_revision.as_ref().map_err(Clone::clone)?,
+        )?);
+        self.recovery = None;
+        self.icons.invalidate();
+        self.preview_cache = None;
+        if let Some(worker) = &self.advice_worker {
+            worker.invalidate();
+        }
+        notify_resident();
+        self.saved = self.c.clone();
+        self.dirty = false;
+        self.advice();
+        self.status = "Saved. New settings apply on the next radial invocation.".into();
+        Ok(())
+    }
     unsafe fn transfer(&mut self, export: bool) -> Result<(), String> {
         self.apply()?;
         self.controls_to_settings()?;
@@ -1225,12 +1276,29 @@ impl Editor {
                             .into(),
                     );
                 }
-                editing::export(&path, &self.c)?;
-                self.status =
-                    "Exported configuration. Launch targets and assets are not copied.".into();
+                if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                {
+                    editing::export(&path, &self.c)?;
+                    self.status = "Exported JSON; custom images remain external references.".into();
+                } else {
+                    crate::bundle::export(&path, &self.root, &self.c)?;
+                    self.status = "Exported portable bundle with custom images. Launch targets are not copied.".into();
+                }
             } else {
-                let c = editing::read_import(&path)?;
+                let c = if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("constellation"))
+                {
+                    crate::bundle::import(&path, &self.root)?
+                } else {
+                    editing::read_import(&path)?
+                };
                 self.commit(c);
+                self.universe = self.universe.min(self.c.universes.len() - 1);
                 self.selected = self.c.universes[self.universe].id;
                 self.refresh();
                 self.settings_to_controls();
@@ -1811,6 +1879,11 @@ impl Editor {
             None
         };
         n.target = target;
+        if !matches!(n.target, Some(Target::Url { .. }))
+            && n.id != self.c.universes[self.universe].id
+        {
+            n.browser = None;
+        }
         n.icon = match send(self.hwnd, ICON_MODE, CB_GETCURSEL, 0, 0) {
             0 => ItemIcon::Automatic,
             1 => ItemIcon::Symbol,
@@ -1872,6 +1945,7 @@ impl Editor {
             .checked_add(1)
             .ok_or("Item ID space exhausted")?;
         let n = Node {
+            browser: None,
             note: String::new(),
             icon: Default::default(),
             visible_in: vec![],
@@ -2468,6 +2542,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         .checked_add(1)
                         .ok_or("Item ID space exhausted")?;
                     c.universes.push(Node {
+                        browser: None,
                         note: String::new(),
                         icon: Default::default(),
                         visible_in: vec![],
@@ -2523,28 +2598,17 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 })(),
                 UP => e.reorder(false),
                 DOWN => e.reorder(true),
-                SAVE | 1 => (|| {
-                    e.apply()?;
-                    e.controls_to_settings()?;
-                    e.checkpoint_settings();
-                    e.disk_revision = Ok(storage::save_checked(
-                        &e.root,
-                        &e.c,
-                        e.disk_revision.as_ref().map_err(Clone::clone)?,
-                    )?);
-                    e.recovery = None;
-                    e.icons.invalidate();
-                    e.preview_cache = None;
-                    if let Some(worker) = &e.advice_worker {
-                        worker.invalidate();
-                    }
-                    notify_resident();
-                    e.saved = e.c.clone();
-                    e.dirty = false;
-                    e.advice();
-                    e.status = "Saved. New settings apply on the next radial invocation.".into();
+                SAVE | 1 => e.save(),
+                BROWSER => {
+                    open_aux(e, AuxKind::Browser(e.selected));
                     Ok(())
-                })(),
+                }
+                RENAME => {
+                    e.scroll_to(e.scroll_x, 0);
+                    SetFocus(GetDlgItem(hwnd, NAME));
+                    send(hwnd, NAME, EM_SETSEL, 0, -1);
+                    Ok(())
+                }
                 RELOAD => (|| {
                     if (e.dirty || e.item_dirty || e.settings_invalid)
                         && MessageBoxW(
@@ -2657,17 +2721,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_CLOSE => {
-            if (e.dirty || e.item_dirty || e.settings_invalid)
-                && MessageBoxW(
-                    hwnd,
-                    wide("Discard unsaved changes and close configuration?").as_ptr(),
-                    wide("Constellation").as_ptr(),
-                    MB_YESNO | MB_ICONQUESTION,
-                ) != IDYES
-            {
+            if e.aux.is_some() {
+                super::focus_window(e.aux.as_ref().unwrap().hwnd);
                 return 0;
             }
-            DestroyWindow(hwnd);
+            if e.dirty || e.item_dirty || e.settings_invalid {
+                open_aux(e, AuxKind::Close);
+            } else {
+                DestroyWindow(hwnd);
+            }
             0
         }
         WM_DESTROY => {
@@ -3456,6 +3518,144 @@ mod lifecycle_tests {
     use super::*;
     static NATIVE_EDITOR: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
+    #[ignore = "hidden browser and close-dialog interactions; Windows CI only"]
+    fn browser_and_close_dialogs_preserve_drafts_and_guard_saves() {
+        let _serial = NATIVE_EDITOR.lock().unwrap();
+        std::thread::spawn(|| unsafe {
+            theme::install();
+            let module = GetModuleHandleW(null());
+            let class = wide("Constellation.Test.ItemDialogs");
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                hInstance: module,
+                lpszClassName: class.as_ptr(),
+                ..zeroed()
+            };
+            assert_ne!(RegisterClassW(&wc), 0);
+            for action in [AUX_APPLY, AUX_DISCARD] {
+                let root = std::env::current_dir()
+                    .unwrap()
+                    .join("target/editor-dialog-tests")
+                    .join(format!(
+                        "{}-{action}-{}",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    ));
+                let original = Config::default();
+                storage::save(&root, &original).unwrap();
+                let owner = CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    wide("hidden item dialogs").as_ptr(),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    800,
+                    600,
+                    null_mut(),
+                    null_mut(),
+                    module,
+                    null(),
+                );
+                assert!(!owner.is_null());
+                for id in [
+                    NAME, NOTE, TARGET, ARGS, RUNNER, CWD, RADIUS, DISTANCE, SPREAD, GAP, VOLUME,
+                ] {
+                    control(owner, "EDIT", "", id, 0, 0, 200, 25, 0);
+                }
+                control(
+                    owner,
+                    "COMBOBOX",
+                    "",
+                    INSTRUMENT,
+                    0,
+                    0,
+                    200,
+                    100,
+                    CBS_DROPDOWNLIST as u32,
+                );
+                for choice in ["None", "Mallet", "Bell", "Plucked", "Chimes"] {
+                    send(
+                        owner,
+                        INSTRUMENT,
+                        CB_ADDSTRING,
+                        0,
+                        wide(choice).as_ptr() as isize,
+                    );
+                }
+                EDITOR = Box::into_raw(Box::new(Editor::new(
+                    owner,
+                    root.clone(),
+                    original.clone(),
+                    vec![],
+                )));
+                (*EDITOR).disk_revision = Ok(storage::revision(&root).unwrap());
+                {
+                    let _g = super::super::DispatchGuard::enter().unwrap();
+                    (*EDITOR).settings_to_controls();
+                    open_aux(&mut *EDITOR, AuxKind::Browser(original.universes[0].id));
+                }
+                let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                assert_eq!(IsWindowVisible(dialog), 0);
+                assert_eq!(IsWindowEnabled(owner), 0);
+                send(dialog, AUX_MODE, CB_SETCURSEL, 1, 0);
+                set(dialog, AUX_PATH, "test-browser.exe");
+                set(dialog, AUX_ARGS, "--work");
+                SendMessageW(dialog, WM_COMMAND, AUX_APPLY as usize, 0);
+                assert!((*EDITOR).aux.is_none());
+                assert_ne!(IsWindowEnabled(owner), 0);
+                assert!(matches!(
+                    (&(*EDITOR).c.universes)[0].browser,
+                    Some(Browser::Program { .. })
+                ));
+                let draft = (*EDITOR).c.clone();
+                {
+                    let _g = super::super::DispatchGuard::enter().unwrap();
+                    open_aux(&mut *EDITOR, AuxKind::Browser(original.universes[0].id));
+                }
+                let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                set(dialog, AUX_PATH, "discarded-browser.exe");
+                SendMessageW(dialog, WM_CLOSE, 0, 0);
+                assert_eq!((*EDITOR).c, draft);
+                SendMessageW(owner, WM_CLOSE, 0, 0);
+                let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                SendMessageW(dialog, WM_COMMAND, AUX_CANCEL as usize, 0);
+                assert_ne!(IsWindow(owner), 0);
+                assert_eq!((*EDITOR).c, draft);
+                assert_eq!(storage::read(&root).unwrap(), original);
+                let mut external = original.clone();
+                external.universes[0].name = "External".into();
+                storage::save(&root, &external).unwrap();
+                SendMessageW(owner, WM_CLOSE, 0, 0);
+                let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                SendMessageW(dialog, WM_COMMAND, AUX_APPLY as usize, 0);
+                assert_ne!(IsWindow(owner), 0);
+                assert!((*EDITOR).aux.is_some());
+                assert!(get(dialog, AUX_STATUS).contains("changed outside"));
+                assert_eq!(storage::read(&root).unwrap(), external);
+                SendMessageW(dialog, WM_COMMAND, AUX_CANCEL as usize, 0);
+                (*EDITOR).disk_revision = Ok(storage::revision(&root).unwrap());
+                SendMessageW(owner, WM_CLOSE, 0, 0);
+                let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                SendMessageW(dialog, WM_COMMAND, action as usize, 0);
+                assert_eq!(IsWindow(owner), 0);
+                assert_eq!(
+                    storage::read(&root).unwrap(),
+                    if action == AUX_APPLY { draft } else { external }
+                );
+                drop(Box::from_raw(EDITOR));
+                EDITOR = null_mut();
+            }
+            theme::shutdown();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     #[ignore = "hidden large native tree measurement; run on Windows CI"]
     fn large_tree_rename_updates_text_without_recreating_items() {
         let _serial = NATIVE_EDITOR.lock().unwrap();
@@ -4055,5 +4255,410 @@ mod lifecycle_tests {
         })
         .join()
         .unwrap();
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AuxKind {
+    Browser(u64),
+    Close,
+}
+struct Aux {
+    hwnd: HWND,
+    kind: AuxKind,
+}
+const AUX_MODE: i32 = 801;
+const AUX_PATH: i32 = 802;
+const AUX_ARGS: i32 = 803;
+const AUX_BROWSE: i32 = 804;
+const AUX_APPLY: i32 = 805;
+const AUX_DISCARD: i32 = 806;
+const AUX_CANCEL: i32 = 807;
+const AUX_STATUS: i32 = 808;
+unsafe fn editor_accelerator(msg: &MSG, main: HWND, e: &Editor) -> bool {
+    if msg.message != WM_KEYDOWN {
+        return false;
+    }
+    let down = |key: i32| GetKeyState(key) as u16 & 0x8000 != 0;
+    let ctrl = down(VK_CONTROL as i32);
+    let command = editing::editor_shortcut(
+        msg.wParam as u32,
+        ctrl,
+        down(VK_SHIFT as i32),
+        down(VK_MENU as i32),
+        GetFocus() == GetDlgItem(main, TREE),
+    );
+    let Some(command) = command else {
+        return false;
+    };
+    let root = GetAncestor(msg.hwnd, GA_ROOT);
+    let (window, id) = if root == main
+        && IsWindowEnabled(main) != 0
+        && e.aux.is_none()
+        && e.profiles.is_none()
+        && e.json.is_null()
+    {
+        (
+            main,
+            match command {
+                editing::EditorShortcut::Save => SAVE,
+                editing::EditorShortcut::Duplicate => DUPLICATE,
+                editing::EditorShortcut::Rename => RENAME,
+            },
+        )
+    } else if root == e.json
+        && !e.json.is_null()
+        && IsWindowEnabled(e.json) != 0
+        && command == editing::EditorShortcut::Save
+    {
+        (e.json, JSON_SAVE)
+    } else if command == editing::EditorShortcut::Save
+        && (e.aux.as_ref().is_some_and(|a| a.hwnd == root)
+            || e.profiles.as_ref().is_some_and(|p| p.hwnd == root))
+    {
+        // A modal draft must not save the parent or insert a control character.
+        return true;
+    } else {
+        return false;
+    };
+    if msg.lParam & (1 << 30) == 0 {
+        PostMessageW(window, WM_COMMAND, id as usize, 0);
+    }
+    true
+}
+unsafe fn close_aux(e: &mut Editor, focus: bool) {
+    if let Some(aux) = e.aux.take() {
+        DestroyWindow(aux.hwnd);
+    }
+    EnableWindow(e.hwnd, 1);
+    if focus && IsWindowVisible(e.hwnd) != 0 {
+        super::focus_window(e.hwnd);
+    }
+}
+unsafe fn aux_enable(hwnd: HWND, program: bool) {
+    for id in [AUX_PATH, AUX_ARGS, AUX_BROWSE] {
+        EnableWindow(GetDlgItem(hwnd, id), program as i32);
+    }
+}
+unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
+    if let Some(aux) = &e.aux {
+        super::focus_window(aux.hwnd);
+        return;
+    }
+    if matches!(kind, AuxKind::Browser(_)) {
+        if let Err(error) = e.apply() {
+            e.status = error;
+            InvalidateRect(e.hwnd, null(), 0);
+            return;
+        }
+    }
+    let class = wide("Constellation.ItemDialog");
+    let module = GetModuleHandleW(null());
+    let wc = WNDCLASSW {
+        hIcon: super::icons::large(),
+        lpfnWndProc: Some(aux_proc),
+        hInstance: module,
+        lpszClassName: class.as_ptr(),
+        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+        ..zeroed()
+    };
+    RegisterClassW(&wc);
+    let browser = matches!(kind, AuxKind::Browser(_));
+    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+    let mut bounds = RECT {
+        left: 0,
+        top: 0,
+        right: 600,
+        bottom: if browser { 330 } else { 190 },
+    };
+    AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
+    let hwnd = CreateWindowExW(
+        WS_EX_COMPOSITED,
+        class.as_ptr(),
+        wide(if browser {
+            "Constellation — Web browser"
+        } else {
+            "Constellation — Unsaved changes"
+        })
+        .as_ptr(),
+        style,
+        100,
+        100,
+        bounds.right - bounds.left,
+        bounds.bottom - bounds.top,
+        e.hwnd,
+        null_mut(),
+        module,
+        null(),
+    );
+    if hwnd.is_null() {
+        e.status = "Cannot create the configuration dialog".into();
+        return;
+    }
+    e.aux = Some(Aux { hwnd, kind });
+    theme::window(hwnd);
+    super::icons::set_small(hwnd);
+    if let AuxKind::Browser(id) = kind {
+        let root = id == e.c.universes[e.universe].id;
+        let node = e.c.find(id).unwrap();
+        label(hwnd, &format!("Browser for {}", node.name), 20, 15, 560);
+        label(
+            hwnd,
+            if root {
+                "URL Stars inherit this choice unless they override it."
+            } else {
+                "This choice overrides the universe browser for this URL only."
+            },
+            20,
+            42,
+            560,
+        );
+        control(
+            hwnd,
+            "COMBOBOX",
+            "",
+            AUX_MODE,
+            20,
+            75,
+            560,
+            180,
+            CBS_DROPDOWNLIST as u32 | WS_TABSTOP,
+        );
+        let choices = if root {
+            vec!["System default", "Custom executable"]
+        } else {
+            vec!["Inherit universe", "System default", "Custom executable"]
+        };
+        for choice in choices {
+            send(
+                hwnd,
+                AUX_MODE,
+                CB_ADDSTRING,
+                0,
+                wide(choice).as_ptr() as isize,
+            );
+        }
+        let program = if root { 1 } else { 2 };
+        let selected = match &node.browser {
+            Some(Browser::Program { .. }) => program,
+            Some(Browser::System) if !root => 1,
+            _ => 0,
+        };
+        send(hwnd, AUX_MODE, CB_SETCURSEL, selected, 0);
+        label(hwnd, "Browser executable", 20, 114, 560);
+        control(
+            hwnd,
+            "EDIT",
+            "",
+            AUX_PATH,
+            20,
+            137,
+            460,
+            28,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+        );
+        control(
+            hwnd,
+            "BUTTON",
+            "Browse…",
+            AUX_BROWSE,
+            490,
+            137,
+            90,
+            28,
+            WS_TABSTOP,
+        );
+        label(
+            hwnd,
+            "Optional arguments — the URL is appended as one argument",
+            20,
+            177,
+            560,
+        );
+        control(
+            hwnd,
+            "EDIT",
+            "",
+            AUX_ARGS,
+            20,
+            200,
+            560,
+            28,
+            WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+        );
+        if let Some(Browser::Program { path, args }) = &node.browser {
+            set(hwnd, AUX_PATH, path);
+            set(hwnd, AUX_ARGS, &editing::format_arguments(args));
+        }
+        aux_enable(hwnd, selected == program);
+        control(
+            hwnd,
+            "BUTTON",
+            "Apply to draft",
+            AUX_APPLY,
+            20,
+            280,
+            150,
+            32,
+            WS_TABSTOP,
+        );
+        control(
+            hwnd, "BUTTON", "Cancel", AUX_CANCEL, 185, 280, 110, 32, WS_TABSTOP,
+        );
+        control(hwnd, "STATIC", "", AUX_STATUS, 20, 238, 560, 38, 0);
+    } else {
+        label(
+            hwnd,
+            "Save changes before closing configuration?",
+            20,
+            20,
+            560,
+        );
+        control(hwnd, "STATIC", "", AUX_STATUS, 20, 52, 560, 65, 0);
+        control(
+            hwnd, "BUTTON", "Save", AUX_APPLY, 20, 130, 150, 32, WS_TABSTOP,
+        );
+        control(
+            hwnd,
+            "BUTTON",
+            "Discard",
+            AUX_DISCARD,
+            185,
+            130,
+            150,
+            32,
+            WS_TABSTOP,
+        );
+        control(
+            hwnd, "BUTTON", "Cancel", AUX_CANCEL, 350, 130, 150, 32, WS_TABSTOP,
+        );
+    }
+    EnableWindow(e.hwnd, 0);
+    if IsWindowVisible(e.hwnd) != 0 {
+        ShowWindow(hwnd, SW_SHOW);
+        super::focus_window(hwnd);
+        SetFocus(GetDlgItem(
+            hwnd,
+            if browser { AUX_MODE } else { AUX_CANCEL },
+        ));
+    }
+}
+unsafe extern "system" fn aux_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if let Some(result) = theme::message(msg, w, l) {
+        return result;
+    }
+    if EDITOR.is_null() {
+        return DefWindowProcW(hwnd, msg, w, l);
+    }
+    let Some(guard) = super::DispatchGuard::enter() else {
+        if super::defer_nested_close(hwnd, msg, w, l) {
+            return 0;
+        }
+        if msg == WM_COMMAND {
+            super::defer_message(hwnd, msg, w, l);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, w, l);
+    };
+    // A file picker runs its own native loop. Retain no editor borrow/guard.
+    if msg == WM_COMMAND && w & 0xffff == AUX_BROWSE as usize {
+        let root = (*EDITOR).root.clone();
+        drop(guard);
+        let choice = pickers::choose(hwnd, &root, Pick::Runner);
+        if IsWindow(hwnd) != 0 {
+            match choice {
+                Ok(Some(path)) => set(hwnd, AUX_PATH, &editing::portable_path(&root, &path)),
+                Err(error) => set(hwnd, AUX_STATUS, &error),
+                _ => {}
+            }
+        }
+        return 0;
+    }
+    let e = &mut *EDITOR;
+    let Some(aux) = &e.aux else {
+        return DefWindowProcW(hwnd, msg, w, l);
+    };
+    if aux.hwnd != hwnd {
+        return DefWindowProcW(hwnd, msg, w, l);
+    }
+    let kind = aux.kind;
+    match msg {
+        WM_PAINT => {
+            render::buffered(hwnd, theme::BACKGROUND, |_| {});
+            0
+        }
+        WM_COMMAND => {
+            let id = (w & 0xffff) as i32;
+            if id == AUX_MODE && w >> 16 == CBN_SELCHANGE as usize {
+                if let AuxKind::Browser(node) = kind {
+                    aux_enable(
+                        hwnd,
+                        send(hwnd, AUX_MODE, CB_GETCURSEL, 0, 0)
+                            == if node == e.c.universes[e.universe].id {
+                                1
+                            } else {
+                                2
+                            },
+                    );
+                }
+                return 0;
+            }
+            match id {
+                AUX_CANCEL | 2 => {
+                    close_aux(e, true);
+                }
+                AUX_DISCARD if matches!(kind, AuxKind::Close) => {
+                    close_aux(e, false);
+                    DestroyWindow(e.hwnd);
+                }
+                AUX_APPLY | 1 => {
+                    let result = (|| -> Result<(), String> {
+                        if let AuxKind::Browser(id) = kind {
+                            let root = id == e.c.universes[e.universe].id;
+                            let index = send(hwnd, AUX_MODE, CB_GETCURSEL, 0, 0);
+                            let browser = if index == if root { 1 } else { 2 } {
+                                Some(Browser::Program {
+                                    path: get(hwnd, AUX_PATH),
+                                    args: editing::parse_arguments(&get(hwnd, AUX_ARGS))?,
+                                })
+                            } else if !root && index == 1 {
+                                Some(Browser::System)
+                            } else {
+                                None
+                            };
+                            let mut c = e.c.clone();
+                            c.universes[e.universe]
+                                .find_mut(id)
+                                .ok_or("Item no longer exists")?
+                                .browser = browser;
+                            c.validate()?;
+                            e.commit(c);
+                            close_aux(e, true);
+                            e.refresh();
+                            e.status = "Browser updated in the draft. Save to apply it.".into();
+                            InvalidateRect(e.hwnd, null(), 0);
+                        } else {
+                            e.save()?;
+                            close_aux(e, false);
+                            DestroyWindow(e.hwnd);
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        set(hwnd, AUX_STATUS, &error);
+                    }
+                }
+                _ => {}
+            }
+            0
+        }
+        WM_CLOSE => {
+            close_aux(e, true);
+            0
+        }
+        _ => {
+            drop(guard);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
     }
 }

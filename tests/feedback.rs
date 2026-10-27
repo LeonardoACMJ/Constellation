@@ -298,6 +298,7 @@ fn guarded_fan_fixture() -> Config {
             let mut child = star.clone();
             child.id = 100 + i;
             Node {
+                browser: None,
                 id: 10 + i,
                 name: format!("Branch {i}"),
                 note: String::new(),

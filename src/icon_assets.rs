@@ -23,19 +23,12 @@ pub fn import(root: &Path, source: &Path) -> Result<String, String> {
         .take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err("Custom icons must be at most 8 MiB.".into());
-    }
-    let valid = match ext.as_str() {
-        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "jpg" | "jpeg" => bytes.starts_with(&[255, 216, 255]),
-        "bmp" => bytes.starts_with(b"BM"),
-        "ico" => bytes.starts_with(&[0, 0, 1, 0]),
-        _ => false,
-    };
-    if !valid {
-        return Err("The file does not match a supported image format.".into());
-    }
+    import_bytes(root, &ext, &bytes)
+}
+/// Validate the extension, header and bound before writing an imported asset.
+pub fn import_bytes(root: &Path, ext: &str, bytes: &[u8]) -> Result<String, String> {
+    let ext = ext.to_ascii_lowercase();
+    validate_bytes(&ext, bytes)?;
     let mut hash = DefaultHasher::new();
     bytes.hash(&mut hash);
     let dir = root.join("data/icons");
@@ -57,7 +50,7 @@ pub fn import(root: &Path, source: &Path) -> Result<String, String> {
                 return Ok(format!("data/icons/{name}"));
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if fs::read(&destination).ok().as_deref() == Some(bytes.as_slice()) {
+                if fs::read(&destination).ok().as_deref() == Some(bytes) {
                     return Ok(format!("data/icons/{name}"));
                 }
             }
@@ -65,4 +58,21 @@ pub fn import(root: &Path, source: &Path) -> Result<String, String> {
         }
     }
     Err("Cannot allocate a custom icon filename.".into())
+}
+
+pub fn validate_bytes(ext: &str, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("Custom icons must be at most 8 MiB.".into());
+    }
+    let valid = match ext {
+        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "jpg" | "jpeg" => bytes.starts_with(&[255, 216, 255]),
+        "bmp" => bytes.starts_with(b"BM"),
+        "ico" => bytes.starts_with(&[0, 0, 1, 0]),
+        _ => false,
+    };
+    if !valid {
+        return Err("The file does not match a supported image format.".into());
+    }
+    Ok(())
 }

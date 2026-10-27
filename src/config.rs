@@ -83,6 +83,8 @@ impl From<Config> for ConfigOutput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<Browser>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
     pub id: u64,
@@ -100,6 +102,30 @@ pub struct Node {
     pub visible_in: Vec<u64>,
 }
 
+/// None on a URL inherits its universe; None on a universe means system default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Browser {
+    System,
+    Program {
+        path: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+    },
+}
+impl Browser {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Self::Program { path, args } = self {
+            if path.trim().is_empty()
+                || path.chars().any(char::is_control)
+                || args.iter().any(|a| a.contains('\0'))
+            {
+                return Err("Choose a browser executable and valid arguments".into());
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ItemIcon {
@@ -352,6 +378,26 @@ impl Binding {
 }
 
 impl Config {
+    /// Return an ordinary launch definition; the URL is one argument, never shell text.
+    pub fn launch_target(&self, id: u64) -> Option<Target> {
+        let universe = self.universes.iter().find(|u| u.find(id).is_some())?;
+        let node = universe.find(id)?;
+        let target = node.target.as_ref()?;
+        if let Target::Url { url } = target {
+            if let Some(Browser::Program { path, args }) =
+                node.browser.as_ref().or(universe.browser.as_ref())
+            {
+                let mut args = args.clone();
+                args.push(url.clone());
+                return Some(Target::Program {
+                    path: path.clone(),
+                    args,
+                    cwd: None,
+                });
+            }
+        }
+        Some(target.clone())
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err("Unsupported configuration version".into());
@@ -375,6 +421,12 @@ impl Config {
                     "Note for {} must be a single line of at most {NOTE_MAX_CHARS} characters",
                     n.name
                 ));
+            }
+            if let Some(browser) = &n.browser {
+                browser.validate()?;
+                if depth != 0 && !matches!(n.target, Some(Target::Url { .. })) {
+                    return Err("Browser preferences apply only to a universe or a URL Star".into());
+                }
             }
             if n.name.trim().is_empty() {
                 return Err("Every node needs a name".into());
@@ -572,6 +624,7 @@ impl Default for Config {
     fn default() -> Self {
         fn star(id: u64, name: &str, target: Target) -> Node {
             Node {
+                browser: None,
                 note: String::new(),
                 icon: Default::default(),
                 visible_in: vec![],
@@ -584,6 +637,7 @@ impl Default for Config {
         Self {
             version: 1,
             universes: vec![Node {
+                browser: None,
                 note: String::new(),
                 icon: Default::default(),
                 visible_in: vec![],
@@ -592,6 +646,7 @@ impl Default for Config {
                 target: None,
                 children: Some(vec![
                     Node {
+                        browser: None,
                         note: String::new(),
                         icon: Default::default(),
                         visible_in: vec![],
@@ -618,6 +673,7 @@ impl Default for Config {
                                 },
                             ),
                             Node {
+                                browser: None,
                                 note: String::new(),
                                 icon: Default::default(),
                                 visible_in: vec![],

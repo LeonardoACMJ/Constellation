@@ -195,6 +195,7 @@ pub fn star_from_path(root: &Path, path: &Path, id: u64) -> Result<Node, String>
         return Err(format!("Dropped path is unavailable: {}", path.display()));
     };
     Ok(Node {
+        browser: None,
         note: String::new(),
         icon: Default::default(),
         visible_in: vec![],
@@ -269,6 +270,10 @@ pub fn read_import(path: &Path) -> Result<Config, String> {
 }
 pub fn export(path: &Path, c: &Config) -> Result<(), String> {
     c.validate()?;
+    let bytes = serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?;
+    export_bytes(path, &bytes)
+}
+pub(crate) fn export_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("Choose an export file")?;
     let temp: PathBuf = parent.join(format!(
         ".constellation-export-{}-{}.tmp",
@@ -278,7 +283,6 @@ pub fn export(path: &Path, c: &Config) -> Result<(), String> {
             .map_err(|e| e.to_string())?
             .as_nanos()
     ));
-    let bytes = serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?;
     let result = (|| -> std::io::Result<()> {
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
@@ -427,4 +431,28 @@ pub fn preview_equal(a: &Config, b: &Config, universe: usize) -> bool {
             .get(universe)
             .zip(b.universes.get(universe))
             .is_some_and(|(a, b)| nodes(a, b))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum EditorShortcut {
+    Save,
+    Duplicate,
+    Rename,
+}
+pub fn editor_shortcut(
+    key: u32,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    tree: bool,
+) -> Option<EditorShortcut> {
+    if alt || shift {
+        return None;
+    }
+    match (key, ctrl, tree) {
+        (0x53, true, _) => Some(EditorShortcut::Save),
+        (0x44, true, true) => Some(EditorShortcut::Duplicate),
+        (0x71, false, true) => Some(EditorShortcut::Rename),
+        _ => None,
+    }
 }

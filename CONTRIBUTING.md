@@ -29,7 +29,7 @@ Format changes and run the checks that cover them:
 
 ```cmd
 cargo fmt --all --check
-cargo test --test core --test editing --test editor_layout --test feedback --test notes --test icon_assets --test background --locked
+cargo test --test core --test editing --test editor_layout --test feedback --test notes --test icon_assets --test background --test browser --test bundle --locked
 ```
 
 These integration targets cover the model, editing, layout, feedback and assets without driving the desktop. Windows still needs the activated build environment to compile them.

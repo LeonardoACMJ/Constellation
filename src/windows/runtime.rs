@@ -511,7 +511,7 @@ impl Runtime {
     unsafe fn action(&mut self, a: Action) {
         match a {
             Action::Launch(id) => {
-                let t = self.config.find(id).and_then(|n| n.target.clone());
+                let t = self.config.launch_target(id);
                 self.dismiss(!foreground_blocks_launcher(self.hwnd));
                 if let Some(t) = t {
                     if let Err(e) = self.launches.launch(t) {

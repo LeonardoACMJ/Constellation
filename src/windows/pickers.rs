@@ -8,7 +8,11 @@ use std::{
 use windows_sys::Win32::{
     Foundation::HWND,
     System::Com::CoTaskMemFree,
-    UI::{Controls::Dialogs::*, Shell::*},
+    UI::{
+        Controls::Dialogs::*,
+        Shell::*,
+        WindowsAndMessaging::{IDYES, MB_ICONQUESTION, MB_YESNO, MessageBoxW},
+    },
 };
 
 pub enum Pick {
@@ -47,7 +51,7 @@ pub unsafe fn choose(hwnd: HWND, root: &Path, pick: Pick) -> Result<Option<PathB
         }
         let mut file = vec![0u16; 32768];
         if matches!(pick, Pick::Export) {
-            let default = wide(root.join("constellation-export.json"));
+            let default = wide(root.join("constellation-export.constellation"));
             file[..default.len()].copy_from_slice(&default);
         }
         let filters = wide(if matches!(pick, Pick::Icon) {
@@ -55,12 +59,12 @@ pub unsafe fn choose(hwnd: HWND, root: &Path, pick: Pick) -> Result<Option<PathB
         } else if matches!(pick, Pick::Software) {
             "Software icons (EXE, COM, LNK)\0*.exe;*.com;*.lnk\0All files\0*.*\0"
         } else if matches!(pick, Pick::Import | Pick::Export) {
-            "Constellation configuration (*.json)\0*.json\0All files\0*.*\0"
+            "Portable bundle (*.constellation)\0*.constellation\0Configuration JSON (*.json)\0*.json\0All files\0*.*\0"
         } else {
             "Applications, shortcuts and scripts\0*.exe;*.com;*.lnk;*.url;*.ps1;*.py;*.cmd;*.bat\0All files\0*.*\0"
         });
         let initial = wide(root);
-        let extension = wide("json");
+        let extension = wide("constellation");
         let mut info: OPENFILENAMEW = zeroed();
         info.lStructSize = size_of::<OPENFILENAMEW>() as u32;
         info.hwndOwner = hwnd;
@@ -96,6 +100,24 @@ pub unsafe fn choose(hwnd: HWND, root: &Path, pick: Pick) -> Result<Option<PathB
             };
         }
         let len = file.iter().position(|v| *v == 0).unwrap_or(file.len());
-        Ok(Some(PathBuf::from(String::from_utf16_lossy(&file[..len]))))
+        let mut path = PathBuf::from(String::from_utf16_lossy(&file[..len]));
+        if matches!(pick, Pick::Export) && info.nFilterIndex == 2 {
+            let selected = path.clone();
+            path.set_extension("json");
+            // Changing the extension changes the destination after the native
+            // dialog's overwrite prompt. Confirm that final file as well.
+            if selected != path
+                && path.try_exists().map_err(|e| e.to_string())?
+                && MessageBoxW(
+                    hwnd,
+                    wide(format!("{} already exists. Replace it?", path.display())).as_ptr(),
+                    wide("Export configuration").as_ptr(),
+                    MB_YESNO | MB_ICONQUESTION,
+                ) != IDYES
+            {
+                return Ok(None);
+            }
+        }
+        Ok(Some(path))
     }
 }

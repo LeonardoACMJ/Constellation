@@ -12,3 +12,5 @@ pub mod editor_layout;
 pub mod sound;
 
 pub mod background;
+
+pub mod bundle;
