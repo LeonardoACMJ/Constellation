@@ -263,6 +263,22 @@ unsafe fn control(
     }
     hwnd
 }
+unsafe fn browser_header(hwnd: HWND) {
+    let r = crate::editor_layout::TARGET_CAPTION;
+    label(hwnd, "Target path / URL", r.x, r.y, r.w);
+    let r = crate::editor_layout::BROWSER_CONTROL;
+    control(
+        hwnd,
+        "BUTTON",
+        "Web browser…",
+        BROWSER,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        WS_TABSTOP,
+    );
+}
 unsafe fn get(hwnd: HWND, id: i32) -> String {
     let e = GetDlgItem(hwnd, id);
     let len = GetWindowTextLengthW(e);
@@ -477,7 +493,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         ] {
             if id == NOTE {
                 control(hwnd, "STATIC", "Note (0/140)", NOTE_COUNT, x, y, w, 20, 0);
-            } else {
+            } else if id != TARGET {
                 label(hwnd, title, x, y, w);
             }
             let combo = matches!(id, KIND | PARENT);
@@ -503,17 +519,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
                     },
             );
         }
-        control(
-            hwnd,
-            "BUTTON",
-            "Web browser…",
-            BROWSER,
-            535,
-            166,
-            130,
-            25,
-            WS_TABSTOP,
-        );
+        browser_header(hwnd);
         send(
             hwnd,
             NOTE,
@@ -3578,6 +3584,53 @@ mod lifecycle_tests {
                         wide(choice).as_ptr() as isize,
                     );
                 }
+                browser_header(owner);
+                let browser_button = GetDlgItem(owner, BROWSER);
+                let caption = FindWindowExW(
+                    owner,
+                    null_mut(),
+                    wide("STATIC").as_ptr(),
+                    wide("Target path / URL").as_ptr(),
+                );
+                assert!(!caption.is_null());
+                let (mut caption_rect, mut button_rect): (RECT, RECT) = (zeroed(), zeroed());
+                GetWindowRect(caption, &mut caption_rect);
+                GetWindowRect(browser_button, &mut button_rect);
+                assert!(
+                    caption_rect.right < button_rect.left,
+                    "Caption overlaps the browser button"
+                );
+                assert_eq!(
+                    ChildWindowFromPoint(owner, POINT { x: 550, y: 180 }),
+                    browser_button
+                );
+                unsafe fn assert_centered(owner: HWND, dialog: HWND) {
+                    let (mut a, mut b): (RECT, RECT) = (zeroed(), zeroed());
+                    GetWindowRect(owner, &mut a);
+                    GetWindowRect(dialog, &mut b);
+                    let mut info: MONITORINFO = zeroed();
+                    info.cbSize = size_of::<MONITORINFO>() as u32;
+                    assert_ne!(
+                        GetMonitorInfoW(
+                            MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST),
+                            &mut info
+                        ),
+                        0
+                    );
+                    let rect = |r: RECT| FormRect {
+                        x: r.left,
+                        y: r.top,
+                        w: r.right - r.left,
+                        h: r.bottom - r.top,
+                    };
+                    let (x, y) = crate::editor_layout::dialog_position(
+                        rect(a),
+                        rect(info.rcWork),
+                        b.right - b.left,
+                        b.bottom - b.top,
+                    );
+                    assert_eq!((b.left, b.top), (x, y));
+                }
                 EDITOR = Box::into_raw(Box::new(Editor::new(
                     owner,
                     root.clone(),
@@ -3591,6 +3644,7 @@ mod lifecycle_tests {
                     open_aux(&mut *EDITOR, AuxKind::Browser(original.universes[0].id));
                 }
                 let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                assert_centered(owner, dialog);
                 assert_eq!(IsWindowVisible(dialog), 0);
                 assert_eq!(IsWindowEnabled(owner), 0);
                 send(dialog, AUX_MODE, CB_SETCURSEL, 1, 0);
@@ -3609,11 +3663,13 @@ mod lifecycle_tests {
                     open_aux(&mut *EDITOR, AuxKind::Browser(original.universes[0].id));
                 }
                 let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                assert_centered(owner, dialog);
                 set(dialog, AUX_PATH, "discarded-browser.exe");
                 SendMessageW(dialog, WM_CLOSE, 0, 0);
                 assert_eq!((*EDITOR).c, draft);
                 SendMessageW(owner, WM_CLOSE, 0, 0);
                 let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                assert_centered(owner, dialog);
                 SendMessageW(dialog, WM_COMMAND, AUX_CANCEL as usize, 0);
                 assert_ne!(IsWindow(owner), 0);
                 assert_eq!((*EDITOR).c, draft);
@@ -3623,6 +3679,7 @@ mod lifecycle_tests {
                 storage::save(&root, &external).unwrap();
                 SendMessageW(owner, WM_CLOSE, 0, 0);
                 let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                assert_centered(owner, dialog);
                 SendMessageW(dialog, WM_COMMAND, AUX_APPLY as usize, 0);
                 assert_ne!(IsWindow(owner), 0);
                 assert!((*EDITOR).aux.is_some());
@@ -3632,6 +3689,7 @@ mod lifecycle_tests {
                 (*EDITOR).disk_revision = Ok(storage::revision(&root).unwrap());
                 SendMessageW(owner, WM_CLOSE, 0, 0);
                 let dialog = (*EDITOR).aux.as_ref().unwrap().hwnd;
+                assert_centered(owner, dialog);
                 SendMessageW(dialog, WM_COMMAND, action as usize, 0);
                 assert_eq!(IsWindow(owner), 0);
                 assert_eq!(
@@ -4273,12 +4331,23 @@ unsafe fn editor_accelerator(msg: &MSG, main: HWND, e: &Editor) -> bool {
     }
     let down = |key: i32| GetKeyState(key) as u16 & 0x8000 != 0;
     let ctrl = down(VK_CONTROL as i32);
+    let focus = GetFocus();
+    let mut class = [0u16; 64];
+    let count = GetClassNameW(focus, class.as_mut_ptr(), class.len() as i32).max(0) as usize;
+    let text = String::from_utf16_lossy(&class[..count]).eq_ignore_ascii_case("edit");
+    let focus = if text {
+        editing::EditorFocus::Text
+    } else if focus == GetDlgItem(main, TREE) {
+        editing::EditorFocus::Tree
+    } else {
+        editing::EditorFocus::Other
+    };
     let command = editing::editor_shortcut(
         msg.wParam as u32,
         ctrl,
         down(VK_SHIFT as i32),
         down(VK_MENU as i32),
-        GetFocus() == GetDlgItem(main, TREE),
+        focus,
     );
     let Some(command) = command else {
         return false;
@@ -4296,6 +4365,8 @@ unsafe fn editor_accelerator(msg: &MSG, main: HWND, e: &Editor) -> bool {
                 editing::EditorShortcut::Save => SAVE,
                 editing::EditorShortcut::Duplicate => DUPLICATE,
                 editing::EditorShortcut::Rename => RENAME,
+                editing::EditorShortcut::Undo => UNDO,
+                editing::EditorShortcut::Redo => REDO,
             },
         )
     } else if root == e.json
@@ -4364,6 +4435,28 @@ unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
         bottom: if browser { 330 } else { 190 },
     };
     AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
+    let mut owner: RECT = zeroed();
+    GetWindowRect(e.hwnd, &mut owner);
+    let monitor = MonitorFromWindow(e.hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut info: MONITORINFO = zeroed();
+    info.cbSize = size_of::<MONITORINFO>() as u32;
+    let work = if GetMonitorInfoW(monitor, &mut info) != 0 {
+        info.rcWork
+    } else {
+        owner
+    };
+    let as_rect = |r: RECT| FormRect {
+        x: r.left,
+        y: r.top,
+        w: r.right - r.left,
+        h: r.bottom - r.top,
+    };
+    let (x, y) = crate::editor_layout::dialog_position(
+        as_rect(owner),
+        as_rect(work),
+        bounds.right - bounds.left,
+        bounds.bottom - bounds.top,
+    );
     let hwnd = CreateWindowExW(
         WS_EX_COMPOSITED,
         class.as_ptr(),
@@ -4374,8 +4467,8 @@ unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
         })
         .as_ptr(),
         style,
-        100,
-        100,
+        x,
+        y,
         bounds.right - bounds.left,
         bounds.bottom - bounds.top,
         e.hwnd,

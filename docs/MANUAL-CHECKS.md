@@ -85,3 +85,13 @@ These checks require manual review on real setups; CI does not establish mapped-
 | Export a .constellation bundle with shared/custom icons; import into a disposable portable copy without the source files. Repeat selecting the JSON file type and an existing export destination. | Bundle restores images under the destination data/icons; JSON keeps references. Existing destinations require overwrite confirmation, including when the file-type choice changes the extension. Import remains undoable and unsaved until Save. |
 
 The small-screen footer/layout redesign remains outside this release.
+
+## Editor polish (0.1.45)
+
+| Check | Expected result |
+|---|---|
+| Select a universe root or URL Star and inspect/click Web browser beside the Target path / URL caption, at different window sizes and scroll positions. | Entire button is visible and clickable; neither caption nor Note overlaps it. Other Star kinds leave this browser setting disabled. |
+| Open Web browser and the unsaved-close prompt from a moved/maximized Settings window. | Both center over Settings and remain inside its monitor’s usable work area. |
+| With the tree/button focused, duplicate/edit an item, then Ctrl+Z and Ctrl+Y. Repeat inside a text field after typing. | Draft history outside fields, field undo/redo inside. Repeated Redo cannot undo a fresh edit; new typing clears field Redo. |
+
+The user confirmed .44 Save on close and Ctrl+S/Ctrl+D/F2. Bundle transfer remains manually unverified; do not require a second installation to continue ordinary use. Its automated round-trip and malformed-document checks pass.

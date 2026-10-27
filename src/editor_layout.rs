@@ -8,6 +8,29 @@ pub struct Rect {
     pub w: i32,
     pub h: i32,
 }
+/// Exclusive caption/button slots above the target field. Static windows must
+/// not overlap a button: they can repaint over it even when it is above them.
+pub const TARGET_CAPTION: Rect = Rect {
+    x: 305,
+    y: 171,
+    w: 220,
+    h: 20,
+};
+pub const BROWSER_CONTROL: Rect = Rect {
+    x: 535,
+    y: 166,
+    w: 130,
+    h: 25,
+};
+/// Center over the owner, keeping the whole dialog on its monitor's work area.
+pub fn dialog_position(owner: Rect, work: Rect, width: i32, height: i32) -> (i32, i32) {
+    let x = owner.x + (owner.w - width) / 2;
+    let y = owner.y + (owner.h - height) / 2;
+    (
+        x.clamp(work.x, work.x + (work.w - width).max(0)),
+        y.clamp(work.y, work.y + (work.h - height).max(0)),
+    )
+}
 /// First sidebar action row, shared with the native editor and layout checks.
 pub const CREATE_CONTROLS: [(i32, &str, Rect); 3] = [
     (

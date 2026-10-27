@@ -63,7 +63,7 @@ constellation.exe --configure
 
 To open work links in Edge, select your universe’s root and click **Web browser…** beside Target path / URL. Choose **Custom executable**, browse to Edge’s `msedge.exe`, optionally add browser/profile arguments, and **Apply to draft → Save**. URL Stars inherit this choice. Select a URL Star and use the same button to choose another executable or **System default**, or return to **Inherit universe**.
 
-**Ctrl+S** saves the main editor or Advanced JSON. With the tree focused, **Ctrl+D** duplicates and **F2** selects the name for renaming. These tree commands do not replace text-field shortcuts. When closing with unsaved changes, choose **Save**, **Discard** or **Cancel**; a failed Save leaves the draft open for correction.
+**Ctrl+S** saves the main editor or Advanced JSON. With the tree focused, **Ctrl+D** duplicates and **F2** selects the name for renaming. **Ctrl+Z / Ctrl+Y** undo/redo draft operations when focus is outside text fields. Inside a text field they undo/redo its latest edit; new editing clears that field’s Redo. These tree commands do not replace text-field shortcuts. When closing with unsaved changes, choose **Save**, **Discard** or **Cancel**; a failed Save leaves the draft open for correction.
 
 **Shortcut profiles…** opens the graphical profile editor:
 

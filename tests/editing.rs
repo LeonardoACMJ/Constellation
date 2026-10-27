@@ -471,12 +471,19 @@ fn preview_ignores_notes_sound_and_other_universes_but_not_icons_or_geometry() {
 
 #[test]
 fn editor_shortcuts_respect_text_fields_and_modifier_combinations() {
-    use editing::{EditorShortcut as S, editor_shortcut as key};
-    assert_eq!(key(0x53, true, false, false, false), Some(S::Save));
-    assert_eq!(key(0x44, true, false, false, true), Some(S::Duplicate));
-    assert_eq!(key(0x71, false, false, false, true), Some(S::Rename));
-    assert_eq!(key(0x44, true, false, false, false), None);
-    assert_eq!(key(0x71, false, false, false, false), None);
-    assert_eq!(key(0x53, true, true, false, true), None);
-    assert_eq!(key(0x53, true, false, true, true), None);
+    use editing::{
+        EditorFocus::{Other, Text, Tree},
+        EditorShortcut as S, editor_shortcut as key,
+    };
+    assert_eq!(key(0x53, true, false, false, Text), Some(S::Save));
+    assert_eq!(key(0x44, true, false, false, Tree), Some(S::Duplicate));
+    assert_eq!(key(0x71, false, false, false, Tree), Some(S::Rename));
+    assert_eq!(key(0x44, true, false, false, Text), None);
+    assert_eq!(key(0x71, false, false, false, Text), None);
+    assert_eq!(key(0x53, true, true, false, Tree), None);
+    assert_eq!(key(0x53, true, false, true, Tree), None);
+    assert_eq!(key(0x5a, true, false, false, Tree), Some(S::Undo));
+    assert_eq!(key(0x59, true, false, false, Other), Some(S::Redo));
+    assert_eq!(key(0x5a, true, false, false, Text), None);
+    assert_eq!(key(0x59, true, false, false, Text), None);
 }

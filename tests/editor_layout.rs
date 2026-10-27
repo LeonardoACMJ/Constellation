@@ -247,3 +247,124 @@ fn create_and_duplicate_buttons_share_a_row_without_overlap() {
         );
     }
 }
+
+#[test]
+fn browser_header_is_clickable_and_clears_note_and_target_controls() {
+    use constellation::editor_layout::{BROWSER_CONTROL, TARGET_CAPTION};
+    for (w, h) in [
+        (680, 500),
+        (1050, 996),
+        (1380, 870),
+        (2451, 1080),
+        (3840, 2160),
+    ] {
+        let l = Layout::new(w, h, 17, 17);
+        let button = l.control(BROWSER_CONTROL, 225);
+        let caption = l.control(TARGET_CAPTION, 0);
+        let note = l.control(
+            Rect {
+                x: 305,
+                y: 129,
+                w: 360,
+                h: 28,
+            },
+            217,
+        );
+        let target = l.control(
+            Rect {
+                x: 305,
+                y: 192,
+                w: 280,
+                h: 28,
+            },
+            203,
+        );
+        assert!(
+            caption.x + caption.w < button.x,
+            "A static label must never cover the browser button"
+        );
+        assert!(note.y + note.h < button.y);
+        assert!(button.y + button.h <= target.y);
+        assert!(button.x + button.w <= l.item_x + l.item_width);
+    }
+}
+#[test]
+fn dialogs_center_on_owner_and_stay_inside_usable_monitor_bounds() {
+    use constellation::editor_layout::dialog_position;
+    assert_eq!(
+        dialog_position(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1200,
+                h: 800
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1040
+            },
+            600,
+            300
+        ),
+        (300, 250)
+    );
+    assert_eq!(
+        dialog_position(
+            Rect {
+                x: -1920,
+                y: 0,
+                w: 1920,
+                h: 1040
+            },
+            Rect {
+                x: -1920,
+                y: 0,
+                w: 1920,
+                h: 1040
+            },
+            600,
+            300
+        ),
+        (-1260, 370)
+    );
+    assert_eq!(
+        dialog_position(
+            Rect {
+                x: 1700,
+                y: 900,
+                w: 600,
+                h: 600
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1040
+            },
+            600,
+            300
+        ),
+        (1320, 740)
+    );
+    assert_eq!(
+        dialog_position(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 500
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 500,
+                h: 300
+            },
+            600,
+            400
+        ),
+        (0, 0)
+    );
+}

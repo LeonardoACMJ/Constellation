@@ -204,7 +204,37 @@ unsafe extern "system" fn edit_proc(
     id: usize,
     _data: usize,
 ) -> LRESULT {
+    let undo_state = wide("Constellation.Edit.Undone");
     match msg {
+        WM_CHAR if matches!(w, 0x1a | 0x19) => {
+            if GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & ES_READONLY as u32 != 0
+                || IsWindowEnabled(hwnd) == 0
+            {
+                return 0;
+            }
+            // Classic EDIT keeps a single toggling undo record. Ctrl+Y may
+            // toggle it only after Undo, never undo a fresh edit by accident.
+            if w == 0x1a || !GetPropW(hwnd, undo_state.as_ptr()).is_null() {
+                SendMessageW(hwnd, EM_UNDO, 0, 0);
+            }
+            0
+        }
+        WM_UNDO | EM_UNDO => {
+            let undone = !GetPropW(hwnd, undo_state.as_ptr()).is_null();
+            let result = DefSubclassProc(hwnd, msg, w, l);
+            if result != 0 {
+                if undone {
+                    RemovePropW(hwnd, undo_state.as_ptr());
+                } else {
+                    SetPropW(hwnd, undo_state.as_ptr(), 1usize as HANDLE);
+                }
+            }
+            result
+        }
+        WM_SETTEXT | WM_CUT | WM_CLEAR | WM_PASTE | EM_REPLACESEL => {
+            RemovePropW(hwnd, undo_state.as_ptr());
+            DefSubclassProc(hwnd, msg, w, l)
+        }
         WM_CHAR if w == 1 => {
             SendMessageW(hwnd, EM_SETSEL, 0, -1);
             0
@@ -250,7 +280,12 @@ unsafe extern "system" fn edit_proc(
             }
             0
         }
+        WM_CHAR if w >= 32 || matches!(w, 8 | 9 | 13) => {
+            RemovePropW(hwnd, undo_state.as_ptr());
+            DefSubclassProc(hwnd, msg, w, l)
+        }
         WM_NCDESTROY => {
+            RemovePropW(hwnd, undo_state.as_ptr());
             RemoveWindowSubclass(hwnd, Some(edit_proc), id);
             DefSubclassProc(hwnd, msg, w, l)
         }
@@ -394,6 +429,22 @@ mod render_tests {
             assert_eq!(get(), " ");
             SendMessageW(edit, WM_CHAR, 8, 0);
             assert_eq!(get(), " ", "Backspace at the beginning must remain a no-op");
+            SetWindowTextW(edit, wide("base").as_ptr());
+            SendMessageW(edit, EM_SETSEL, 4, 4);
+            SendMessageW(edit, EM_REPLACESEL, 1, wide(" tail").as_ptr() as isize);
+            assert_eq!(get(), "base tail");
+            SendMessageW(edit, WM_CHAR, 0x1a, 0);
+            assert_eq!(get(), "base");
+            SendMessageW(edit, WM_CHAR, 0x19, 0);
+            assert_eq!(get(), "base tail");
+            SendMessageW(edit, WM_CHAR, 0x19, 0);
+            assert_eq!(get(), "base tail", "Redo cannot undo a fresh/restored edit");
+            SendMessageW(edit, WM_CHAR, 0x1a, 0);
+            assert_eq!(get(), "base");
+            SendMessageW(edit, EM_REPLACESEL, 1, wide(" new").as_ptr() as isize);
+            let fresh = get();
+            SendMessageW(edit, WM_CHAR, 0x19, 0);
+            assert_eq!(get(), fresh, "New editing clears Redo");
             SetWindowTextW(edit, wide("Read only").as_ptr());
             SendMessageW(edit, EM_SETREADONLY, 1, 0);
             SendMessageW(edit, WM_CHAR, 1, 0);

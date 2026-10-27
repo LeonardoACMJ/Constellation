@@ -438,21 +438,32 @@ pub enum EditorShortcut {
     Save,
     Duplicate,
     Rename,
+    Undo,
+    Redo,
+}
+#[derive(Clone, Copy)]
+pub enum EditorFocus {
+    Tree,
+    Text,
+    Other,
 }
 pub fn editor_shortcut(
     key: u32,
     ctrl: bool,
     shift: bool,
     alt: bool,
-    tree: bool,
+    focus: EditorFocus,
 ) -> Option<EditorShortcut> {
     if alt || shift {
         return None;
     }
-    match (key, ctrl, tree) {
+    use EditorFocus::*;
+    match (key, ctrl, focus) {
         (0x53, true, _) => Some(EditorShortcut::Save),
-        (0x44, true, true) => Some(EditorShortcut::Duplicate),
-        (0x71, false, true) => Some(EditorShortcut::Rename),
+        (0x44, true, Tree) => Some(EditorShortcut::Duplicate),
+        (0x71, false, Tree) => Some(EditorShortcut::Rename),
+        (0x5a, true, Tree | Other) => Some(EditorShortcut::Undo),
+        (0x59, true, Tree | Other) => Some(EditorShortcut::Redo),
         _ => None,
     }
 }
