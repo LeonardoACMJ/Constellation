@@ -2,7 +2,7 @@
 
 A portable radial launcher for Windows. Press **Ctrl+Q**, move through your menus, and open an app, folder, website or script.
 
-**[Download the Windows beta](https://github.com/LeonardoACMJ/Constellation/releases/tag/v0.1.42)** · [User guide](docs/USER-GUIDE.md) · [Release notes](docs/releases/0.1.42.md)
+**[Download the Windows beta](https://github.com/LeonardoACMJ/Constellation/releases/tag/v0.1.43)** · [User guide](docs/USER-GUIDE.md) · [Release notes](docs/releases/0.1.43.md)
 
 ## Get started
 
@@ -11,7 +11,7 @@ A portable radial launcher for Windows. Press **Ctrl+Q**, move through your menu
 3. Press **Ctrl+Q** to open the menu in the centre of your screen. Hover over a Constellation to explore it; click a Star to launch it. **Escape** closes the menu.
 4. Open **Settings** in the sample menu, or right-click the tray icon and choose **Configure / Visualize…**, to make it yours.
 
-Constellation currently supports **Windows x64**. This is a beta; see the [release notes](docs/releases/0.1.42.md) for known issues. The executable is unsigned, so Windows may show a warning when you download or run it.
+Constellation currently supports **Windows x64**. This is a beta; see the [release notes](docs/releases/0.1.43.md) for known issues. The executable is unsigned, so Windows may show a warning when you download or run it.
 
 ## Build your own constellation
 
