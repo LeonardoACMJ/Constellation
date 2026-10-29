@@ -41,7 +41,7 @@ pub type Images = HashMap<u64, Arc<Pixels>>;
 pub enum Source {
     Program(String),
     File(String),
-    Association(String),
+    Url(String),
     Custom(String),
 }
 fn source(node: &Node) -> Option<Source> {
@@ -54,7 +54,7 @@ fn source(node: &Node) -> Option<Source> {
             Target::Shortcut { path } | Target::Folder { path } | Target::Script { path, .. } => {
                 Some(Source::File(path.clone()))
             }
-            Target::Url { .. } => Some(Source::Association(".url".into())),
+            Target::Url { url } => crate::favicon::origin(url).map(Source::Url),
         },
     }
 }
@@ -96,65 +96,27 @@ impl Cache {
         let state = Arc::new(Mutex::new(State::default()));
         let alive = Arc::new(AtomicBool::new(true));
         let notified = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = sync_channel::<(Source, u64)>(CAPACITY);
-        let (worker_state, worker_alive, worker_notified) =
-            (state.clone(), alive.clone(), notified.clone());
-        let window = hwnd as usize;
-        let started = std::thread::Builder::new()
-            .name("constellation-icons".into())
-            .stack_size(512 * 1024)
-            .spawn(move || unsafe {
-                let com = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32);
-                let mut token = 0;
-                let gdiplus = GdiplusStartup(
-                    &mut token,
-                    &GdiplusStartupInput {
-                        GdiplusVersion: 1,
-                        SuppressExternalCodecs: 1,
-                        ..zeroed()
-                    },
-                    null_mut(),
-                ) == Ok;
-                while let Result::Ok((key, generation)) = rx.recv() {
-                    if !worker_alive.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if !worker_state.lock().ok().is_some_and(
-                        |s: std::sync::MutexGuard<'_, State>| {
-                            s.entries
-                                .get(&key)
-                                .is_some_and(|e| e.generation == generation)
-                        },
-                    ) {
-                        continue;
-                    }
-                    let image = load(&root, &key, gdiplus).map(Arc::new);
-                    let completed = worker_state
-                        .lock()
-                        .ok()
-                        .is_some_and(|mut state| state.complete(&key, generation, image));
-                    if !completed {
-                        continue;
-                    }
-                    if worker_alive.load(Ordering::Acquire)
-                        && !worker_notified.swap(true, Ordering::AcqRel)
-                    {
-                        if PostMessageW(window as HWND, READY, 0, 0) == 0 {
-                            worker_notified.store(false, Ordering::Release);
-                        }
-                    }
-                }
-                if gdiplus {
-                    GdiplusShutdown(token);
-                }
-                if com >= 0 {
-                    CoUninitialize();
-                }
-            })
-            .is_ok();
+        let network = start_worker(
+            hwnd,
+            root.clone(),
+            state.clone(),
+            alive.clone(),
+            notified.clone(),
+            None,
+            true,
+        );
+        let channel = start_worker(
+            hwnd,
+            root,
+            state.clone(),
+            alive.clone(),
+            notified.clone(),
+            network,
+            false,
+        );
         Self {
             state,
-            channel: started.then_some(tx),
+            channel,
             alive,
             notified,
         }
@@ -245,6 +207,119 @@ impl Drop for Cache {
         // Do not join a worker that could be inside an unresponsive Shell extension.
         self.channel.take();
     }
+}
+
+type Job = (Source, u64);
+fn start_worker(
+    hwnd: HWND,
+    root: PathBuf,
+    state: Arc<Mutex<State>>,
+    alive: Arc<AtomicBool>,
+    notified: Arc<AtomicBool>,
+    network: Option<SyncSender<Job>>,
+    is_network: bool,
+) -> Option<SyncSender<Job>> {
+    let (tx, rx) = sync_channel::<Job>(CAPACITY);
+    let window = hwnd as usize;
+    let started = std::thread::Builder::new()
+        .name(
+            if is_network {
+                "constellation-favicons"
+            } else {
+                "constellation-icons"
+            }
+            .into(),
+        )
+        .stack_size(512 * 1024)
+        .spawn(move || unsafe {
+            let com = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32);
+            let mut token = 0;
+            let gdiplus = GdiplusStartup(
+                &mut token,
+                &GdiplusStartupInput {
+                    GdiplusVersion: 1,
+                    SuppressExternalCodecs: 1,
+                    ..zeroed()
+                },
+                null_mut(),
+            ) == Ok;
+            while let Result::Ok((key, generation)) = rx.recv() {
+                if !alive.load(Ordering::Acquire) {
+                    break;
+                }
+                if !state.lock().ok().is_some_and(|s| {
+                    s.entries
+                        .get(&key)
+                        .is_some_and(|e| e.generation == generation)
+                }) {
+                    continue;
+                }
+                let disk = if let Source::Url(origin) = &key {
+                    Some(crate::favicon::DiskCache::new(&root, origin))
+                } else {
+                    None
+                };
+                if is_network {
+                    if let Some(disk) = &disk {
+                        // A failed client setup is also cached/backed off.
+                        let mut client = super::favicon::Client::new();
+                        disk.refresh(
+                            |url, limit| {
+                                if !alive.load(Ordering::Acquire) {
+                                    return None;
+                                }
+                                client.as_mut()?.get(url, limit)
+                            },
+                            |path| custom(path, gdiplus).is_some(),
+                        );
+                    }
+                }
+                let image = load(&root, &key, gdiplus).map(Arc::new);
+                // Publish cached pixels immediately, before starting any network I/O.
+                let needs_network =
+                    !is_network && network.is_some() && disk.as_ref().is_some_and(|d| !d.fresh());
+                let completed = state.lock().ok().is_some_and(|mut s| {
+                    let ok = s.complete(&key, generation, image);
+                    if ok && needs_network {
+                        s.entries.get_mut(&key).unwrap().pending = true;
+                    }
+                    ok
+                });
+                if !completed {
+                    continue;
+                }
+                if alive.load(Ordering::Acquire) && !notified.swap(true, Ordering::AcqRel) {
+                    if PostMessageW(window as HWND, READY, 0, 0) == 0 {
+                        notified.store(false, Ordering::Release);
+                    }
+                }
+                if needs_network
+                    && network
+                        .as_ref()
+                        .unwrap()
+                        .try_send((key.clone(), generation))
+                        .is_err()
+                {
+                    if let Result::Ok(mut s) = state.lock() {
+                        if let Some(entry) = s
+                            .entries
+                            .get_mut(&key)
+                            .filter(|e| e.generation == generation)
+                        {
+                            entry.pending = false;
+                        }
+                    }
+                }
+            }
+            if gdiplus {
+                GdiplusShutdown(token);
+            }
+            if com >= 0 {
+                CoUninitialize();
+            }
+        })
+        .is_ok();
+    started.then_some(tx)
 }
 
 struct Dib {
@@ -582,7 +657,10 @@ unsafe fn custom(path: &Path, gdiplus: bool) -> Option<Pixels> {
 pub(super) unsafe fn load(root: &Path, key: &Source, gdiplus: bool) -> Option<Pixels> {
     match key {
         Source::Custom(path) => custom(&storage::resolve(root, path), gdiplus),
-        Source::Association(ext) => shell_icon(Path::new(&format!("item{ext}")), true),
+        Source::Url(origin) => {
+            let path = crate::favicon::DiskCache::new(root, origin).image()?;
+            custom(&path, gdiplus)
+        }
         Source::File(path) => {
             let path = storage::resolve(root, path);
             let value = path.to_string_lossy();
@@ -695,6 +773,27 @@ mod cache_tests {
         assert!(
             matches!(source(&item), Some(Source::File(path)) if path == "instances/hydrus-one.cmd")
         );
+    }
+    #[test]
+    fn automatic_web_icons_share_an_origin_and_manual_choices_override_them() {
+        let mut item = node(1);
+        item.target = Some(Target::Url {
+            url: "https://web.whatsapp.com/private?secret=x".into(),
+        });
+        assert!(
+            matches!(source(&item), Some(Source::Url(origin)) if origin == "https://web.whatsapp.com")
+        );
+        item.icon = ItemIcon::Symbol;
+        assert!(source(&item).is_none());
+        item.icon = ItemIcon::Custom {
+            path: "data/icons/custom.png".into(),
+        };
+        assert!(matches!(source(&item), Some(Source::Custom(_))));
+        item.icon = ItemIcon::Automatic;
+        item.target = Some(Target::Url {
+            url: "mailto:example@example.org".into(),
+        });
+        assert!(source(&item).is_none());
     }
     #[test]
     fn redraws_do_not_repeat_pending_or_failed_shell_requests() {

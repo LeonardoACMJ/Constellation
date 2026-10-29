@@ -9,6 +9,7 @@ use crate::config::{Binding, Input, Mode};
 use std::{
     cell::{Cell, RefCell},
     mem::zeroed,
+    path::{Path, PathBuf},
     ptr::{null, null_mut},
     sync::{Arc, Mutex},
     thread::JoinHandle,
@@ -23,6 +24,7 @@ const RESET: u32 = WM_APP + 41;
 const STOP: u32 = WM_APP + 42;
 pub const ERROR: u32 = WM_APP + 43;
 const OBSERVED: u32 = WM_APP + 44;
+const OBSERVE: u32 = WM_APP + 45;
 struct HookState {
     hwnd: HWND,
     bindings: Vec<Binding>,
@@ -32,6 +34,7 @@ struct HookState {
     eaten: [bool; 256],
     mouse_eaten: [bool; 6],
     active: Option<usize>,
+    pointer_ready: bool,
     available: bool,
     enabled: bool,
     reserved: usize,
@@ -39,6 +42,8 @@ struct HookState {
     foreground: HWND,
     observed_foreground: HWND,
     observed_blocked: bool,
+    observer_thread: u32,
+    observation_pending: bool,
 }
 // HWNDs here are opaque cross-thread notification/comparison handles. Their
 // owner creates and destroys the window only after this worker has stopped.
@@ -47,6 +52,7 @@ type Shared = Arc<Mutex<HookState>>;
 thread_local! {
     static CONTEXT: RefCell<Option<Shared>> = const { RefCell::new(None) };
     static INPUT_THREAD: Cell<u32> = const { Cell::new(0) };
+    static OBSERVER_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 fn context() -> Option<Shared> {
     CONTEXT.with(|v| v.borrow().clone())
@@ -61,6 +67,7 @@ impl Worker {
         hwnd: HWND,
         bindings: Vec<Binding>,
         modes: Vec<Mode>,
+        root: PathBuf,
     ) -> Result<Self, String> {
         let shared = Arc::new(Mutex::new(HookState {
             hwnd,
@@ -71,6 +78,7 @@ impl Worker {
             eaten: [false; 256],
             mouse_eaten: [false; 6],
             active: None,
+            pointer_ready: false,
             available: false,
             enabled: false,
             reserved: 0,
@@ -78,6 +86,8 @@ impl Worker {
             foreground: null_mut(),
             observed_foreground: null_mut(),
             observed_blocked: true,
+            observer_thread: 0,
+            observation_pending: false,
         }));
         let state = shared.clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -90,7 +100,7 @@ impl Worker {
                 CONTEXT.with(|v| *v.borrow_mut() = Some(state.clone()));
                 reset(&state);
                 // Start observation before installing synchronous input hooks.
-                let observer = Observer::start(state.clone(), GetCurrentThreadId());
+                let observer = Observer::start(state.clone(), GetCurrentThreadId(), root);
                 let module = GetModuleHandleW(null());
                 let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0);
                 let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0);
@@ -152,7 +162,9 @@ impl Worker {
         PostThreadMessageW(self.id, UPDATE, 0, 0);
     }
     pub fn active(&self, value: Option<usize>) {
-        self.shared.lock().unwrap().active = value;
+        let mut state = self.shared.lock().unwrap();
+        state.active = value;
+        state.pointer_ready = value.is_some();
     }
     pub unsafe fn resync(&self) {
         PostThreadMessageW(self.id, RESET, 0, 0);
@@ -173,7 +185,7 @@ struct Observer {
     thread: Option<JoinHandle<()>>,
 }
 impl Observer {
-    unsafe fn start(state: Shared, input_thread: u32) -> Result<Self, String> {
+    unsafe fn start(state: Shared, input_thread: u32, root: PathBuf) -> Result<Self, String> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let thread = std::thread::Builder::new()
             .name("constellation-window-observer".into())
@@ -183,6 +195,8 @@ impl Observer {
                 PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
                 CONTEXT.with(|slot| *slot.borrow_mut() = Some(state.clone()));
                 INPUT_THREAD.with(|slot| slot.set(input_thread));
+                OBSERVER_ROOT.with(|slot| *slot.borrow_mut() = Some(root.clone()));
+                state.lock().unwrap().observer_thread = GetCurrentThreadId();
                 let foreground = SetWinEventHook(
                     EVENT_SYSTEM_FOREGROUND,
                     EVENT_SYSTEM_FOREGROUND,
@@ -210,10 +224,14 @@ impl Observer {
                     Err("Cannot observe foreground windows".to_string())
                 });
                 if ok {
-                    observe(&state, input_thread);
+                    observe(&state, input_thread, &root);
                     while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
                         if message.message == STOP {
                             break;
+                        }
+                        if message.message == OBSERVE {
+                            observe(&state, input_thread, &root);
+                            continue;
                         }
                         TranslateMessage(&message);
                         DispatchMessageW(&message);
@@ -226,6 +244,7 @@ impl Observer {
                     UnhookWinEvent(location);
                 }
                 CONTEXT.with(|slot| slot.borrow_mut().take());
+                OBSERVER_ROOT.with(|slot| slot.borrow_mut().take());
             })
             .map_err(|e| e.to_string())?;
         match rx.recv().map_err(|e| e.to_string())? {
@@ -250,20 +269,54 @@ impl Drop for Observer {
         }
     }
 }
-unsafe fn observe(state: &Shared, input_thread: u32) {
+unsafe fn observe(state: &Shared, input_thread: u32, root: &Path) {
     let destination = state.lock().unwrap().hwnd;
     let foreground = GetForegroundWindow();
     let blocked = foreground_blocks_launcher(destination);
     // If focus changed during inspection, wait for its own observation rather
     // than applying another window's fullscreen status to the new foreground.
     let changed_during_inspection = GetForegroundWindow() != foreground;
-    {
+    let changed = {
         let mut h = state.lock().unwrap();
+        let changed = h.observed_foreground != foreground
+            || h.observed_blocked != (blocked || changed_during_inspection);
         h.observed_foreground = foreground;
         h.observed_blocked = blocked || changed_during_inspection;
-    }
+        h.observation_pending = false;
+        changed
+    };
     PostThreadMessageW(input_thread, OBSERVED, 0, 0);
     PostMessageW(destination, FOREGROUND, 0, 0);
+    if changed {
+        // Observer-only I/O, never a low-level hook. No key values, titles or URLs.
+        use std::io::Write;
+        let path = root.join("data/input-state.log");
+        let truncate = std::fs::metadata(&path).is_ok_and(|m| m.len() >= 65536);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(!truncate)
+            .truncate(truncate)
+            .open(path)
+        {
+            let mut class = [0u16; 128];
+            let len = GetClassNameW(foreground, class.as_mut_ptr(), class.len() as i32);
+            let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
+            let time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let _ = writeln!(
+                file,
+                "{time} foreground_class={class:?} blocked={blocked} changed_during_inspection={changed_during_inspection}"
+            );
+        }
+    }
+}
+unsafe fn request_observation(h: &mut HookState, foreground: HWND) {
+    if h.observed_foreground != foreground && !h.observation_pending && h.observer_thread != 0 {
+        h.observation_pending = PostThreadMessageW(h.observer_thread, OBSERVE, 0, 0) != 0;
+    }
 }
 fn hook_allowed(h: &HookState, foreground: HWND) -> bool {
     // The owned radial can receive its first click before its asynchronous
@@ -282,7 +335,9 @@ unsafe fn reset(state: &Shared) {
     for (i, k) in keys.iter_mut().enumerate() {
         *k = GetAsyncKeyState(i as i32) < 0;
     }
-    let mut h = state.lock().unwrap();
+    reconcile_keys(&mut state.lock().unwrap(), keys);
+}
+fn reconcile_keys(h: &mut HookState, keys: [bool; 256]) {
     h.keys = keys;
     for (i, k) in keys.iter().enumerate() {
         h.eaten[i] &= *k;
@@ -293,6 +348,17 @@ unsafe fn reset(state: &Shared) {
 }
 unsafe fn refresh(state: &Shared, force: bool) {
     let foreground = GetForegroundWindow();
+    let resync = {
+        let h = state.lock().unwrap();
+        h.foreground != foreground
+            || (!h.enabled
+                && h.available
+                && h.observed_foreground == foreground
+                && !h.observed_blocked)
+    };
+    if resync {
+        reset(state);
+    }
     let mut h = state.lock().unwrap();
     let hwnd = h.hwnd;
     let enabled = h.available && h.observed_foreground == foreground && !h.observed_blocked;
@@ -354,7 +420,11 @@ unsafe extern "system" fn foreground_event(
     if event == EVENT_OBJECT_LOCATIONCHANGE && (hwnd != GetForegroundWindow() || object != 0) {
         return;
     }
-    observe(&state, INPUT_THREAD.with(Cell::get));
+    OBSERVER_ROOT.with(|root| {
+        if let Some(root) = root.borrow().as_ref() {
+            observe(&state, INPUT_THREAD.with(Cell::get), root);
+        }
+    });
 }
 unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if code < 0 {
@@ -369,6 +439,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: WPARAM, l: LPARAM) -> LRES
         let Ok(mut h) = state.try_lock() else {
             return CallNextHookEx(null_mut(), code, w, l);
         };
+        request_observation(&mut h, foreground);
         let blocked = !hook_allowed(&h, foreground);
         keyboard_packet(&mut h, w, &*(l as *const KBDLLHOOKSTRUCT), blocked)
     };
@@ -390,6 +461,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
         let Ok(mut h) = state.try_lock() else {
             return CallNextHookEx(null_mut(), code, w, l);
         };
+        request_observation(&mut h, foreground);
         let blocked = !hook_allowed(&h, foreground);
         mouse_packet(&mut h, w, &*(l as *const MSLLHOOKSTRUCT), blocked)
     };
@@ -430,7 +502,7 @@ unsafe fn keyboard_packet(
         if let Some(i) = active.filter(|_| !blocked) {
             if a.modes.get(i) == Some(&Mode::Hold) && a.bindings[i].requires(Input::Key(vk as u16))
             {
-                PostMessageW(a.hwnd, RELEASE, i, pointer_packet());
+                hold_release(a, i, pointer_packet());
             }
         }
         let consumed = a.eaten[vk];
@@ -469,6 +541,7 @@ unsafe fn keyboard_packet(
         if !repeat {
             if active.is_none() {
                 a.active = Some(i);
+                a.pointer_ready = false;
                 PostMessageW(a.hwnd, INVOKE, i, 0);
             } else if active == Some(i) && a.modes[i] == Mode::Click {
                 PostMessageW(a.hwnd, INVOKE, i, 0);
@@ -478,7 +551,12 @@ unsafe fn keyboard_packet(
     }
     if active.is_some() && a.enabled && !blocked && !repeat && matches!(vk, 0x1b | 0x20 | 0x08) {
         a.eaten[vk] = true;
-        PostMessageW(a.hwnd, KEY_ACTION, vk, pointer_packet());
+        PostMessageW(
+            a.hwnd,
+            KEY_ACTION,
+            if a.pointer_ready { vk } else { 0x1b },
+            pointer_packet(),
+        );
         return true;
     }
     false
@@ -487,7 +565,7 @@ unsafe fn keyboard_packet(
 unsafe fn mouse_packet(a: &mut HookState, w: WPARAM, e: &MSLLHOOKSTRUCT, blocked: bool) -> bool {
     let msg = w as u32;
     if msg == WM_MOUSEMOVE {
-        if a.active.is_some() {
+        if a.active.is_some() && a.pointer_ready {
             PostMessageW(a.hwnd, POINTER_MOVE, 0, pack_point(e.pt));
         }
         return false;
@@ -513,7 +591,7 @@ unsafe fn mouse_packet(a: &mut HookState, w: WPARAM, e: &MSLLHOOKSTRUCT, blocked
                     .get(i)
                     .is_some_and(|b| b.key == Input::Mouse(button))
             {
-                PostMessageW(a.hwnd, RELEASE, i, pack_point(e.pt));
+                hold_release(a, i, pack_point(e.pt));
             }
         }
         let consumed = a.mouse_eaten[button as usize];
@@ -536,6 +614,7 @@ unsafe fn mouse_packet(a: &mut HookState, w: WPARAM, e: &MSLLHOOKSTRUCT, blocked
         a.mouse_eaten[button as usize] = true;
         if active.is_none() {
             a.active = Some(i);
+            a.pointer_ready = false;
             PostMessageW(a.hwnd, INVOKE, i, 0);
         } else if active == Some(i) && a.modes[i] == Mode::Click {
             PostMessageW(a.hwnd, INVOKE, i, 0);
@@ -544,10 +623,24 @@ unsafe fn mouse_packet(a: &mut HookState, w: WPARAM, e: &MSLLHOOKSTRUCT, blocked
     }
     if active.is_some() && matches!(button, 1 | 2) {
         a.mouse_eaten[button as usize] = true;
-        PostMessageW(a.hwnd, CLICK, button as usize, pack_point(e.pt));
+        if a.pointer_ready {
+            PostMessageW(a.hwnd, CLICK, button as usize, pack_point(e.pt));
+        } else {
+            PostMessageW(a.hwnd, KEY_ACTION, 0x1b, 0);
+        }
         return true;
     }
     false
+}
+
+unsafe fn hold_release(a: &HookState, profile: usize, point: LPARAM) {
+    if a.pointer_ready {
+        PostMessageW(a.hwnd, RELEASE, profile, point);
+    } else {
+        // Released before centering finished: cancel, never select using an
+        // absolute position from before the warp.
+        PostMessageW(a.hwnd, KEY_ACTION, 0x1b, 0);
+    }
 }
 
 #[cfg(test)]
@@ -563,6 +656,7 @@ mod tests {
             eaten: [false; 256],
             mouse_eaten: [false; 6],
             active: None,
+            pointer_ready: false,
             available: true,
             enabled: true,
             reserved: 0,
@@ -570,6 +664,8 @@ mod tests {
             foreground: 2usize as HWND,
             observed_foreground: 2usize as HWND,
             observed_blocked: false,
+            observer_thread: 0,
+            observation_pending: false,
         }
     }
     #[test]
@@ -616,5 +712,93 @@ mod tests {
         assert!(unsafe { mouse_packet(&mut h, WM_LBUTTONUP as usize, &event, true) });
         assert!(!unsafe { mouse_packet(&mut h, WM_LBUTTONDOWN as usize, &event, true) });
         assert!(!h.mouse_eaten[1]);
+    }
+    #[test]
+    fn foreground_resync_recovers_f13_after_missing_a_key_up() {
+        std::thread::spawn(|| unsafe {
+            let mut message: MSG = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            let mut h = state();
+            h.hwnd = null_mut();
+            h.bindings = vec![Binding::parse("F13").unwrap()];
+            h.keys[0x7c] = true;
+            h.eaten[0x7c] = true;
+            // Simulate returning from a window where the hook missed release.
+            reconcile_keys(&mut h, [false; 256]);
+            let event = KBDLLHOOKSTRUCT {
+                vkCode: 0x7c,
+                ..zeroed()
+            };
+            assert!(keyboard_packet(&mut h, WM_KEYDOWN as usize, &event, false));
+            assert_eq!(h.active, Some(0));
+            assert!(!h.pointer_ready);
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            assert_eq!(message.message, INVOKE);
+        })
+        .join()
+        .unwrap();
+    }
+    #[test]
+    fn foreground_resync_preserves_genuinely_held_consumed_keys() {
+        let mut h = state();
+        h.eaten[0x51] = true;
+        h.mouse_eaten[4] = true;
+        let mut keys = [false; 256];
+        keys[0x51] = true;
+        keys[5] = true;
+        reconcile_keys(&mut h, keys);
+        assert!(h.keys[0x51] && h.eaten[0x51] && h.mouse_eaten[4]);
+    }
+    #[test]
+    fn pending_open_ignores_old_motion_and_early_release_cancels() {
+        std::thread::spawn(|| unsafe {
+            let mut message: MSG = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            let mut h = state();
+            h.hwnd = null_mut();
+            h.active = Some(0);
+            h.modes[0] = Mode::Hold;
+            let motion = MSLLHOOKSTRUCT {
+                pt: POINT { x: -900, y: 400 },
+                ..zeroed()
+            };
+            assert!(!mouse_packet(&mut h, WM_MOUSEMOVE as usize, &motion, false));
+            assert_eq!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            hold_release(&h, 0, pack_point(motion.pt));
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            assert_eq!((message.message, message.wParam), (KEY_ACTION, 0x1b));
+            h.pointer_ready = true;
+            mouse_packet(&mut h, WM_MOUSEMOVE as usize, &motion, false);
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            assert_eq!(
+                (message.message, message.lParam),
+                (POINTER_MOVE, pack_point(motion.pt))
+            );
+            hold_release(&h, 0, pack_point(motion.pt));
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            assert_eq!(
+                (message.message, message.lParam),
+                (RELEASE, pack_point(motion.pt))
+            );
+        })
+        .join()
+        .unwrap();
+    }
+    #[test]
+    fn missed_foreground_notification_requests_one_async_recheck() {
+        std::thread::spawn(|| unsafe {
+            let mut message: MSG = zeroed();
+            PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+            let mut h = state();
+            h.observer_thread = GetCurrentThreadId();
+            request_observation(&mut h, 3usize as HWND);
+            request_observation(&mut h, 3usize as HWND);
+            assert!(h.observation_pending);
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            assert_eq!(message.message, OBSERVE);
+            assert_eq!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+        })
+        .join()
+        .unwrap();
     }
 }

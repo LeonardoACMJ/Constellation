@@ -2,7 +2,7 @@
 
 A portable radial launcher for Windows. Press **Ctrl+Q**, move through your menus, and open an app, folder, website or script.
 
-**[Download the Windows beta](https://github.com/LeonardoACMJ/Constellation/releases/tag/v0.1.45)** · [User guide](docs/USER-GUIDE.md) · [Release notes](docs/releases/0.1.45.md)
+**[Download the Windows beta](https://github.com/LeonardoACMJ/Constellation/releases/tag/v0.1.47)** · [User guide](docs/USER-GUIDE.md) · [Release notes](docs/releases/0.1.47.md)
 
 ## Get started
 
@@ -11,14 +11,14 @@ A portable radial launcher for Windows. Press **Ctrl+Q**, move through your menu
 3. Press **Ctrl+Q** to open the menu in the centre of your screen. Hover over a Constellation to explore it; click a Star to launch it. **Escape** closes the menu.
 4. Open **Settings** in the sample menu, or right-click the tray icon and choose **Configure / Visualize…**, to make it yours.
 
-Constellation currently supports **Windows x64**. This is a beta; see the [release notes](docs/releases/0.1.45.md) for known issues. The executable is unsigned, so Windows may show a warning when you download or run it.
+Constellation currently supports **Windows x64**. This is a beta; see the [release notes](docs/releases/0.1.47.md) for known issues. The executable is unsigned, so Windows may show a warning when you download or run it.
 
 ## Build your own constellation
 
 **Stars** open things. **Constellations** group them into menus, and can contain more Constellations.
 
 - Add programs, Windows shortcuts, folders, websites and scripts.
-- Choose your own icons, including icons taken from a different program.
+- Use website favicons automatically, or choose your own images and icons from another program.
 - Give each shortcut its own menu and behaviour: press once to keep the menu open, or hold and release to choose an item.
 - Adjust spacing with a preview, choose a sound or silence, and use a small white dot or your usual cursor.
 

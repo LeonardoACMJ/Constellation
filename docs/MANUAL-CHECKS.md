@@ -95,3 +95,15 @@ The small-screen footer/layout redesign remains outside this release.
 | With the tree/button focused, duplicate/edit an item, then Ctrl+Z and Ctrl+Y. Repeat inside a text field after typing. | Draft history outside fields, field undo/redo inside. Repeated Redo cannot undo a fresh edit; new typing clears field Redo. |
 
 Save on close and Ctrl+S/tree Ctrl+D/F2 have been manually checked. Bundle transfer remains manually unverified; do not require a second installation to continue ordinary use. Its automated round-trip and malformed-document checks pass.
+
+
+## Foreground recovery and moving-pointer invocation (0.1.47)
+
+| Check | Expected result |
+|---|---|
+| Use Task Manager, return to Desktop and press F13. Repeat after closing Task Manager. | Desktop invocation recovers; no stale pressed-key state. A limitation while Task Manager itself is active must not persist on Desktop. If it recurs, preserve data/input-state.log. |
+| Move the mouse left-to-right and right-to-left while invoking Click and Hold profiles. | The radial opens centered; old pre-centering coordinates do not highlight the sector on the side where movement began. Subsequent movement starts from the center. |
+| Release a Hold binding immediately, before opening finishes. | Cancels without launching an item from the old pointer location. |
+| Invoke inside an actual fullscreen app; then return to a regular window. | Fullscreen exclusion remains intact; regular invocation recovers. |
+
+These checks are pending user review. Automated input and queue checks do not move the pointer, focus windows or play audio.

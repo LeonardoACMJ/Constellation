@@ -3,6 +3,7 @@ mod audio;
 mod cursor;
 mod editor;
 mod editor_theme;
+mod favicon;
 mod icons;
 mod input;
 mod item_icons;

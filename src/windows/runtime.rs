@@ -48,6 +48,9 @@ pub(super) unsafe fn pointer_packet() -> LPARAM {
     GetCursorPos(&mut p);
     pack_point(p)
 }
+fn center_in_clip(center: POINT, clip: RECT) -> bool {
+    center.x >= clip.left && center.x < clip.right && center.y >= clip.top && center.y < clip.bottom
+}
 
 struct Runtime {
     hwnd: HWND,
@@ -143,6 +146,7 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
             hwnd,
             a.bindings.clone(),
             a.config.profiles.iter().map(|p| p.mode).collect(),
+            a.root.clone(),
         ) {
             Ok(input) => a.input = Some(input),
             Err(e) => {
@@ -413,19 +417,19 @@ impl Runtime {
         let x = r.left + self.origin.x as i32;
         let y = r.top + self.origin.y as i32;
         self.center = POINT { x, y };
+        let mut clip: RECT = zeroed();
+        if GetClipCursor(&mut clip) != 0 && !center_in_clip(self.center, clip) {
+            self.engine.close();
+            self.notice("Another application confines the cursor; invocation cancelled.");
+            return;
+        }
         if SetCursorPos(x, y) == 0 {
             self.engine.close();
             self.notice("Cannot center the cursor; invocation cancelled.");
             return;
         }
-        let mut actual: POINT = zeroed();
-        GetCursorPos(&mut actual);
-        if actual.x != x || actual.y != y {
-            self.engine.close();
-            SetCursorPos(self.saved.x, self.saved.y);
-            self.notice("Another application confines the cursor; invocation cancelled.");
-            return;
-        }
+        // Physical motion may immediately move away from the centre. It is
+        // not evidence of confinement; inspect the actual clip rectangle above.
         if self.config.profiles[i].dot_cursor {
             self.cursor.prepare(self.scale);
         }
@@ -733,15 +737,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             a.open(w);
             0
         }
-        POINTER_MOVE => {
-            a.pointer_at(unpack_point(l));
-            0
-        }
-        WM_MOUSEMOVE => {
+        POINTER_MOVE | WM_MOUSEMOVE => {
             // Cursor warps and accessibility tools can generate window mouse messages
             // without a low-level hook event. Preserve that route as well.
-            // Window mouse messages may remain queued across a close/reopen.
-            // Use today's cursor, never the last gesture's stale coordinates.
+            // Both routes can retain pre-centering coordinates while opening.
+            // Read the current cursor, never replay those absolute positions.
             let mut p: POINT = zeroed();
             if GetCursorPos(&mut p) != 0 {
                 a.pointer_at(p);
@@ -983,6 +983,20 @@ unsafe fn discard_gesture_packets(hwnd: HWND) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn confinement_check_uses_clip_bounds_not_motion_after_warp() {
+        let clip = RECT {
+            left: -1920,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        assert!(center_in_clip(POINT { x: 960, y: 540 }, clip));
+        assert!(center_in_clip(POINT { x: -960, y: 540 }, clip));
+        assert!(!center_in_clip(POINT { x: 1920, y: 540 }, clip));
+        assert!(!center_in_clip(POINT { x: 0, y: 1080 }, clip));
+        assert!(!center_in_clip(POINT { x: -1921, y: 0 }, clip));
+    }
 
     // Each test owns a fresh thread queue. No windows, hooks, input or audio.
     #[test]
@@ -1186,7 +1200,9 @@ mod native_modal_tests {
                 y: ((*APP).origin.y + sector.dot.y * (*APP).scale) as i32,
             };
             ClientToScreen(hwnd, &mut point);
-            SendMessageW(hwnd, POINTER_MOVE, 0, pack_point(point));
+            assert_ne!(SetCursorPos(point.x, point.y), 0);
+            // A stale pre-warp packet must not override the current position.
+            SendMessageW(hwnd, POINTER_MOVE, 0, pack_point(blank));
             assert_eq!((*APP).engine.hovered, Some(sector.id));
             SendMessageW(hwnd, KEY_ACTION, 0x1b, 0);
             assert!((*APP).engine.profile.is_none());
