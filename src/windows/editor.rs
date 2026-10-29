@@ -1260,7 +1260,9 @@ impl Editor {
         self.saved = self.c.clone();
         self.dirty = false;
         self.advice();
-        self.status = "Saved. New settings apply on the next radial invocation.".into();
+        self.status =
+            "Saved. Launcher reloads in the background; an open menu keeps its current settings."
+                .into();
         Ok(())
     }
     unsafe fn transfer(&mut self, export: bool) -> Result<(), String> {
@@ -2163,7 +2165,7 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 e.refresh();
                 e.settings_to_controls();
                 e.status =
-                    "Saved. The resident launcher reloads settings on its next invocation.".into();
+                    "Saved. Launcher reloads in the background; an open menu keeps its current settings.".into();
                 InvalidateRect(e.hwnd, null(), 1);
                 Ok(())
             })();

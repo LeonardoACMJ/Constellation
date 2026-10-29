@@ -1,5 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 mod audio;
+mod config_reload;
 mod cursor;
 mod editor;
 mod editor_theme;

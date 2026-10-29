@@ -132,6 +132,8 @@ The Start menu entry starts the tray app, or opens/raises Configure if it is alr
 
 Stop the resident app using **Quit** in its tray menu. Closing the configuration window leaves the tray app running. Stop before moving the folder or replacing the executable; preserve `data` when updating.
 
+**Background configuration reload (0.1.48):** opening the radial uses settings already held in memory. Saving in Settings or editing `data/config.json` externally reloads and validates changes in the background. A menu already open keeps its current settings until it closes. If a change is invalid, the launcher keeps the last valid settings and reports the error; correcting the file triggers another reload. Reloading is asynchronous, so an invocation immediately after Save may still use the previous settings while validation finishes. The worker sleeps between change notifications, without polling or a navigation delay. If the filesystem cannot provide notifications, Constellation reports that limitation: Settings Save still reloads, while external edits require restarting the app.
+
 ## Preview limits
 
 This is a Windows beta. The configuration UI uses native Windows controls. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.

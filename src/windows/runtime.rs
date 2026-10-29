@@ -1,5 +1,5 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use super::{audio::Chimes, editor, input::Worker, smooth, target, wide};
+use super::{audio::Chimes, config_reload, editor, input::Worker, smooth, target, wide};
 use crate::{
     config::{Binding, Config, CursorEnd, Mode},
     engine::{Action, Engine},
@@ -78,7 +78,7 @@ struct Runtime {
     smoke_phase: usize,
     smoke_opened: bool,
     instance: HANDLE,
-    reload_requested: bool,
+    reload: Option<config_reload::Worker>,
 }
 static mut APP: *mut Runtime = null_mut();
 
@@ -142,6 +142,13 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
         APP = Box::into_raw(app);
         let startup_guard = super::DispatchGuard::enter().expect("resident startup dispatch");
         let a = &mut *APP;
+        match config_reload::Worker::start(hwnd, a.root.clone()) {
+            Ok(worker) => a.reload = Some(worker),
+            Err(error) => {
+                cleanup();
+                return Err(error);
+            }
+        }
         match Worker::start(
             hwnd,
             a.bindings.clone(),
@@ -206,6 +213,7 @@ unsafe fn cleanup() {
     }
     let mut a = Box::from_raw(APP);
     APP = null_mut();
+    drop(a.reload.take());
     a.dismiss(true);
     drop(a.input.take());
     if a.session_notifications {
@@ -285,7 +293,7 @@ impl Runtime {
                 smoke_phase: 0,
                 smoke_opened: false,
                 instance,
-                reload_requested: false,
+                reload: None,
             }
         }
     }
@@ -317,21 +325,37 @@ impl Runtime {
         tray.dwInfoFlags = flags;
         Shell_NotifyIconW(NIM_MODIFY, &tray);
     }
-    unsafe fn reload(&mut self) {
-        match storage::read(&self.root) {
-            Ok(c) => {
-                self.bindings = c
-                    .profiles
-                    .iter()
-                    .map(|p| Binding::parse(&p.binding).expect("validated binding"))
-                    .collect();
-                self.config = c;
+    unsafe fn apply_ready_config(&mut self) {
+        let Some(result) = self
+            .reload
+            .as_ref()
+            .and_then(|worker| worker.take_ready(self.engine.profile.is_some()))
+        else {
+            return;
+        };
+        match result {
+            Ok(snapshot) => {
+                // Saving unchanged JSON is also an explicit icon refresh.
                 self.renderer.invalidate_icons();
+                if snapshot.config == self.config {
+                    return;
+                }
+                // Quiesce old bindings before draining queued gesture indices.
+                // A queued old index must never dispatch a different new profile.
+                if let Some(input) = &self.input {
+                    input.configure(
+                        self.bindings.clone(),
+                        self.config.profiles.iter().map(|p| p.mode).collect(),
+                        false,
+                    );
+                }
+                self.cancel_packets();
+                self.config = snapshot.config;
+                self.bindings = snapshot.bindings;
                 self.resync_input();
                 self.refresh_registration();
-                self.reload_requested = false;
             }
-            Err(e) => self.notice(&e),
+            Err(error) => self.notice(&error),
         }
     }
     unsafe fn open(&mut self, i: usize) {
@@ -340,7 +364,7 @@ impl Runtime {
             input.active(self.engine.profile);
         }
     }
-    unsafe fn open_inner(&mut self, mut i: usize) {
+    unsafe fn open_inner(&mut self, i: usize) {
         if self.paused
             || self.menu_open
             || self.session_blocked
@@ -355,33 +379,6 @@ impl Runtime {
                 self.dismiss(true);
             }
             return;
-        }
-        let invoked = self.bindings.get(i).cloned();
-        match storage::read(&self.root) {
-            Ok(c) => {
-                let new_bindings = c
-                    .profiles
-                    .iter()
-                    .map(|p| Binding::parse(&p.binding))
-                    .collect::<Result<Vec<_>, _>>();
-                if let Ok(b) = new_bindings {
-                    let changed = b != self.bindings;
-                    self.config = c;
-                    if changed {
-                        self.bindings = b;
-                        self.refresh_registration();
-                        let Some(index) = self
-                            .bindings
-                            .iter()
-                            .position(|b| Some(b) == invoked.as_ref())
-                        else {
-                            return;
-                        };
-                        i = index;
-                    }
-                }
-            }
-            Err(e) => self.notice(&e),
         }
         if !self.engine.open(i, &self.config) {
             return;
@@ -481,9 +478,7 @@ impl Runtime {
         if let Some(policy) = policy.filter(|_| restore) {
             self.finish_cursor(policy);
         }
-        if self.reload_requested {
-            self.reload();
-        }
+        self.apply_ready_config();
     }
     unsafe fn cancel_packets(&mut self) {
         if let Some(input) = &self.input {
@@ -528,6 +523,7 @@ impl Runtime {
                     ShowWindow(self.hwnd, SW_HIDE);
                     self.cursor.restore();
                     self.renderer.release_frame();
+                    self.apply_ready_config();
                 }
                 InvalidateRect(self.hwnd, null(), 0);
             }
@@ -636,6 +632,7 @@ unsafe fn defer_runtime_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> O
             | WM_CANCELMODE
             | WM_CAPTURECHANGED
             | RELOAD_CONFIG
+            | config_reload::READY
             | super::item_icons::READY
             | target::READY
             | TRAY_MENU_DONE
@@ -712,11 +709,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         RELOAD_CONFIG => {
-            if a.engine.profile.is_some() {
-                a.reload_requested = true;
-            } else {
-                a.reload();
+            if let Some(worker) = &a.reload {
+                worker.request();
             }
+            0
+        }
+        config_reload::READY => {
+            a.apply_ready_config();
             0
         }
         WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
@@ -761,9 +760,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     if !foreground_blocks_launcher(hwnd) {
                         a.finish_cursor(policy);
                     }
-                    if a.reload_requested {
-                        a.reload();
-                    }
+                    a.apply_ready_config();
                 } else {
                     a.action(result);
                 }
@@ -1011,6 +1008,10 @@ mod tests {
                 Some(0)
             );
             assert_eq!(
+                defer_runtime_message(null_mut(), config_reload::READY, 0, 0),
+                Some(0)
+            );
+            assert_eq!(
                 defer_runtime_message(null_mut(), WM_DPICHANGED, 0, 123),
                 Some(0)
             );
@@ -1027,6 +1028,7 @@ mod tests {
                 vec![
                     (FOREGROUND, 0),
                     (WM_CAPTURECHANGED, 0),
+                    (config_reload::READY, 0),
                     (DEFERRED_DPI_CHANGE, 0)
                 ]
             );
@@ -1066,12 +1068,15 @@ mod tests {
                 POINTER_MOVE,
                 CLICK,
                 RELOAD_CONFIG,
+                config_reload::READY,
             ] {
                 assert_ne!(PostThreadMessageW(GetCurrentThreadId(), kind, 0, 0), 0);
             }
             discard_gesture_packets(null_mut());
             assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
             assert_eq!(message.message, RELOAD_CONFIG);
+            assert_ne!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
+            assert_eq!(message.message, config_reload::READY);
             assert_eq!(PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE), 0);
         })
         .join()

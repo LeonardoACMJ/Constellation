@@ -107,3 +107,14 @@ Save on close and Ctrl+S/tree Ctrl+D/F2 have been manually checked. Bundle trans
 | Invoke inside an actual fullscreen app; then return to a regular window. | Fullscreen exclusion remains intact; regular invocation recovers. |
 
 These checks are pending user review. Automated input and queue checks do not move the pointer, focus windows or play audio.
+
+## Cached invocation and background reload (0.1.48)
+
+| Check | Expected result |
+|---|---|
+| Invoke repeatedly with a large tree, including while moving the pointer. | Opening uses the existing validated configuration; no config file read/parse precedes centering. Hold, Click and fullscreen exclusion retain their behavior. |
+| Save a rename or binding change in Settings, then invoke after background validation finishes. | New settings apply without restarting; old binding indices cannot activate a different profile. An immediate invocation may use the previous snapshot. |
+| In a disposable copy, edit config.json externally while a menu is open, then select/cancel and reopen. | The open gesture retains its original names, geometry, targets and binding semantics. After closing, the latest validated snapshot applies. |
+| In that copy, save invalid JSON, invoke, then repair it. | One change-driven error report; the last good menu remains usable. Repair reloads without a restart. Logs and backups do not cause configuration reloads. |
+
+Automated device-free checks cover directory notifications, atomic saves, malformed-file recovery, latest-only snapshot deferral and dispatch-queue preservation. Actual opening latency and input feel remain manual checks.
