@@ -5,13 +5,29 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: qualification-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.resolve.outputs.reuse }}
+      run_id: ${{ steps.resolve.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: resolve
+        name: Resolve exact-commit qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci_qualification.py resolve
+
   core:
+    needs: qualification
+    if: needs.qualification.outputs.reuse != 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -25,6 +41,8 @@ jobs:
         run: cargo clippy --locked --all-targets -- -A warnings -D clippy::correctness
       - name: Release documents and links
         run: python scripts/check_release.py
+      - name: CI qualification regression checks
+        run: python -m unittest discover -s tests -p "test_ci_qualification.py"
       - run: cargo test --locked
       - run: cargo fmt --all --check
       - name: Native menu and dialog regressions
@@ -67,3 +85,26 @@ jobs:
           name: Constellation-render-review
           path: .local/render-review/
           if-no-files-found: ignore
+
+  reuse-qualified-build:
+    needs: qualification
+    if: needs.qualification.outputs.reuse == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Download the qualified exact-commit package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ needs.qualification.outputs.run_id }}
+        run: gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name Constellation-windows-x64 --dir dist
+      - name: Recheck qualification and package integrity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ needs.qualification.outputs.run_id }}
+        run: python scripts/ci_qualification.py verify --run-id "$SOURCE_RUN"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Constellation-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256

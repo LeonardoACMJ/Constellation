@@ -12,6 +12,25 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {"constellation.exe", "LICENSE", "README.md", "PORTABLE-MANIFESTO.md", "THIRD-PARTY-NOTICES.txt"}
 
 
+def inspect_package(archive, version, qualified_executable=None):
+    """Validate portable contents; optionally compare an independently built executable."""
+    archive = Path(archive)
+    assert archive.name == f"Constellation-{version}-windows-x64.zip", "Archive name/version mismatch"
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    checksum = archive.with_suffix(".zip.sha256").read_text(encoding="ascii").split()
+    assert checksum == [digest, archive.name], "Checksum file mismatch"
+    with zipfile.ZipFile(archive) as z:
+        assert z.testzip() is None, "Corrupt archive"
+        assert set(z.namelist()) == {f"Constellation/{name}" for name in FILES}, "Unexpected package contents"
+        assert len(z.namelist()) == len(FILES), "Duplicate archive members"
+        if qualified_executable is not None:
+            assert hashlib.sha256(z.read("Constellation/constellation.exe")).digest() == hashlib.sha256(Path(qualified_executable).read_bytes()).digest(), "Archive executable differs from qualified build"
+        for name, source in [("LICENSE", "LICENSE"), ("README.md", "docs/USER-GUIDE.md"), ("PORTABLE-MANIFESTO.md", "docs/PORTABLE-MANIFESTO.md")]:
+            # Git checkouts can differ in line endings without changing source content.
+            assert z.read(f"Constellation/{name}").replace(b"\r\n", b"\n") == (ROOT / source).read_bytes().replace(b"\r\n", b"\n"), f"Stale packaged {name}"
+    return digest
+
+
 def check(archive=None, published_json=None):
     version = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
     lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
@@ -27,17 +46,7 @@ def check(archive=None, published_json=None):
         assert not published_json, "--published-json requires the qualified local --archive"
         return version
     archive = Path(archive)
-    assert archive.name == f"Constellation-{version}-windows-x64.zip", "Archive name/version mismatch"
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    checksum = archive.with_suffix(".zip.sha256").read_text(encoding="ascii").split()
-    assert checksum == [digest, archive.name], "Checksum file mismatch"
-    with zipfile.ZipFile(archive) as z:
-        assert z.testzip() is None, "Corrupt archive"
-        assert set(z.namelist()) == {f"Constellation/{name}" for name in FILES}, "Unexpected package contents"
-        assert len(z.namelist()) == len(FILES), "Duplicate archive members"
-        assert hashlib.sha256(z.read("Constellation/constellation.exe")).digest() == hashlib.sha256((ROOT / "target/release/constellation.exe").read_bytes()).digest(), "Archive executable differs from qualified build"
-        for name, source in [("LICENSE", "LICENSE"), ("README.md", "docs/USER-GUIDE.md"), ("PORTABLE-MANIFESTO.md", "docs/PORTABLE-MANIFESTO.md")]:
-            assert z.read(f"Constellation/{name}") == (ROOT / source).read_bytes(), f"Stale packaged {name}"
+    digest = inspect_package(archive, version, ROOT / "target/release/constellation.exe")
     if published_json:
         metadata = json.loads(Path(published_json).read_text(encoding="utf-8"))
         assert metadata["tag_name"] == f"v{version}", "Published tag differs"
