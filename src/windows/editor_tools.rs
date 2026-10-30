@@ -312,7 +312,7 @@ pub unsafe fn open(
                 14,
                 230,
                 150,
-                CBS_DROPDOWNLIST as u32 | WS_TABSTOP,
+                CBS_DROPDOWNLIST as u32 | WS_TABSTOP | WS_VSCROLL,
             );
             refresh_presets(hwnd);
             control(hwnd, "BUTTON", "Reset", RESET, 355, 14, 110, 28, WS_TABSTOP);
@@ -636,6 +636,44 @@ unsafe fn refresh_presets(hwnd: HWND) {
     {
         send(hwnd, PRESET, CB_ADDSTRING, 0, wide(name).as_ptr() as isize);
     }
+    size_palette_dropdown(hwnd);
+}
+unsafe fn size_palette_dropdown(hwnd: HWND) {
+    let combo = GetDlgItem(hwnd, PRESET);
+    let mut rect: RECT = zeroed();
+    if combo.is_null() || GetWindowRect(combo, &mut rect) == 0 {
+        return;
+    }
+    let mut monitor: MONITORINFO = zeroed();
+    monitor.cbSize = size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(
+        MonitorFromWindow(combo, MONITOR_DEFAULTTONEAREST),
+        &mut monitor,
+    ) == 0
+    {
+        return;
+    }
+    let dpi = GetDpiForWindow(combo);
+    let row = send(hwnd, PRESET, CB_GETITEMHEIGHT, 0, 0).max((16 * dpi / 96) as isize) as i32;
+    let padding = 2 * GetSystemMetricsForDpi(SM_CYEDGE, dpi) + 4;
+    // Measure the selection field explicitly; never add to a previous dropdown
+    // extent, which could grow the control on each opening.
+    // https://learn.microsoft.com/windows/win32/controls/cb-getitemheight
+    let header =
+        send(hwnd, PRESET, CB_GETITEMHEIGHT, usize::MAX, 0).max(row as isize) as i32 + padding;
+    let available =
+        (monitor.rcWork.bottom - rect.top - header).max(rect.top - monitor.rcWork.top) - 8;
+    let count = send(hwnd, PRESET, CB_GETCOUNT, 0, 0).max(0) as usize;
+    let rows = crate::editor_layout::dropdown_rows(count, row, available, padding);
+    SetWindowPos(
+        combo,
+        null_mut(),
+        0,
+        0,
+        rect.right - rect.left,
+        header + rows as i32 * row + padding,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+    );
 }
 unsafe fn palette_save_label(hwnd: HWND) {
     let name = text(hwnd, PALETTE_NAME);
@@ -837,7 +875,9 @@ unsafe fn proc_impl(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESUL
     let mut result = None;
     match kind {
         THEME => {
-            if id == PRESET && notify == CBN_SELCHANGE as usize {
+            if id == PRESET && notify == CBN_DROPDOWN as usize {
+                size_palette_dropdown(hwnd);
+            } else if id == PRESET && notify == CBN_SELCHANGE as usize {
                 let index = send(hwnd, PRESET, CB_GETCURSEL, 0, 0);
                 let selected = if index >= 4 {
                     state(hwnd).and_then(|t| {

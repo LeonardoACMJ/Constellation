@@ -168,3 +168,5 @@ Unfinished edits are captured after a short editing pause in **one** `data/edito
 In **Tools → Themes & colors**, enter a **Name** and click **Save palette**. Your palette appears in the Palette selector beside the built-in options. Selecting it reloads those colors for editing. To update it, select it, edit the colors and click **Replace palette**; a different name creates another palette. Built-in names cannot be replaced.
 
 This button saves the portable library immediately. It does not change the active launcher theme or save unrelated edits: use **Use palette in draft → Save** to apply the colors. The library lives in `data/palettes.json`; copying the whole portable folder preserves it. JSON/bundle exports carry the active theme, not this separate library.
+
+The palette selector fits up to twelve visible entries within the monitor work area, then scrolls normally. Custom palettes use one **Outline** color for Stars, Constellations and their highlights; the original default radial retains its historical outline variations.
