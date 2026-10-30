@@ -19,3 +19,5 @@ pub mod sound;
 pub mod background;
 
 pub mod bundle;
+
+pub mod palettes;

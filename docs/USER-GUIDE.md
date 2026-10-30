@@ -162,3 +162,9 @@ The **Tools…** button opens these tools. Each tool changes the editor draft; *
 Unfinished edits are captured after a short editing pause in **one** `data/editor-draft.json`, including unvalidated text and open configuration-tool drafts. It never feeds the launcher. Save or explicit discard clears recovery; an abnormal exit may leave it for the next editor start. Captures are bounded to 16 MiB and are best effort: changes made immediately before power loss may not be present. The document contains the text you were editing; it travels only when you copy the whole portable folder, not with JSON/bundle exports. If recovery cannot be written, ordinary explicit Save remains available.
 
 **Theme compatibility (0.1.49):** the default palette is omitted. Custom palettes add `theme`, rejected by older builds. Preserve a compatible configuration before downgrading, or Reset the palette and Save with this build first. The format version is unchanged; a backup is useful only if it predates the incompatible field.
+
+### Keep your own palettes
+
+In **Tools → Themes & colors**, enter a **Name** and click **Save palette**. Your palette appears in the Palette selector beside the built-in options. Selecting it reloads those colors for editing. To update it, select it, edit the colors and click **Replace palette**; a different name creates another palette. Built-in names cannot be replaced.
+
+This button saves the portable library immediately. It does not change the active launcher theme or save unrelated edits: use **Use palette in draft → Save** to apply the colors. The library lives in `data/palettes.json`; copying the whole portable folder preserves it. JSON/bundle exports carry the active theme, not this separate library.

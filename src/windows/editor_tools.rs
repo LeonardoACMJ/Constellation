@@ -34,6 +34,8 @@ const OK: i32 = 1;
 const CANCEL: i32 = 2;
 const STATUS: i32 = 4;
 const PRESET: i32 = 5;
+const PALETTE_NAME: i32 = 7;
+const PALETTE_SAVE: i32 = 8;
 const RESET: i32 = 6;
 const SOURCES: i32 = 10;
 const FILTER: i32 = 11;
@@ -51,6 +53,7 @@ pub enum Action {
 enum Kind {
     Theme {
         palette: Palette,
+        saved: Vec<crate::palettes::NamedPalette>,
     },
     Move {
         sources: Vec<Row>,
@@ -66,6 +69,7 @@ enum Kind {
 }
 struct Tools {
     owner: HWND,
+    root: PathBuf,
     kind: Kind,
     result: Option<Action>,
 }
@@ -98,6 +102,11 @@ unsafe fn control(
 ) {
     let scale = GetDpiForWindow(hwnd) as f64 / 96.;
     let px = |v: i32| (v as f64 * scale).round() as i32;
+    let style = if class == "BUTTON" && matches!(style & BS_TYPEMASK as u32, 0 | 1) {
+        (style & !(BS_TYPEMASK as u32)) | BS_OWNERDRAW as u32
+    } else {
+        style
+    };
     let child = CreateWindowExW(
         0,
         wide(class).as_ptr(),
@@ -131,7 +140,12 @@ struct Recovery {
 }
 pub unsafe fn capture(hwnd: HWND) -> Option<String> {
     let (kind, ids) = match &state(hwnd)?.kind {
-        Kind::Theme { .. } => (THEME, (100..113).collect::<Vec<_>>()),
+        Kind::Theme { .. } => (
+            THEME,
+            (100..113)
+                .chain(std::iter::once(PALETTE_NAME))
+                .collect::<Vec<_>>(),
+        ),
         Kind::Move { .. } => (MOVE, vec![FILTER]),
         Kind::Paths { .. } => (PATHS, vec![OLD, NEW]),
     };
@@ -159,7 +173,7 @@ pub fn recovery_kind(value: &str) -> Option<u32> {
 pub unsafe fn restore(hwnd: HWND, value: &str) {
     if let Ok(recovery) = serde_json::from_str::<Recovery>(value) {
         for (id, value) in recovery.fields {
-            if (100..113).contains(&id) || matches!(id, FILTER | OLD | NEW) {
+            if (100..113).contains(&id) || matches!(id, PALETTE_NAME | FILTER | OLD | NEW) {
                 set(hwnd, id, &value);
             }
         }
@@ -246,9 +260,16 @@ pub unsafe fn open(
     }
     theme::window(hwnd);
     super::icons::set_small(hwnd);
+    let library = if kind == THEME {
+        crate::palettes::load(&root)
+    } else {
+        Ok(vec![])
+    };
+    let library_error = library.as_ref().err().cloned();
     let tool_kind = match kind {
         THEME => Kind::Theme {
             palette: config.theme,
+            saved: library.unwrap_or_default(),
         },
         MOVE => {
             let all = organize::rows(&config);
@@ -274,13 +295,14 @@ pub unsafe fn open(
         GWLP_USERDATA,
         Box::into_raw(Box::new(Tools {
             owner,
+            root: root.clone(),
             kind: tool_kind,
             result: None,
         })) as isize,
     );
     match kind {
         THEME => {
-            label(hwnd, "Palette", 20, 18, 200);
+            label(hwnd, "Palette", 20, 18, 80);
             control(
                 hwnd,
                 "COMBOBOX",
@@ -292,10 +314,38 @@ pub unsafe fn open(
                 150,
                 CBS_DROPDOWNLIST as u32 | WS_TABSTOP,
             );
-            for name in ["Constellation (default)", "Forest", "Rose dusk", "Daylight"] {
-                send(hwnd, PRESET, CB_ADDSTRING, 0, wide(name).as_ptr() as isize);
-            }
+            refresh_presets(hwnd);
             control(hwnd, "BUTTON", "Reset", RESET, 355, 14, 110, 28, WS_TABSTOP);
+            label(hwnd, "Name", 495, 18, 50);
+            control(
+                hwnd,
+                "EDIT",
+                "",
+                PALETTE_NAME,
+                555,
+                14,
+                205,
+                28,
+                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+            );
+            send(
+                hwnd,
+                PALETTE_NAME,
+                windows_sys::Win32::UI::Controls::EM_SETLIMITTEXT,
+                128,
+                0,
+            );
+            control(
+                hwnd,
+                "BUTTON",
+                "Save palette",
+                PALETTE_SAVE,
+                775,
+                14,
+                140,
+                28,
+                WS_TABSTOP,
+            );
             for (i, name) in Palette::LABELS.iter().enumerate() {
                 let x = 20 + (i / 7) as i32 * 265;
                 let y = 65 + (i % 7) as i32 * 57;
@@ -324,6 +374,27 @@ pub unsafe fn open(
                 );
             }
             fill_palette(hwnd, config.theme);
+            let built_in = (0..4).find(|i| Palette::preset(*i) == config.theme);
+            if let Some(index) = built_in {
+                send(hwnd, PRESET, CB_SETCURSEL, index, 0);
+            } else {
+                let matching = state(hwnd).and_then(|tool| {
+                    if let Kind::Theme { saved, .. } = &tool.kind {
+                        saved
+                            .iter()
+                            .enumerate()
+                            .find(|(_, entry)| entry.palette == config.theme)
+                            .map(|(index, entry)| (index, entry.name.clone()))
+                    } else {
+                        None
+                    }
+                });
+                if let Some((index, name)) = matching {
+                    send(hwnd, PRESET, CB_SETCURSEL, index + 4, 0);
+                    set(hwnd, PALETTE_NAME, &name);
+                    palette_save_label(hwnd);
+                }
+            }
             label(
                 hwnd,
                 "Live preview · changes stay in this draft until Save",
@@ -530,6 +601,9 @@ pub unsafe fn open(
         hwnd, "BUTTON", "Cancel", CANCEL, 300, 525, 130, 32, WS_TABSTOP,
     );
     control(hwnd, "STATIC", "", STATUS, 20, 498, 895, 22, 0);
+    if let Some(message) = library_error {
+        error(hwnd, &message);
+    }
     if kind == PATHS {
         EnableWindow(GetDlgItem(hwnd, OK), 0);
         start_scan(hwnd);
@@ -544,11 +618,51 @@ pub unsafe fn open(
     super::focus_window(hwnd);
     Ok(hwnd)
 }
+unsafe fn refresh_presets(hwnd: HWND) {
+    let names: Vec<String> = state(hwnd)
+        .and_then(|t| {
+            if let Kind::Theme { saved, .. } = &t.kind {
+                Some(saved.iter().map(|p| p.name.clone()).collect())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    send(hwnd, PRESET, CB_RESETCONTENT, 0, 0);
+    for name in crate::palettes::BUILTINS
+        .iter()
+        .map(|s| s.to_string())
+        .chain(names)
+    {
+        send(hwnd, PRESET, CB_ADDSTRING, 0, wide(name).as_ptr() as isize);
+    }
+}
+unsafe fn palette_save_label(hwnd: HWND) {
+    let name = text(hwnd, PALETTE_NAME);
+    let replace = state(hwnd).is_some_and(|t| {
+        if let Kind::Theme { saved, .. } = &t.kind {
+            saved
+                .iter()
+                .any(|p| p.name.to_lowercase() == name.trim().to_lowercase())
+        } else {
+            false
+        }
+    });
+    set(
+        hwnd,
+        PALETTE_SAVE,
+        if replace {
+            "Replace palette"
+        } else {
+            "Save palette"
+        },
+    );
+}
 unsafe fn fill_palette(hwnd: HWND, palette: Palette) {
     for (i, c) in palette.colors().iter().enumerate() {
         set(hwnd, 100 + i as i32, &c.hex());
     }
-    if let Kind::Theme { palette: p } = &mut state(hwnd).unwrap().kind {
+    if let Kind::Theme { palette: p, .. } = &mut state(hwnd).unwrap().kind {
         *p = palette;
     }
     InvalidateRect(hwnd, null(), 0);
@@ -637,7 +751,7 @@ unsafe fn proc_impl(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESUL
         render::buffered(hwnd, theme::background(), |dc| {
             theme::logical_dc(dc, GetDpiForWindow(hwnd));
             if let Some(Tools {
-                kind: Kind::Theme { palette },
+                kind: Kind::Theme { palette, .. },
                 ..
             }) = state(hwnd)
             {
@@ -725,14 +839,62 @@ unsafe fn proc_impl(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESUL
         THEME => {
             if id == PRESET && notify == CBN_SELCHANGE as usize {
                 let index = send(hwnd, PRESET, CB_GETCURSEL, 0, 0);
-                fill_palette(hwnd, Palette::preset(index.max(0) as usize));
+                let selected = if index >= 4 {
+                    state(hwnd).and_then(|t| {
+                        if let Kind::Theme { saved, .. } = &t.kind {
+                            saved.get(index as usize - 4).cloned()
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+                if let Some(entry) = selected {
+                    fill_palette(hwnd, entry.palette);
+                    set(hwnd, PALETTE_NAME, &entry.name);
+                } else {
+                    fill_palette(hwnd, Palette::preset(index.max(0) as usize));
+                    set(hwnd, PALETTE_NAME, "");
+                }
+                palette_save_label(hwnd);
+            } else if id == PALETTE_NAME && notify == EN_CHANGE as usize {
+                palette_save_label(hwnd);
+            } else if id == PALETTE_SAVE {
+                let result = (|| -> Result<(), String> {
+                    let palette = read_palette(hwnd)?;
+                    let name = text(hwnd, PALETTE_NAME);
+                    let root = state(hwnd).unwrap().root.clone();
+                    let saved = crate::palettes::save_named(&root, &name, palette)?;
+                    let index = saved
+                        .iter()
+                        .position(|p| p.name.eq_ignore_ascii_case(name.trim()))
+                        .unwrap();
+                    if let Kind::Theme { saved: slot, .. } = &mut state(hwnd).unwrap().kind {
+                        *slot = saved;
+                    }
+                    refresh_presets(hwnd);
+                    send(hwnd, PRESET, CB_SETCURSEL, index + 4, 0);
+                    set(hwnd, PALETTE_NAME, name.trim());
+                    palette_save_label(hwnd);
+                    error(
+                        hwnd,
+                        "Palette saved in the portable library. Use palette in draft, then Save to apply it.",
+                    );
+                    Ok(())
+                })();
+                if let Err(message) = result {
+                    error(hwnd, &message);
+                }
             } else if id == RESET {
                 fill_palette(hwnd, Palette::default());
+                send(hwnd, PRESET, CB_SETCURSEL, 0, 0);
+                set(hwnd, PALETTE_NAME, "");
             } else if (100..113).contains(&id) && notify == EN_CHANGE as usize {
                 match read_palette(hwnd) {
                     Ok(p) => {
                         if let Some(Tools {
-                            kind: Kind::Theme { palette },
+                            kind: Kind::Theme { palette, .. },
                             ..
                         }) = state(hwnd)
                         {
@@ -879,7 +1041,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     if msg == WM_COMMAND && (200..213).contains(&((w & 0xffff) as i32)) {
         let index = (w & 0xffff) as usize - 200;
         let initial = state(hwnd).and_then(|t| {
-            if let Kind::Theme { palette } = &t.kind {
+            if let Kind::Theme { palette, .. } = &t.kind {
                 Some(palette.colors()[index].gdi())
             } else {
                 None
