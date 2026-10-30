@@ -54,3 +54,21 @@ pub fn maximum(f: &Layout, item: bool) -> i32 {
 pub fn item(base: Rect) -> bool {
     (295..690).contains(&base.x) && base.y < 906
 }
+/// Reveal a focused control without moving a pane whose focus is already visible.
+pub fn reveal(position: i32, top: i32, height: i32, page: i32, maximum: i32) -> i32 {
+    let next = if top < position {
+        top
+    } else if top + height > position + page {
+        top + height.min(page) - page
+    } else {
+        position
+    };
+    next.clamp(0, maximum)
+}
+/// Client-space pointer routing, accounting for the outer horizontal scrollbar.
+pub fn hit_pane(f: &Layout, scroll_x: i32, x: i32, y: i32) -> Option<bool> {
+    [false, true].into_iter().find(|&item| {
+        let r = pane(f, item);
+        x + scroll_x >= r.x && x + scroll_x < r.x + r.w && y >= r.y && y < r.y + r.h
+    })
+}

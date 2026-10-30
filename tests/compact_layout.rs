@@ -1,5 +1,20 @@
 use constellation::{compact_layout as c, editor_layout::Rect};
 #[test]
+fn keyboard_reveal_and_wheel_routing_preserve_independent_context() {
+    assert_eq!(c::reveal(200, 240, 28, 400, 600), 200);
+    assert_eq!(c::reveal(200, 80, 28, 400, 600), 80);
+    assert_eq!(c::reveal(0, 700, 28, 400, 600), 328);
+    assert_eq!(c::reveal(0, 900, 28, 400, 400), 400);
+    let f = c::form(1400, 650, 17, 17, true);
+    for item in [false, true] {
+        let pane = c::pane(&f, item);
+        assert_eq!(c::hit_pane(&f, 0, pane.x + 10, pane.y + 10), Some(item));
+        assert_eq!(c::hit_pane(&f, 50, pane.x - 40, pane.y + 10), Some(item));
+    }
+    assert_eq!(c::hit_pane(&f, 0, f.preview_x + 20, 100), None);
+    assert_eq!(c::hit_pane(&f, 0, 20, f.page_height - 30), None);
+}
+#[test]
 fn footer_stays_visible_at_small_and_large_sizes() {
     for (w, h) in [(700, 500), (1050, 700), (1920, 1050)] {
         let f = c::form(w, h, 17, 17, false);

@@ -157,7 +157,6 @@ struct Editor {
     preview_worker:
         Option<crate::background::Latest<crate::preview::Request, Arc<crate::preview::Prepared>>>,
     preview_data: Option<Arc<crate::preview::Prepared>>,
-    wheel_delta: i32,
     form: FormLayout,
     controls: Vec<PlacedControl>,
     layout_applied: bool,
@@ -881,11 +880,15 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             });
             let recording = e.profiles.as_ref().is_some_and(|p| p.recording);
             if !recording && editor_accelerator(&msg, hwnd, e) {
+                PostMessageW(hwnd, super::editor_pane::REVEAL, 0, GetFocus() as isize);
                 continue;
             }
             if recording || IsDialogMessageW(dialog, &msg) == 0 {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+            if msg.message == WM_KEYDOWN && msg.wParam == 9 {
+                PostMessageW(hwnd, super::editor_pane::REVEAL, 0, GetFocus() as isize);
             }
         }
         drop(Box::from_raw(EDITOR));
@@ -964,7 +967,6 @@ impl Editor {
             icons: super::item_icons::Cache::new(hwnd, root.clone()),
             icon_draft: ItemIcon::Automatic,
             advice_worker,
-            wheel_delta: 0,
             form: FormLayout::new(1380, 870, 17, 17),
             controls: vec![],
             c,
@@ -1560,6 +1562,38 @@ impl Editor {
             null_mut(),
             RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE,
         );
+    }
+    unsafe fn reveal_control(&mut self, focus: HWND) {
+        let Some(c) = self.controls.iter().find(|c| c.hwnd == focus) else {
+            return;
+        };
+        if c.base.y >= 906 || c.base.x >= 690 {
+            return;
+        }
+        let item = crate::compact_layout::item(c.base);
+        let pane = crate::compact_layout::pane(&self.form, item);
+        let r = self.form.control(c.base, c.id);
+        let current = if item {
+            self.item_scroll
+        } else {
+            self.scroll_y
+        };
+        // Combo base heights include dropdowns; reveal the closed focus row.
+        let next = crate::compact_layout::reveal(
+            current,
+            r.y - pane.y,
+            r.h.min(32),
+            pane.h,
+            crate::compact_layout::maximum(&self.form, item),
+        );
+        if next != current {
+            if item {
+                self.item_scroll = next;
+            } else {
+                self.scroll_y = next;
+            }
+            self.reposition_controls(false);
+        }
     }
     unsafe fn scroll_pane(&mut self, item: bool, request: i32, wheel: Option<i32>) {
         let hwnd = dlg(
@@ -2542,6 +2576,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 | WM_DROPFILES
                 | ADVICE_READY
                 | PREVIEW_READY
+                | super::editor_pane::REVEAL
                 | super::item_icons::READY
         ) || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
         {
@@ -2585,6 +2620,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             e.preview_cache = None;
             e.layout_applied = false;
             e.resize_view();
+            0
+        }
+        super::editor_pane::REVEAL => {
+            e.reveal_control(l as HWND);
             0
         }
         super::editor_pane::SCROLL => {
@@ -2723,20 +2762,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_MOUSEWHEEL => {
-            e.wheel_delta += ((w >> 16) as u16 as i16) as i32;
-            let steps = e.wheel_delta / 120;
-            e.wheel_delta %= 120;
-            if steps != 0 {
-                let mut info: SCROLLINFO = zeroed();
-                info.cbSize = size_of::<SCROLLINFO>() as u32;
-                info.fMask = SIF_ALL;
-                GetScrollInfo(hwnd, SB_VERT, &mut info);
-                info.fMask = SIF_POS;
-                info.nPos -= steps * 72;
-                // Redraw the scrollbar thumb; only the form's intermediate
-                // control/background paints are suppressed during batching.
-                let y = SetScrollInfo(hwnd, SB_VERT, &info, 1);
-                e.scroll_to(e.scroll_x, y);
+            let mut point = POINT {
+                x: (l as u16 as i16) as i32,
+                y: ((l as usize >> 16) as u16 as i16) as i32,
+            };
+            ScreenToClient(hwnd, &mut point);
+            if let Some(item) = crate::compact_layout::hit_pane(
+                &e.form,
+                e.scroll_x,
+                e.dpi.logical(point.x),
+                e.dpi.logical(point.y),
+            ) {
+                e.scroll_pane(item, 0, Some(((w >> 16) as u16 as i16) as i32));
             }
             0
         }
@@ -3951,6 +3988,132 @@ unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
 mod lifecycle_tests {
     use super::*;
     static NATIVE_EDITOR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    #[ignore = "hidden compact editor pane regression; Windows CI only"]
+    fn compact_panes_keep_scroll_context_and_unapplied_text() {
+        let _serial = NATIVE_EDITOR.lock().unwrap();
+        std::thread::spawn(|| unsafe {
+            theme::install();
+            let module = GetModuleHandleW(null());
+            let class = wide("Constellation.Test.CompactPanes");
+            assert_ne!(
+                RegisterClassW(&WNDCLASSW {
+                    lpfnWndProc: Some(proc),
+                    hInstance: module,
+                    lpszClassName: class.as_ptr(),
+                    ..zeroed()
+                }),
+                0
+            );
+            let owner = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                wide("hidden panes").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                900,
+                650,
+                null_mut(),
+                null_mut(),
+                module,
+                null(),
+            );
+            assert!(!owner.is_null());
+            ROOT_WINDOW.with(|root| root.set(owner));
+            let item = super::super::editor_pane::create(owner, crate::compact_layout::ITEM);
+            let side = super::super::editor_pane::create(owner, crate::compact_layout::SIDE);
+            assert!(!item.is_null() && !side.is_null());
+            control(
+                owner,
+                "EDIT",
+                "unfinished name",
+                NAME,
+                305,
+                83,
+                360,
+                28,
+                WS_TABSTOP,
+            );
+            control(
+                owner,
+                "EDIT",
+                "invalid radius",
+                RADIUS,
+                305,
+                735,
+                80,
+                28,
+                WS_TABSTOP,
+            );
+            control(owner, "BUTTON", "Save", SAVE, 20, 906, 100, 35, WS_TABSTOP);
+            let controls = NEW_CONTROLS.with(|items| std::mem::take(&mut *items.borrow_mut()));
+            for c in &controls {
+                if crate::compact_layout::item(c.base) {
+                    SetParent(c.hwnd, item);
+                }
+            }
+            let config = Config::default();
+            let root = std::env::current_dir()
+                .unwrap()
+                .join("target/compact-fixtures")
+                .join(format!(
+                    "{}-{}",
+                    std::process::id(),
+                    windows_sys::Win32::System::Threading::GetCurrentThreadId()
+                ));
+            let mut editor = Editor::new(owner, root, config.clone(), vec![]);
+            editor.controls = controls;
+            editor.item_dirty = true;
+            editor.settings_invalid = true;
+            EDITOR = Box::into_raw(Box::new(editor));
+            (*EDITOR).resize_view();
+            let name = dlg(owner, NAME);
+            assert_eq!(GetParent(name), item);
+            (*EDITOR).scroll_pane(false, SB_BOTTOM, None);
+            let sidebar_position = (*EDITOR).scroll_y;
+            (*EDITOR).scroll_pane(true, SB_BOTTOM, None);
+            assert!((*EDITOR).item_scroll > 0);
+            let item_position = (*EDITOR).item_scroll;
+            assert_eq!((*EDITOR).scroll_y, sidebar_position);
+            SendMessageW(owner, super::super::editor_pane::REVEAL, 0, name as isize);
+            assert!((*EDITOR).item_scroll < item_position);
+            let (mut field_rect, mut pane_rect): (RECT, RECT) = (zeroed(), zeroed());
+            GetWindowRect(name, &mut field_rect);
+            GetWindowRect(item, &mut pane_rect);
+            assert!(field_rect.top >= pane_rect.top && field_rect.bottom <= pane_rect.bottom);
+            assert_eq!((*EDITOR).scroll_y, sidebar_position);
+            SendMessageW(owner, WM_COMMAND, crate::compact_layout::TOGGLE as usize, 0);
+            assert!(!(*EDITOR).preview_visible);
+            assert!(!(*EDITOR).form.horizontal);
+            assert_eq!(get(owner, NAME), "unfinished name");
+            assert_eq!(get(owner, RADIUS), "invalid radius");
+            assert!((*EDITOR).item_dirty && (*EDITOR).settings_invalid);
+            assert_eq!(
+                (*EDITOR).c,
+                config,
+                "Preview toggle must not apply or discard fields"
+            );
+            let mut bounds: RECT = zeroed();
+            GetWindowRect(dlg(owner, SAVE), &mut bounds);
+            let mut client: RECT = zeroed();
+            GetClientRect(owner, &mut client);
+            let mut bottom = POINT {
+                x: bounds.right,
+                y: bounds.bottom,
+            };
+            ScreenToClient(owner, &mut bottom);
+            assert!(bottom.y <= client.bottom && bottom.x <= client.right);
+            DestroyWindow(owner);
+            drop(Box::from_raw(EDITOR));
+            EDITOR = null_mut();
+            ROOT_WINDOW.with(|root| root.set(null_mut()));
+            theme::shutdown();
+            UnregisterClassW(class.as_ptr(), module);
+        })
+        .join()
+        .unwrap();
+    }
     #[test]
     #[ignore = "hidden browser and close-dialog interactions; Windows CI only"]
     fn browser_and_close_dialogs_preserve_drafts_and_guard_saves() {

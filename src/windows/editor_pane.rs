@@ -7,6 +7,7 @@ use windows_sys::Win32::{
 };
 pub const SCROLL: u32 = WM_APP + 80;
 pub const WHEEL: u32 = WM_APP + 81;
+pub const REVEAL: u32 = WM_APP + 82;
 pub unsafe fn create(owner: HWND, id: i32) -> HWND {
     let module = GetModuleHandleW(null());
     let class = wide("Constellation.EditorPane");
