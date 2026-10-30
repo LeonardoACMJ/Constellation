@@ -162,6 +162,9 @@ struct Editor {
     controls: Vec<PlacedControl>,
     layout_applied: bool,
     dpi: Dpi,
+    item_scroll: i32,
+    preview_visible: bool,
+    pane_wheel: [i32; 2],
     icons: super::item_icons::Cache,
     icon_draft: ItemIcon,
     advice_worker: Option<crate::background::Latest<Target, String>>,
@@ -234,6 +237,22 @@ fn integration_label(id: i32, enabled: bool) -> &'static str {
     }
 }
 
+unsafe fn dlg(hwnd: HWND, id: i32) -> HWND {
+    let found = windows_sys::Win32::UI::WindowsAndMessaging::GetDlgItem(hwnd, id);
+    if !found.is_null() {
+        return found;
+    }
+    for pane in [crate::compact_layout::ITEM, crate::compact_layout::SIDE] {
+        let panel = windows_sys::Win32::UI::WindowsAndMessaging::GetDlgItem(hwnd, pane);
+        if !panel.is_null() {
+            let child = windows_sys::Win32::UI::WindowsAndMessaging::GetDlgItem(panel, id);
+            if !child.is_null() {
+                return child;
+            }
+        }
+    }
+    null_mut()
+}
 unsafe fn control(
     hwnd: HWND,
     class: &str,
@@ -295,17 +314,17 @@ unsafe fn browser_header(hwnd: HWND) {
     );
 }
 unsafe fn get(hwnd: HWND, id: i32) -> String {
-    let e = GetDlgItem(hwnd, id);
+    let e = dlg(hwnd, id);
     let len = GetWindowTextLengthW(e);
     let mut b = vec![0u16; len as usize + 1];
     GetWindowTextW(e, b.as_mut_ptr(), b.len() as i32);
     String::from_utf16_lossy(&b[..len as usize])
 }
 unsafe fn set(hwnd: HWND, id: i32, s: &str) {
-    SetWindowTextW(GetDlgItem(hwnd, id), wide(s).as_ptr());
+    SetWindowTextW(dlg(hwnd, id), wide(s).as_ptr());
 }
 unsafe fn send(hwnd: HWND, id: i32, msg: u32, w: usize, l: isize) -> isize {
-    SendMessageW(GetDlgItem(hwnd, id), msg, w, l)
+    SendMessageW(dlg(hwnd, id), msg, w, l)
 }
 unsafe fn label(hwnd: HWND, text: &str, x: i32, y: i32, w: i32) {
     control(hwnd, "STATIC", text, 0, x, y, w, 18, 0);
@@ -799,6 +818,48 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         e.settings_to_controls();
         e.dirty = false;
         e.controls = NEW_CONTROLS.with(|items| std::mem::take(&mut *items.borrow_mut()));
+        let item_pane = super::editor_pane::create(hwnd, crate::compact_layout::ITEM);
+        let side_pane = super::editor_pane::create(hwnd, crate::compact_layout::SIDE);
+        SetWindowPos(
+            item_pane,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        SetWindowPos(
+            side_pane,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        for c in &e.controls {
+            if c.base.y < 906 {
+                if crate::compact_layout::item(c.base) {
+                    SetParent(c.hwnd, item_pane);
+                } else if c.base.x < 295 {
+                    SetParent(c.hwnd, side_pane);
+                }
+            }
+        }
+        control(
+            hwnd,
+            "BUTTON",
+            "Hide preview",
+            crate::compact_layout::TOGGLE,
+            850,
+            906,
+            150,
+            35,
+            WS_TABSTOP,
+        );
+        e.controls
+            .extend(NEW_CONTROLS.with(|items| std::mem::take(&mut *items.borrow_mut())));
         e.resize_view();
         DragAcceptFiles(hwnd, 1);
         drop(startup_guard);
@@ -896,6 +957,9 @@ impl Editor {
             .ok(),
             preview_data: None,
             layout_applied: false,
+            item_scroll: 0,
+            preview_visible: true,
+            pane_wheel: [0, 0],
             dpi: Dpi(unsafe { GetDpiForWindow(hwnd) }),
             icons: super::item_icons::Cache::new(hwnd, root.clone()),
             icon_draft: ItemIcon::Automatic,
@@ -1223,7 +1287,7 @@ impl Editor {
     }
     unsafe fn enable_fields(&self) {
         EnableWindow(
-            GetDlgItem(self.hwnd, DUPLICATE),
+            dlg(self.hwnd, DUPLICATE),
             (self.selected != self.c.universes[self.universe].id) as i32,
         );
         set(
@@ -1237,7 +1301,7 @@ impl Editor {
         );
         let kind = send(self.hwnd, KIND, CB_GETCURSEL, 0, 0);
         EnableWindow(
-            GetDlgItem(self.hwnd, BROWSER),
+            dlg(self.hwnd, BROWSER),
             (kind == 3 || self.selected == self.c.universes[self.universe].id) as i32,
         );
         for (id, on) in [
@@ -1249,7 +1313,7 @@ impl Editor {
             (BROWSE_RUNNER, kind == 5),
             (BROWSE_CWD, matches!(kind, 1 | 5)),
         ] {
-            EnableWindow(GetDlgItem(self.hwnd, id), on as i32);
+            EnableWindow(dlg(self.hwnd, id), on as i32);
         }
     }
     unsafe fn browse(&mut self, id: i32) -> Result<(), String> {
@@ -1413,19 +1477,56 @@ impl Editor {
         }
         Ok(())
     }
-    unsafe fn reposition_controls(&self, resize: bool) {
-        let flags = SWP_NOZORDER
-            | SWP_NOACTIVATE
-            | SWP_NOREDRAW
-            | SWP_NOCOPYBITS
-            | if resize { 0 } else { SWP_NOSIZE };
+    unsafe fn reposition_controls(&self, _resize: bool) {
+        let f = &self.form;
+        let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOCOPYBITS;
+        for item in [false, true] {
+            let pane = dlg(
+                self.hwnd,
+                if item {
+                    crate::compact_layout::ITEM
+                } else {
+                    crate::compact_layout::SIDE
+                },
+            );
+            let mut r = crate::compact_layout::pane(f, item);
+            r.x -= self.scroll_x;
+            let p = self.dpi.rect(r);
+            SetWindowPos(pane, null_mut(), p.x, p.y, p.w, p.h, flags);
+            let position = if item {
+                self.item_scroll
+            } else {
+                self.scroll_y
+            };
+            let info = SCROLLINFO {
+                cbSize: size_of::<SCROLLINFO>() as u32,
+                fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+                nMin: 0,
+                nMax: crate::compact_layout::content(f, item) - 1,
+                nPage: r.h as u32,
+                nPos: position,
+                nTrackPos: 0,
+            };
+            SetScrollInfo(pane, SB_VERT, &info, 1);
+        }
         let positions: Vec<_> = self
             .controls
             .iter()
             .map(|c| {
-                let mut r = self.form.control(c.base, c.id);
-                r.x -= self.scroll_x;
-                r.y -= self.scroll_y;
+                let mut r = f.control(c.base, c.id);
+                if c.base.y >= 906 {
+                    r = crate::compact_layout::footer(f, c.base);
+                } else if crate::compact_layout::item(c.base) {
+                    let p = crate::compact_layout::pane(f, true);
+                    r.x -= p.x;
+                    r.y -= p.y + self.item_scroll;
+                } else if c.base.x < 295 {
+                    let p = crate::compact_layout::pane(f, false);
+                    r.x -= p.x;
+                    r.y -= p.y + self.scroll_y;
+                } else {
+                    r.x -= self.scroll_x;
+                }
                 (c.hwnd, self.dpi.rect(r))
             })
             .collect();
@@ -1436,10 +1537,21 @@ impl Editor {
             }
             batch = DeferWindowPos(batch, hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
         }
-        let moved = !batch.is_null() && EndDeferWindowPos(batch) != 0;
-        if !moved {
+        if batch.is_null() || EndDeferWindowPos(batch) == 0 {
             for (hwnd, r) in positions {
                 SetWindowPos(hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
+            }
+        }
+        for c in &self.controls {
+            if c.base.x >= 690 && c.base.y < 906 {
+                ShowWindow(
+                    c.hwnd,
+                    if self.preview_visible {
+                        SW_SHOWNA
+                    } else {
+                        SW_HIDE
+                    },
+                );
             }
         }
         RedrawWindow(
@@ -1449,15 +1561,62 @@ impl Editor {
             RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE,
         );
     }
+    unsafe fn scroll_pane(&mut self, item: bool, request: i32, wheel: Option<i32>) {
+        let hwnd = dlg(
+            self.hwnd,
+            if item {
+                crate::compact_layout::ITEM
+            } else {
+                crate::compact_layout::SIDE
+            },
+        );
+        let mut info: SCROLLINFO = zeroed();
+        info.cbSize = size_of::<SCROLLINFO>() as u32;
+        info.fMask = SIF_ALL;
+        GetScrollInfo(hwnd, SB_VERT, &mut info);
+        let current = if item {
+            self.item_scroll
+        } else {
+            self.scroll_y
+        };
+        let proposed = if let Some(delta) = wheel {
+            let slot = &mut self.pane_wheel[usize::from(item)];
+            *slot += delta;
+            let steps = *slot / 120;
+            *slot %= 120;
+            current - steps * 48
+        } else {
+            match request {
+                SB_LINEUP => current - 24,
+                SB_LINEDOWN => current + 24,
+                SB_PAGEUP => current - info.nPage as i32,
+                SB_PAGEDOWN => current + info.nPage as i32,
+                SB_THUMBPOSITION | SB_THUMBTRACK => info.nTrackPos,
+                SB_TOP => 0,
+                SB_BOTTOM => i32::MAX,
+                _ => current,
+            }
+        };
+        let next = proposed.clamp(0, crate::compact_layout::maximum(&self.form, item));
+        if next != current {
+            if item {
+                self.item_scroll = next;
+            } else {
+                self.scroll_y = next;
+            }
+            self.reposition_controls(false);
+        }
+    }
     unsafe fn scroll_to(&mut self, x: i32, y: i32) {
-        let (x, y) = self.form.scroll(x, y);
+        let (x, _) = self.form.scroll(x, 0);
+        let y = y.clamp(0, crate::compact_layout::maximum(&self.form, false));
         if (x, y) == (self.scroll_x, self.scroll_y) {
             return;
         }
         self.scroll_x = x;
         self.scroll_y = y;
         SetScrollPos(self.hwnd, SB_HORZ, x, 1);
-        SetScrollPos(self.hwnd, SB_VERT, y, 1);
+        SetScrollPos(dlg(self.hwnd, crate::compact_layout::SIDE), SB_VERT, y, 1);
         self.reposition_controls(false);
     }
     unsafe fn resize_view(&mut self) {
@@ -1473,11 +1632,12 @@ impl Editor {
         let fullw = client.right + if style & WS_VSCROLL != 0 { barw } else { 0 };
         let fullh = client.bottom + if style & WS_HSCROLL != 0 { barh } else { 0 };
         let next_dpi = Dpi(dpi);
-        let next = FormLayout::new(
+        let next = crate::compact_layout::form(
             next_dpi.logical(fullw),
             next_dpi.logical(fullh),
             next_dpi.logical(barw),
             next_dpi.logical(barh),
+            self.preview_visible,
         );
         if self.layout_applied && self.form == next && self.dpi == next_dpi {
             trace("layout.unchanged");
@@ -1490,12 +1650,18 @@ impl Editor {
         // are already resolved above; replaying those intermediate sizes can
         // recursively schedule more layout/scrollbar work on restore.
         RESIZING.with(|active| active.set(true));
-        let (x, y) = self.form.scroll(self.scroll_x, self.scroll_y);
+        let (x, _) = self.form.scroll(self.scroll_x, 0);
+        let y = self
+            .scroll_y
+            .clamp(0, crate::compact_layout::maximum(&self.form, false));
+        self.item_scroll = self
+            .item_scroll
+            .clamp(0, crate::compact_layout::maximum(&self.form, true));
         self.scroll_x = x;
         self.scroll_y = y;
         for (bar, page, extent, pos) in [
             (SB_HORZ, self.form.page_width, self.form.width, x),
-            (SB_VERT, self.form.page_height, self.form.height, y),
+            (SB_VERT, self.form.page_height, self.form.page_height, 0),
         ] {
             let info = SCROLLINFO {
                 cbSize: size_of::<SCROLLINFO>() as u32,
@@ -1514,7 +1680,9 @@ impl Editor {
             SetScrollInfo(self.hwnd, bar, &info, 1);
             trace("layout.scrollbar.end");
         }
-        self.preview = native(self.form.preview());
+        let mut preview = self.form.preview();
+        preview.h = (self.form.page_height - 310).max(1);
+        self.preview = native(preview);
         trace("layout.controls.begin");
         self.reposition_controls(true);
         trace("layout.controls.end");
@@ -1552,7 +1720,7 @@ impl Editor {
         let Some(universe) = self.tree_universe else {
             return;
         };
-        let tree = GetDlgItem(self.hwnd, TREE);
+        let tree = dlg(self.hwnd, TREE);
         let first = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_FIRSTVISIBLE as usize, 0);
         let selected = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as usize, 0);
         let view = self.tree_views.entry(universe).or_default();
@@ -1597,7 +1765,7 @@ impl Editor {
         self.tree_refresh_pending = false;
         self.capture_tree_view();
         self.universe = self.universe.min(self.c.universes.len() - 1);
-        let tree = GetDlgItem(self.hwnd, TREE);
+        let tree = dlg(self.hwnd, TREE);
         SendMessageW(tree, WM_SETREDRAW, 0, 0);
         let rows = editing::tree_rows(&self.c.universes[self.universe]);
         let labels_changed = self.tree_rows != rows;
@@ -2109,7 +2277,7 @@ impl Editor {
         self.selected = id;
         self.refresh();
         self.status = "Duplicated independently. Edit the copy, then Save.".into();
-        SetFocus(GetDlgItem(self.hwnd, NAME));
+        SetFocus(dlg(self.hwnd, NAME));
         send(self.hwnd, NAME, EM_SETSEL, 0, -1);
         Ok(())
     }
@@ -2262,7 +2430,7 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             let width = (l as u32 & 0xffff) as i32;
             let height = ((l as u32 >> 16) & 0xffff) as i32;
             MoveWindow(
-                GetDlgItem(hwnd, JSON_TEXT),
+                dlg(hwnd, JSON_TEXT),
                 dpi.pixels(15),
                 dpi.pixels(40),
                 (width - dpi.pixels(30)).max(1),
@@ -2270,7 +2438,7 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 1,
             );
             MoveWindow(
-                GetDlgItem(hwnd, JSON_SAVE),
+                dlg(hwnd, JSON_SAVE),
                 dpi.pixels(15),
                 height - dpi.pixels(50),
                 dpi.pixels(170),
@@ -2417,6 +2585,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             e.preview_cache = None;
             e.layout_applied = false;
             e.resize_view();
+            0
+        }
+        super::editor_pane::SCROLL => {
+            e.scroll_pane(
+                w == crate::compact_layout::ITEM as usize,
+                (l as usize & 0xffff) as i32,
+                None,
+            );
+            0
+        }
+        super::editor_pane::WHEEL => {
+            e.scroll_pane(
+                w == crate::compact_layout::ITEM as usize,
+                0,
+                Some((((l as usize) >> 16) as u16 as i16) as i32),
+            );
             0
         }
         PREVIEW_READY => {
@@ -2641,6 +2825,21 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 e.checkpoint_settings();
                 return 0;
             }
+            if id == crate::compact_layout::TOGGLE && notify == BN_CLICKED {
+                e.preview_visible = !e.preview_visible;
+                e.layout_applied = false;
+                e.resize_view();
+                set(
+                    hwnd,
+                    id,
+                    if e.preview_visible {
+                        "Hide preview"
+                    } else {
+                        "Show preview"
+                    },
+                );
+                return 0;
+            }
             if notify != BN_CLICKED {
                 return 0;
             }
@@ -2789,7 +2988,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 }
                 RENAME => {
                     e.scroll_to(e.scroll_x, 0);
-                    SetFocus(GetDlgItem(hwnd, NAME));
+                    SetFocus(dlg(hwnd, NAME));
                     send(hwnd, NAME, EM_SETSEL, 0, -1);
                     Ok(())
                 }
@@ -2888,10 +3087,21 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     -e.dpi.pixels(e.scroll_y),
                     null_mut(),
                 );
-                for r in e.form.panels() {
-                    theme::panel(dc, native(r));
+                SetViewportOrgEx(dc, -e.dpi.pixels(e.scroll_x), 0, null_mut());
+                if e.preview_visible {
+                    sectors = e.cached_preview(dc);
                 }
-                sectors = e.cached_preview(dc);
+                SetViewportOrgEx(dc, 0, 0, null_mut());
+                render::fill(
+                    dc,
+                    &RECT {
+                        left: 0,
+                        top: (e.form.page_height - 90).max(0),
+                        right: e.form.page_width,
+                        bottom: e.form.page_height,
+                    },
+                    theme::background(),
+                );
                 let mut cr: RECT = zeroed();
                 GetClientRect(hwnd, &mut cr);
                 render::text(
@@ -2906,7 +3116,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         e.status
                     ),
                     15,
-                    e.form.height - 32,
+                    e.form.page_height - 28,
                     e.dpi.logical(cr.right) - 30,
                     theme::muted(),
                     12,
@@ -3058,7 +3268,7 @@ impl Profiles {
             P_UNIVERSE,
             P_ENTRY,
         ] {
-            EnableWindow(GetDlgItem(self.hwnd, id), p.is_some() as i32);
+            EnableWindow(dlg(self.hwnd, id), p.is_some() as i32);
         }
         set(self.hwnd, P_NAME, p.map_or("", |p| p.name.as_str()));
         set(self.hwnd, P_BINDING, p.map_or("", |p| p.binding.as_str()));
@@ -3811,7 +4021,7 @@ mod lifecycle_tests {
                     );
                 }
                 browser_header(owner);
-                let browser_button = GetDlgItem(owner, BROWSER);
+                let browser_button = dlg(owner, BROWSER);
                 let caption = FindWindowExW(
                     owner,
                     null_mut(),
@@ -4320,7 +4530,7 @@ mod lifecycle_tests {
                 owner,
                 WM_COMMAND,
                 UNIVERSE as usize | ((CBN_SELCHANGE as usize) << 16),
-                GetDlgItem(owner, UNIVERSE) as isize,
+                dlg(owner, UNIVERSE) as isize,
             );
             assert_eq!((*EDITOR).selected, 1001);
             assert!(state(1001) && !state(1002));
@@ -4329,7 +4539,7 @@ mod lifecycle_tests {
                 owner,
                 WM_COMMAND,
                 UNIVERSE as usize | ((CBN_SELCHANGE as usize) << 16),
-                GetDlgItem(owner, UNIVERSE) as isize,
+                dlg(owner, UNIVERSE) as isize,
             );
             assert_eq!((*EDITOR).selected, 8);
             assert!(state(2) && state(5));
@@ -4374,7 +4584,7 @@ mod lifecycle_tests {
                 owner,
                 WM_COMMAND,
                 DUPLICATE as usize,
-                GetDlgItem(owner, DUPLICATE) as isize,
+                dlg(owner, DUPLICATE) as isize,
             );
             let copy = (*EDITOR).selected;
             assert!(copy > maximum);
@@ -4564,7 +4774,7 @@ unsafe fn editor_accelerator(msg: &MSG, main: HWND, e: &Editor) -> bool {
     let text = String::from_utf16_lossy(&class[..count]).eq_ignore_ascii_case("edit");
     let focus = if text {
         editing::EditorFocus::Text
-    } else if focus == GetDlgItem(main, TREE) {
+    } else if focus == dlg(main, TREE) {
         editing::EditorFocus::Tree
     } else {
         editing::EditorFocus::Other
@@ -4629,7 +4839,7 @@ unsafe fn close_aux(e: &mut Editor, focus: bool) {
 }
 unsafe fn aux_enable(hwnd: HWND, program: bool) {
     for id in [AUX_PATH, AUX_ARGS, AUX_BROWSE] {
-        EnableWindow(GetDlgItem(hwnd, id), program as i32);
+        EnableWindow(dlg(hwnd, id), program as i32);
     }
 }
 unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
@@ -4883,7 +5093,7 @@ unsafe fn open_aux_inner(e: &mut Editor, kind: AuxKind, validate: bool) {
                     "Recovery cannot be read: {message}. The file is preserved until you choose Discard."
                 ),
             );
-            EnableWindow(GetDlgItem(hwnd, AUX_APPLY), 0);
+            EnableWindow(dlg(hwnd, AUX_APPLY), 0);
         }
         if let Some(draft) = &e.recovery_draft {
             set(
@@ -4901,10 +5111,7 @@ unsafe fn open_aux_inner(e: &mut Editor, kind: AuxKind, validate: bool) {
     if IsWindowVisible(e.hwnd) != 0 {
         ShowWindow(hwnd, SW_SHOW);
         super::focus_window(hwnd);
-        SetFocus(GetDlgItem(
-            hwnd,
-            if browser { AUX_MODE } else { AUX_CANCEL },
-        ));
+        SetFocus(dlg(hwnd, if browser { AUX_MODE } else { AUX_CANCEL }));
     }
 }
 unsafe extern "system" fn aux_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -5078,7 +5285,7 @@ unsafe fn show_tools_menu(hwnd: HWND) -> LRESULT {
         );
     }
     let mut rect: RECT = zeroed();
-    GetWindowRect(GetDlgItem(hwnd, TOOLS), &mut rect);
+    GetWindowRect(dlg(hwnd, TOOLS), &mut rect);
     drop(guard);
     let id = TrackPopupMenuEx(
         menu,

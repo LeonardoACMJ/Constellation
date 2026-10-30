@@ -357,6 +357,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     }
     SelectObject(dc, old);
 }
+#[allow(dead_code)]
 pub unsafe fn panel(dc: HDC, r: RECT) {
     let pen = CreatePen(PS_SOLID, 1, PALETTE.with(|p| p.get().outline.gdi()));
     let old = SelectObject(dc, pen);

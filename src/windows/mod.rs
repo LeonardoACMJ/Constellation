@@ -255,3 +255,5 @@ mod dispatch_tests {
         .unwrap();
     }
 }
+
+mod editor_pane;

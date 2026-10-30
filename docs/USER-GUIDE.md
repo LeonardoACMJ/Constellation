@@ -1,3 +1,5 @@
+> Optional layout experiment, 0.1.49-layout.1. This is not the normal installed build. Save/status stay fixed; sidebar and item fields scroll independently. Hide preview frees its column. Review with a disposable configuration before using real data.
+
 # Constellation — portable preview
 
 Extract this whole folder to a writable location, then run `constellation.exe`. Constellation is free software under the GNU General Public License v3 or later; the full text ships beside the executable as `LICENSE`, and `THIRD-PARTY-NOTICES.txt` lists the dependencies.
