@@ -64,6 +64,7 @@ pub fn save_named(root: &Path, name: &str, palette: Palette) -> Result<Vec<Named
             .outline_overrides()
             .into_iter()
             .flatten()
+            .chain(palette.star_text)
             .any(|c| c.0 > 0xffffff)
     {
         return Err("Palette colors must be six-digit RGB values".into());

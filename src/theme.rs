@@ -38,6 +38,9 @@ pub struct Palette {
     pub background: Color,
     pub input: Color,
     pub text: Color,
+    /// Optional Star-label override; Constellations and editor text retain `text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub star_text: Option<Color>,
     pub muted: Color,
     pub star: Color,
     pub constellation: Color,
@@ -68,6 +71,7 @@ impl Default for Palette {
             background: Color(0x0f1624),
             input: Color(0x172132),
             text: Color(0xe9edfa),
+            star_text: None,
             muted: Color(0x94a4be),
             star: Color(0x1c2b3b),
             constellation: Color(0x2b2643),
@@ -132,8 +136,10 @@ impl Palette {
         if let Some(value) = colors.get_mut(index) {
             *value = color;
             let outlines = self.outline_overrides();
+            let star_text = self.star_text;
             *self = Self::from_colors(colors);
             self.set_outline_overrides(outlines);
+            self.star_text = star_text;
         }
     }
     pub fn outline_overrides(self) -> [Option<Color>; 4] {
@@ -143,6 +149,13 @@ impl Palette {
             self.star_highlight_outline,
             self.constellation_highlight_outline,
         ]
+    }
+    pub fn label_color(self, constellation: bool) -> Color {
+        if constellation {
+            self.text
+        } else {
+            self.star_text.unwrap_or(self.text)
+        }
     }
     pub fn set_outline(&mut self, index: usize, color: Option<Color>) {
         match index {
@@ -177,6 +190,7 @@ impl Palette {
             background: c[0],
             input: c[1],
             text: c[2],
+            star_text: None,
             muted: c[3],
             star: c[4],
             constellation: c[5],

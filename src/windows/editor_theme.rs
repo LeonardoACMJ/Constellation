@@ -129,6 +129,7 @@ pub fn effective(mut palette: crate::theme::Palette) -> crate::theme::Palette {
             palette.background = from(COLOR_WINDOW);
             palette.input = from(COLOR_WINDOW);
             palette.text = from(COLOR_WINDOWTEXT);
+            palette.star_text = None;
             palette.muted = from(COLOR_WINDOWTEXT);
             palette.star = from(COLOR_WINDOW);
             palette.constellation = from(COLOR_WINDOW);

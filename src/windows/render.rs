@@ -246,7 +246,7 @@ pub unsafe fn draw_with_icons(
             p.x as i32 - w / 2,
             p.y as i32 + 3,
             w,
-            palette.text.gdi(),
+            palette.label_color(folder).gdi(),
             size,
         );
     }

@@ -38,6 +38,9 @@ const PALETTE_NAME: i32 = 7;
 const PALETTE_SAVE: i32 = 8;
 const RESET: i32 = 6;
 const OUTLINE_AUTO: i32 = 220;
+const STAR_TEXT: i32 = 117;
+const STAR_TEXT_CHOOSE: i32 = 217;
+const STAR_TEXT_AUTO: i32 = 224;
 const SOURCES: i32 = 10;
 const FILTER: i32 = 11;
 const DESTINATIONS: i32 = 12;
@@ -143,7 +146,7 @@ pub unsafe fn capture(hwnd: HWND) -> Option<String> {
     let (kind, ids) = match &state(hwnd)?.kind {
         Kind::Theme { .. } => (
             THEME,
-            (100..117)
+            (100..118)
                 .chain(std::iter::once(PALETTE_NAME))
                 .collect::<Vec<_>>(),
         ),
@@ -174,7 +177,7 @@ pub fn recovery_kind(value: &str) -> Option<u32> {
 pub unsafe fn restore(hwnd: HWND, value: &str) {
     if let Ok(recovery) = serde_json::from_str::<Recovery>(value) {
         for (id, value) in recovery.fields {
-            if (100..117).contains(&id) || matches!(id, PALETTE_NAME | FILTER | OLD | NEW) {
+            if (100..118).contains(&id) || matches!(id, PALETTE_NAME | FILTER | OLD | NEW) {
                 set(hwnd, id, &value);
             }
         }
@@ -374,6 +377,51 @@ pub unsafe fn open(
                     WS_TABSTOP,
                 );
             }
+            // The otherwise empty seventh row in the second column.
+            control(
+                hwnd,
+                "STATIC",
+                "Star text (blank = Text)",
+                0,
+                285,
+                335,
+                245,
+                18,
+                0,
+            );
+            control(
+                hwnd,
+                "EDIT",
+                "",
+                STAR_TEXT,
+                285,
+                353,
+                105,
+                24,
+                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+            );
+            control(
+                hwnd,
+                "BUTTON",
+                "Choose…",
+                STAR_TEXT_CHOOSE,
+                394,
+                353,
+                70,
+                24,
+                WS_TABSTOP,
+            );
+            control(
+                hwnd,
+                "BUTTON",
+                "Auto",
+                STAR_TEXT_AUTO,
+                468,
+                353,
+                55,
+                24,
+                WS_TABSTOP,
+            );
             for (i, name) in Palette::OUTLINE_LABELS.iter().enumerate() {
                 let column = (i % 2) as i32;
                 let row = 7 + (i / 2) as i32;
@@ -662,8 +710,11 @@ pub unsafe fn open(
         }
     }
     EnableWindow(owner, 0);
-    ShowWindow(hwnd, SW_SHOW);
-    super::focus_window(hwnd);
+    #[cfg(not(test))]
+    {
+        ShowWindow(hwnd, SW_SHOW);
+        super::focus_window(hwnd);
+    }
     Ok(hwnd)
 }
 unsafe fn refresh_presets(hwnd: HWND) {
@@ -755,6 +806,11 @@ unsafe fn fill_palette(hwnd: HWND, palette: Palette) {
             &color.map_or_else(String::new, Color::hex),
         );
     }
+    set(
+        hwnd,
+        STAR_TEXT,
+        &palette.star_text.map_or_else(String::new, Color::hex),
+    );
     if let Kind::Theme { palette: p, .. } = &mut state(hwnd).unwrap().kind {
         *p = palette;
     }
@@ -774,6 +830,12 @@ unsafe fn read_palette(hwnd: HWND) -> Result<Palette, String> {
         };
         palette.set_outline(i, color);
     }
+    let star_text = text(hwnd, STAR_TEXT);
+    palette.star_text = if star_text.trim().is_empty() {
+        None
+    } else {
+        Some(Color::parse(&star_text)?)
+    };
     Ok(palette)
 }
 unsafe fn filter_destinations(hwnd: HWND) {
@@ -992,11 +1054,13 @@ unsafe fn proc_impl(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESUL
                 }
             } else if (OUTLINE_AUTO..OUTLINE_AUTO + 4).contains(&id) {
                 set(hwnd, 113 + id - OUTLINE_AUTO, "");
+            } else if id == STAR_TEXT_AUTO {
+                set(hwnd, STAR_TEXT, "");
             } else if id == RESET {
                 fill_palette(hwnd, Palette::default());
                 send(hwnd, PRESET, CB_SETCURSEL, 0, 0);
                 set(hwnd, PALETTE_NAME, "");
-            } else if (100..117).contains(&id) && notify == EN_CHANGE as usize {
+            } else if (100..118).contains(&id) && notify == EN_CHANGE as usize {
                 match read_palette(hwnd) {
                     Ok(p) => {
                         if let Some(Tools {
@@ -1144,14 +1208,16 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         return DefWindowProcW(hwnd, msg, w, l);
     };
-    if msg == WM_COMMAND && (200..217).contains(&((w & 0xffff) as i32)) {
+    if msg == WM_COMMAND && (200..218).contains(&((w & 0xffff) as i32)) {
         let index = (w & 0xffff) as usize - 200;
         let initial = state(hwnd).and_then(|t| {
             if let Kind::Theme { palette, .. } = &t.kind {
                 if index < 13 {
                     Some(palette.colors()[index].gdi())
-                } else {
+                } else if index < 17 {
                     Some(palette.outline_colors()[index - 13].gdi())
+                } else {
+                    Some(palette.label_color(false).gdi())
                 }
             } else {
                 None
@@ -1179,4 +1245,75 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     }
     drop(guard);
     DefWindowProcW(hwnd, msg, w, l)
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    #[test]
+    #[ignore = "hidden native palette fields; remote Windows CI only"]
+    fn star_text_field_preserves_overrides_invalid_recovery_and_auto() {
+        std::thread::spawn(|| unsafe {
+            theme::install();
+            let owner = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("hidden palette owner").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                1400,
+                900,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            assert!(!owner.is_null());
+            let mut config = Config::default();
+            config.theme.star_text = Some(Color(0x15213a));
+            let original = config.clone();
+            let root = PathBuf::from("target/native-star-text-fixture");
+            let tool = open(
+                owner,
+                root,
+                config.clone(),
+                0,
+                config.universes[0].id,
+                THEME,
+            )
+            .unwrap();
+            assert_eq!(IsWindowVisible(tool), 0, "Test tool must remain hidden");
+            assert_eq!(text(tool, STAR_TEXT), "#15213A");
+            set(tool, 102, "#FFF2C7");
+            assert_eq!(
+                read_palette(tool).unwrap().star_text,
+                original.theme.star_text
+            );
+            let mut field: RECT = zeroed();
+            let mut neighbor: RECT = zeroed();
+            GetWindowRect(GetDlgItem(tool, STAR_TEXT), &mut field);
+            GetWindowRect(GetDlgItem(tool, 114), &mut neighbor);
+            assert!(
+                field.bottom <= neighbor.top,
+                "Star text must clear the outline row"
+            );
+            set(tool, STAR_TEXT, "unfinished");
+            let recovery = capture(tool).unwrap();
+            SendMessageW(tool, WM_COMMAND, STAR_TEXT_AUTO as usize, 0);
+            assert!(read_palette(tool).unwrap().star_text.is_none());
+            restore(tool, &recovery);
+            assert_eq!(text(tool, STAR_TEXT), "unfinished");
+            assert!(read_palette(tool).is_err());
+            assert_eq!(
+                config, original,
+                "Palette fields must not activate or save a draft"
+            );
+            DestroyWindow(tool);
+            DestroyWindow(owner);
+            theme::shutdown();
+        })
+        .join()
+        .unwrap();
+    }
 }

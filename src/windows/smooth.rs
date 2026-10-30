@@ -33,6 +33,73 @@ mod render_tests {
     use super::*;
     use std::path::Path;
     #[test]
+    #[ignore = "offscreen Windows sector-label regression; remote CI only"]
+    fn star_text_override_changes_star_labels_without_recoloring_constellations() {
+        unsafe {
+            let _engine = Engine::start().unwrap();
+            let mut config = Config::default();
+            config.theme.star = crate::theme::Color(0xc7a23f);
+            config.theme.star_highlight = crate::theme::Color(0xe0bf60);
+            let path = [2];
+            let sectors = crate::geometry::visible(&config, &path);
+            let origin = Point { x: 450., y: 450. };
+            let mut surface = Surface::new(900, 900).unwrap();
+            surface
+                .draw(
+                    &config,
+                    &config.universes[0],
+                    &sectors,
+                    &path,
+                    Some(3),
+                    origin,
+                    1.,
+                    false,
+                )
+                .unwrap();
+            let before = bytes(&surface).to_vec();
+            config.theme.star_text = Some(crate::theme::Color(0x15213a));
+            surface
+                .draw(
+                    &config,
+                    &config.universes[0],
+                    &sectors,
+                    &path,
+                    Some(3),
+                    origin,
+                    1.,
+                    false,
+                )
+                .unwrap();
+            let after = bytes(&surface);
+            let mut stars = 0;
+            let mut constellations = 0;
+            for sector in &sectors {
+                let width = ((sector.inner + sector.outer) * 0.5 * sector.sweep).clamp(12., 125.);
+                let x = (origin.x + sector.dot.x - width / 2.).floor() as usize;
+                let y = (origin.y + sector.dot.y + 3.).floor() as usize;
+                let changed = (y..y + 22).any(|row| {
+                    let start = (row * 900 + x) * 4;
+                    let end = start + width.ceil() as usize * 4;
+                    before[start..end] != after[start..end]
+                });
+                if config.find(sector.id).unwrap().children.is_some() {
+                    assert!(!changed, "Constellation label was recolored");
+                    constellations += 1;
+                } else {
+                    assert!(changed, "Star label did not use its override");
+                    stars += 1;
+                }
+            }
+            assert!(stars > 0 && constellations > 0);
+            let output = Path::new(".local/render-review");
+            std::fs::create_dir_all(output).unwrap();
+            save_png(
+                &composite(&surface, [14, 24, 53]),
+                &output.join("star-text-light-gold.png"),
+            );
+        }
+    }
+    #[test]
     #[ignore = "offscreen Windows icon extraction; remote CI only"]
     fn automatic_and_custom_icons_render_with_transparency_and_missing_fallback() {
         unsafe {
@@ -1099,7 +1166,7 @@ impl Canvas {
                 (point.y + 3. * scale) as f32,
                 width as f32,
                 (12. * scale).max(7.) as f32,
-                palette.text.argb(255),
+                palette.label_color(folder).argb(255),
             )?;
         }
         let lit: Vec<_> = sectors
