@@ -138,7 +138,7 @@ Stop the resident app using **Quit** in its tray menu. Closing the configuration
 
 This is a Windows beta. The configuration UI uses native Windows controls. Linux desktop integration is not implemented. Automated desktop probes do not replace checking your own displays, input devices, fullscreen applications, visual preferences, and chime volume.
 
-Themes and application-action adapters remain future work; item icons are available in Configure.
+Larger background images and application-action adapters remain future work. Item icons and a shared color palette are available in Configure.
 
 For known beta limitations and feedback guidance, see the [release notes](https://github.com/LeonardoACMJ/Constellation/releases).
 
@@ -147,3 +147,18 @@ Read [A small manifesto for portable software / Um pequeno manifesto por aplica√
 **Browser compatibility (0.1.44):** old configurations load normally. Saving a non-default browser preference adds a `browser` field that older builds reject. Before downgrading, preserve a compatible copy or remove browser fields from every node. The configuration version stays unchanged.
 
 **Input diagnostics (0.1.47):** if a shortcut intermittently stops working after switching windows, `data/input-state.log` records window classes and blocking decisions (bounded to about 64 KiB, without typed keys or window titles). Windows may restrict global input over elevated applications. Returning to an ordinary window resynchronizes input; fullscreen applications remain excluded. When opening while moving, the cursor is centered before navigation starts. Releasing a Hold binding before opening finishes cancels it safely.
+
+## Editor tools
+
+The **Tools‚Ä¶** button opens these tools. Each tool changes the editor draft; **Save** applies it to the launcher. **Update draft** beneath the item fields also leaves persistence to Save. The title and bottom status show Saved or Unsaved. Windows startup and Start menu buttons remain immediate, independent actions.
+
+| Tool | How to use it |
+|---|---|
+| Themes & colors | Pick Constellation, Forest, Rose dusk or Daylight, or enter six-digit hex colors / use Choose. The miniature menu previews the palette. Use palette in draft, then Save. Reset restores original colors. Windows high contrast overrides colors while enabled. |
+| Move items | Ctrl/Shift-select sources in the current universe. Search the destination's full path, choose a Constellation in any universe, then Move selected. A branch includes its descendants; selecting those too does not copy/move them twice. Invalid profile dependencies or descendant destinations are rejected. Undo restores the whole move. |
+| Check / repair paths | Check launch targets, runners, working directories and icon/browser sources without running them. Missing/unavailable is advice, including offline drives. To relocate references, enter both folder prefixes and Preview replacements; review exact fields before Apply. Only directory-boundary matches change, never URL/argument/note text. Undo restores them; Save persists them. External programs are not copied. |
+| Recover draft | Restore or discard the recovery document, if one exists. Cancel keeps it for later; resolve it before saving a different draft. Restoration is unsaved, and warns if the saved configuration changed since the recovery point. |
+
+Unfinished edits are captured after a short editing pause in **one** `data/editor-draft.json`, including unvalidated text and open configuration-tool drafts. It never feeds the launcher. Save or explicit discard clears recovery; an abnormal exit may leave it for the next editor start. Captures are bounded to 16 MiB and are best effort: changes made immediately before power loss may not be present. The document contains the text you were editing; it travels only when you copy the whole portable folder, not with JSON/bundle exports. If recovery cannot be written, ordinary explicit Save remains available.
+
+**Theme compatibility (0.1.49):** the default palette is omitted. Custom palettes add `theme`, rejected by older builds. Preserve a compatible configuration before downgrading, or Reset the palette and Save with this build first. The format version is unchanged; a backup is useful only if it predates the incompatible field.

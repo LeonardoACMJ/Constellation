@@ -17,6 +17,7 @@ pub struct Config {
     pub profiles: Vec<Profile>,
     pub layout: Layout,
     pub sound: Sound,
+    pub theme: crate::theme::Palette,
 }
 
 /// Reads both shapes: `root` (every version through 0.1.25) and `universes`.
@@ -33,6 +34,8 @@ struct ConfigInput {
     layout: Layout,
     #[serde(default)]
     sound: Sound,
+    #[serde(default)]
+    theme: crate::theme::Palette,
 }
 impl From<ConfigInput> for Config {
     fn from(c: ConfigInput) -> Self {
@@ -48,6 +51,7 @@ impl From<ConfigInput> for Config {
             profiles: c.profiles,
             layout: c.layout,
             sound: c.sound,
+            theme: c.theme,
         }
     }
 }
@@ -64,6 +68,8 @@ struct ConfigOutput {
     profiles: Vec<Profile>,
     layout: Layout,
     sound: Sound,
+    #[serde(skip_serializing_if = "crate::theme::Palette::is_default")]
+    theme: crate::theme::Palette,
 }
 impl From<Config> for ConfigOutput {
     fn from(c: Config) -> Self {
@@ -76,6 +82,7 @@ impl From<Config> for ConfigOutput {
             profiles: c.profiles,
             layout: c.layout,
             sound: c.sound,
+            theme: c.theme,
         }
     }
 }
@@ -473,24 +480,7 @@ impl Config {
         for universe in &self.universes {
             walk(universe, &mut ids, 0)?;
         }
-        let l = self.layout;
-        if ![l.radius, l.distance, l.spread, l.gap, self.sound.volume]
-            .iter()
-            .all(|x| x.is_finite())
-            || l.radius <= 0.
-            || l.distance < 0.
-            || l.spread <= 0.
-            || l.spread > 360.
-            || l.gap < 0.
-        {
-            return Err(
-                "Layout values must be finite; radius > 0, distance/gap >= 0 and spread in (0,360]"
-                    .into(),
-            );
-        }
-        if !(0. ..=1.).contains(&self.sound.volume) {
-            return Err("Sound volume must be between 0 and 1".into());
-        }
+        validate_settings(self.layout, self.sound)?;
         let mut profile_ids = HashSet::new();
         let mut bindings = HashSet::new();
         for p in &self.profiles {
@@ -724,6 +714,30 @@ impl Default for Config {
             }],
             layout: Layout::default(),
             sound: Sound::default(),
+            theme: Default::default(),
         }
     }
+}
+
+/// Validate only the small settings block during interactive slider/text edits.
+pub fn validate_settings(layout: Layout, sound: Sound) -> Result<(), String> {
+    let l = layout;
+    if ![l.radius, l.distance, l.spread, l.gap, sound.volume]
+        .iter()
+        .all(|x| x.is_finite())
+        || l.radius <= 0.
+        || l.distance < 0.
+        || l.spread <= 0.
+        || l.spread > 360.
+        || l.gap < 0.
+    {
+        return Err(
+            "Layout values must be finite; radius > 0, distance/gap >= 0 and spread in (0,360]"
+                .into(),
+        );
+    }
+    if !(0. ..=1.).contains(&sound.volume) {
+        return Err("Sound volume must be between 0 and 1".into());
+    }
+    Ok(())
 }

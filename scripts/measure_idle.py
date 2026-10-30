@@ -6,11 +6,13 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+from desktop_fixture import require_interactive, quit_resident
+require_interactive()
 
 root=Path(__file__).resolve().parents[1]
 folder=root/".local/idle-check";folder.mkdir(parents=True,exist_ok=True)
 exe=folder/"constellation.exe";shutil.copy2(root/"target/release/constellation.exe",exe)
-subprocess.run([str(exe),"--check-config"],check=True,timeout=5)
+subprocess.run([str(exe),"--check-config"],check=True,timeout=5,creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL)
 U,K,P=C.windll.user32,C.windll.kernel32,C.windll.psapi
 U.FindWindowW.argtypes=[W.LPCWSTR,W.LPCWSTR];U.FindWindowW.restype=W.HWND
 U.PostMessageW.argtypes=[W.HWND,W.UINT,C.c_size_t,C.c_ssize_t]
@@ -24,7 +26,7 @@ def cpu(handle):
     times=[W.FILETIME() for _ in range(4)]
     if not K.GetProcessTimes(handle,*[C.byref(t) for t in times]):raise OSError("GetProcessTimes failed")
     return sum((t.dwHighDateTime<<32)|t.dwLowDateTime for t in times[2:])/1e7
-process=subprocess.Popen([str(exe)])
+process=subprocess.Popen([str(exe)],creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL)
 handle=None
 try:
     time.sleep(.5)
@@ -39,8 +41,7 @@ try:
     (folder/"measurement.json").write_text(json.dumps(result,indent=2))
     print(json.dumps(result),flush=True)
 finally:
-    hwnd=U.FindWindowW("Constellation.Native.Radial",None)
-    if hwnd:U.PostMessageW(hwnd,0x2,0,0)
+    quit_resident(process)
     try:process.wait(timeout=5)
     except subprocess.TimeoutExpired:process.terminate();process.wait(timeout=5)
     if handle:K.CloseHandle(handle)

@@ -1,6 +1,6 @@
 """Windows-only unattended smoke checks against an isolated portable copy.
 
-Run after `cargo build --release`: python tests/native_smoke.py
+Run after `cargo build --release`: python tests/native_smoke.py --interactive-session
 Temporarily creates its own foreground input-probe window, then restores cursor
 and foreground window. No browsers or user programs are launched. Artifacts and
 runtime config stay in .local/native-smoke. Pillow is optional (screenshots only).
@@ -14,6 +14,10 @@ import subprocess
 import threading
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from desktop_fixture import require_interactive, find_window
+require_interactive()
 
 if sys.platform != "win32":
     raise SystemExit("This smoke test requires a Windows desktop session")
@@ -75,6 +79,8 @@ G.GetDIBits.argtypes=[W.HDC,W.HBITMAP,UINT,UINT,C.c_void_p,C.c_void_p,UINT]
 
 old_cursor=W.POINT(); U.GetCursorPos(C.byref(old_cursor)); old_foreground=U.GetForegroundWindow()
 observed=[]; processes=[]; checks=[]
+def owned_window(name):
+    return find_window(name, {p.pid for p in processes if p.poll() is None})
 @PROC
 def probe_proc(hwnd,msg,w,l):
     if msg==0x100:
@@ -147,7 +153,7 @@ def screenshot(hwnd,name):
 try:
     # Each run owns this exact isolated config file; keep runs independent.
     (OUT/"data/config.json").unlink(missing_ok=True)
-    subprocess.run([str(EXE),"--check-config"],check=True,timeout=5)
+    subprocess.run([str(EXE),"--check-config"],check=True,timeout=5,creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL)
     config_path=OUT/"data/config.json"; c=json.loads(config_path.read_text())
     marker=OUT/"launched.txt"
     if marker.exists(): marker.unlink()
@@ -158,9 +164,9 @@ try:
     c["layout"]={"radius":144,"distance":.52,"spread":148,"gap":2}
     c["sound"]["enabled"]=False
     config_path.write_text(json.dumps(c),encoding="utf-8")
-    resident=subprocess.Popen([str(EXE)]); processes.append(resident)
-    wait(lambda:U.FindWindowW("Constellation.Native.Radial",None))
-    overlay=U.FindWindowW("Constellation.Native.Radial",None)
+    resident=subprocess.Popen([str(EXE)],creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL); processes.append(resident)
+    wait(lambda:owned_window("Constellation.Native.Radial"))
+    overlay=owned_window("Constellation.Native.Radial")
     U.SetForegroundWindow(probe); U.SetFocus(probe); pause()
     U.SetCursorPos(300,250); origin=point(); observed.clear(); invoke()
     wait(lambda:visible(overlay))
@@ -171,7 +177,7 @@ try:
     scale=U.GetDpiForWindow(overlay)/96
     U.SetCursorPos(center[0],round(center[1]-144*.65*scale)); pause(); screenshot(overlay,"radial.png")
     assert U.GetForegroundWindow()==probe,("Radial changed the foreground application",U.GetForegroundWindow(),probe)
-    keys((0x20,False),(0x20,True)); wait(lambda:not visible(overlay));wait(marker.exists)
+    keys((0x20,False),(0x20,True)); wait(lambda:not visible(overlay));wait(lambda:marker.exists() and marker.stat().st_size > 0)
     assert point()==origin,(point(),origin)
     mark("Space launches one target and restores the saved cursor")
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();U.SetCursorPos(320,260);origin=point()
@@ -180,7 +186,7 @@ try:
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause()
     keys((0x11,False),(0x45,False));wait(lambda:visible(overlay));center=point()
     U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause()
-    marker.unlink();keys((0x11,True),(0x45,True));wait(lambda:not visible(overlay));wait(marker.exists)
+    marker.unlink();keys((0x11,True),(0x45,True));wait(lambda:not visible(overlay));wait(lambda:marker.exists() and marker.stat().st_size > 0)
     mark("releasing a required modifier completes Hold selection")
     # Reload a profile and a portable relative script without restarting the resident.
     scripts=OUT/"scripts";scripts.mkdir(exist_ok=True)
@@ -198,7 +204,7 @@ try:
     U.SetForegroundWindow(probe);pause();origin=point();marker.unlink()
     invoke();wait(lambda:visible(overlay));center=point()
     move_cursor(center[0],round(center[1]-144*2*scale));pause()
-    keys((0x20,False),(0x20,True));wait(lambda:not visible(overlay));wait(marker.exists)
+    keys((0x20,False),(0x20,True));wait(lambda:not visible(overlay));wait(lambda:marker.exists() and marker.stat().st_size > 0)
     assert point()==origin
     mark("extended Star direction launches outside the circle without precision aiming")
     # Exercise center-on-close and exact-targeting opt-out without adding profiles.
@@ -207,7 +213,7 @@ try:
     config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
     U.SetForegroundWindow(probe);pause();marker.unlink();keys((0x77,False));wait(lambda:visible(overlay));center=point()
     move_cursor(center[0],round(center[1]-144*2*scale));pause();keys((0x77,True))
-    wait(lambda:not visible(overlay));wait(marker.exists);assert point()==center
+    wait(lambda:not visible(overlay));wait(lambda:marker.exists() and marker.stat().st_size > 0);assert point()==center
     c["profiles"][3].update(directional=False)
     config_path.write_text(json.dumps(c),encoding="utf-8");U.PostMessageW(overlay,0x8008,0,0);pause()
     U.SetForegroundWindow(probe);pause();marker.unlink();keys((0x77,False));wait(lambda:visible(overlay));center=point()
@@ -293,8 +299,8 @@ try:
     U.SetWindowLongPtrW(probe,-16,0x10CF0000);U.SetWindowPos(probe,None,80,80,440,260,0x20);pause(.2)
     # Stop resident through its tray Quit command path, with no process killing.
     # This process is an isolated test instance; WM_DESTROY is the native exit path.
-    editor=subprocess.Popen([str(EXE),"--configure"]);processes.append(editor)
-    wait(lambda:U.FindWindowW("Constellation.Config",None));window=U.FindWindowW("Constellation.Config",None);pause(.3)
+    editor=subprocess.Popen([str(EXE),"--configure"],creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL);processes.append(editor)
+    wait(lambda:owned_window("Constellation.Config"));window=owned_window("Constellation.Config");pause(.3)
     screenshot(window,"configuration.png")
     # All controls remain reachable when the desktop/window is smaller than
     # the logical editor layout. Restore the original bounds after the probe.
@@ -455,8 +461,8 @@ try:
     click(window,405);click(window,401);assert json.loads(config_path.read_text())==baseline
     mark("Reload asks before discarding unapplied text and cancelling preserves it")
     click(window,404)
-    wait(lambda:U.FindWindowW("Constellation.Profiles",None))
-    profiles=U.FindWindowW("Constellation.Profiles",None)
+    wait(lambda:owned_window("Constellation.Profiles"))
+    profiles=owned_window("Constellation.Profiles")
     U.SetForegroundWindow(profiles);pause(.25)
     click(profiles,611);invoke();pause()
     assert text_at(profiles,603)=="Ctrl+Q",text_at(profiles,603)
@@ -482,7 +488,7 @@ try:
     U.GetWindowRect(profiles,C.byref(outer));U.GetWindowRect(U.GetDlgItem(profiles,610),C.byref(button))
     assert button.bottom < outer.bottom, "Profile actions must fit inside the window"
     screenshot(profiles,"shortcut-profiles.png")
-    click(profiles,610);wait(lambda:not U.FindWindowW("Constellation.Profiles",None))
+    click(profiles,610);wait(lambda:not owned_window("Constellation.Profiles"))
     click(window,401)
     saved=json.loads(config_path.read_text())["profiles"]
     assert saved[-1]["id"] > 0
@@ -493,12 +499,12 @@ try:
     keys((0x78,True));wait(lambda:not visible(overlay));assert point()==center
     mark("graphically added F9 Hold profile reloads live with cursor restoration disabled")
     U.SetForegroundWindow(window);pause();click(window,404)
-    profiles=U.FindWindowW("Constellation.Profiles",None)
+    profiles=owned_window("Constellation.Profiles")
     click(profiles,608);click(profiles,613)
-    wait(lambda:not U.FindWindowW("Constellation.Profiles",None));click(window,401)
+    wait(lambda:not owned_window("Constellation.Profiles"));click(window,401)
     assert json.loads(config_path.read_text())["profiles"]==saved
     mark("cancelling profile removals preserves the saved profiles")
-    U.PostMessageW(overlay,0x2,0,0);resident.wait(timeout=5)
+    U.PostMessageW(overlay,0x8009,3,0);resident.wait(timeout=5)
     mark("resident exits and releases its hooks")
     assert U.GetDlgItem(window,100) and U.GetDlgItem(window,501)
     # Exercise the actual slider notification and unrestricted numeric override.
@@ -536,14 +542,14 @@ try:
     baseline={str(p.relative_to(sentinels)) for p in sentinels.rglob("*")}
     original_bytes=config_path.read_bytes()
     subprocess.run([str(relocated/"constellation.exe"),"--check-config"],cwd=foreign,env=env,check=True,timeout=5)
-    resident=subprocess.Popen([str(relocated/"constellation.exe")],cwd=foreign,env=env);processes.append(resident)
-    wait(lambda:U.FindWindowW("Constellation.Native.Radial",None));overlay=U.FindWindowW("Constellation.Native.Radial",None)
+    resident=subprocess.Popen([str(relocated/"constellation.exe")],cwd=foreign,env=env,creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL);processes.append(resident)
+    wait(lambda:owned_window("Constellation.Native.Radial"));overlay=owned_window("Constellation.Native.Radial")
     relocation_marker=relocated/"relocation.txt";relocation_marker.unlink(missing_ok=True)
     U.SetForegroundWindow(probe);U.SetFocus(probe);pause();invoke();wait(lambda:visible(overlay));center=point()
     U.SetCursorPos(center[0],round(center[1]-144*.65*scale));pause();keys((0x20,False),(0x20,True))
     wait(lambda:not visible(overlay));wait(lambda:relocation_marker.exists() and relocation_marker.read_text()==str(relocated))
     assert Path(relocation_marker.read_text()).resolve()==relocated.resolve()
-    U.PostMessageW(overlay,0x2,0,0);resident.wait(timeout=5)
+    U.PostMessageW(overlay,0x8009,3,0);resident.wait(timeout=5)
     assert config_path.read_bytes()==original_bytes
     assert {str(p.relative_to(sentinels)) for p in sentinels.rglob("*")}==baseline
     assert not list(foreign.iterdir())

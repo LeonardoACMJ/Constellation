@@ -159,6 +159,8 @@ struct Device {
     handle: HWAVEOUT,
     buffers: Box<[Buffer; BUFFERS]>,
     running: bool,
+    preferred: Option<u32>,
+    underruns: u64,
     // Multimedia scheduling is scoped to an open stream, not the idle tray.
     _scheduling: AudioScheduling,
 }
@@ -222,11 +224,14 @@ impl Device {
                 prepared: false,
             })),
             running: false,
+            preferred: None,
+            underruns: 0,
             _scheduling: AudioScheduling(null_mut()),
         }
     }
     unsafe fn open(wake: &Wake) -> Option<Self> {
         let mut device = Self::empty();
+        device.preferred = preferred_device();
         let format = WAVEFORMATEX {
             wFormatTag: 1,
             nChannels: 1,
@@ -287,6 +292,9 @@ impl Device {
             }
         }
         if self.running && !self.buffers.iter().any(|b| b.queued) {
+            if mixer.active() > 0 {
+                self.underruns += 1;
+            }
             stream.pause()?;
             self.running = false;
         }
@@ -332,6 +340,39 @@ fn update_idle_deadline(
     }
 }
 
+// The mapper handles this query without opening an output stream. Query only
+// on a new note, never poll the audio endpoint while idle.
+// https://learn.microsoft.com/windows-hardware/drivers/audio/accessing-the-preferred-device-id
+unsafe fn preferred_device() -> Option<u32> {
+    let (mut id, mut flags) = (u32::MAX, 0u32);
+    (unsafe {
+        waveOutMessage(
+            WAVE_MAPPER as usize as HWAVEOUT,
+            windows_sys::Win32::Media::Multimedia::DRVM_MAPPER_PREFERRED_GET,
+            (&mut id as *mut u32) as usize,
+            (&mut flags as *mut u32) as usize,
+        )
+    } == 0)
+        .then_some(id)
+}
+#[derive(Default)]
+struct Recovery {
+    failures: u32,
+    next: Option<std::time::Instant>,
+}
+impl Recovery {
+    fn allowed(&self, now: std::time::Instant) -> bool {
+        self.next.is_none_or(|next| now >= next)
+    }
+    fn failed(&mut self, now: std::time::Instant) {
+        self.failures = (self.failures + 1).min(4);
+        self.next = Some(now + std::time::Duration::from_millis(250 << (self.failures - 1)));
+    }
+    fn recovered(&mut self) {
+        *self = Self::default();
+    }
+}
+
 fn output(rx: Receiver<Sound>, wake: Arc<Wake>, keep_open: bool, trace: AudioTrace) {
     unsafe {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
@@ -344,6 +385,8 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>, keep_open: bool, trace: AudioTra
         let mut device: Option<Device> = None;
         let mut idle_deadline: Option<std::time::Instant> = None;
         let mut idle = false;
+        let mut recovery = Recovery::default();
+        let mut last_service = std::time::Instant::now();
         trace.record(if keep_open {
             "session keep_device_open"
         } else {
@@ -361,6 +404,22 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>, keep_open: bool, trace: AudioTra
                         seed ^= seed >> 7;
                         seed ^= seed << 17;
                         if s.enabled {
+                            if !recovery.allowed(std::time::Instant::now()) {
+                                trace.record("note skipped_during_device_backoff");
+                                continue;
+                            }
+                            // Follow the default device between phrases. Preserve
+                            // tails on the current stream until it has drained.
+                            if idle
+                                && device
+                                    .as_ref()
+                                    .is_some_and(|d| d.preferred != preferred_device())
+                            {
+                                trace.record("device preferred_changed");
+                                device = None;
+                                idle_deadline = None;
+                                idle = false;
+                            }
                             if device.is_none() {
                                 trace.record("note cold_device");
                             } else if idle {
@@ -385,12 +444,26 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>, keep_open: bool, trace: AudioTra
                 device = Device::open(&wake);
                 if device.is_none() {
                     trace.record("device open_failed");
-                    break;
+                    recovery.failed(std::time::Instant::now());
+                    mixer = Mixer::default();
+                    // Drop this phrase; never replay old notes on recovery.
+                    continue;
                 }
+                recovery.recovered();
                 trace.record("device open_ready");
             }
             if let Some(d) = &mut device {
-                match d.fill(&mut mixer) {
+                let now = std::time::Instant::now();
+                if d.running && now.duration_since(last_service).as_millis() > 25 {
+                    trace.record("device refill_late_over_25ms");
+                }
+                last_service = now;
+                let underruns = d.underruns;
+                let filled = d.fill(&mut mixer);
+                if d.underruns != underruns {
+                    trace.record("device queue_starved");
+                }
+                match filled {
                     Ok(false) => {
                         if !idle {
                             trace.record("device drained_paused");
@@ -414,7 +487,12 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>, keep_open: bool, trace: AudioTra
                     }
                     Err(()) => {
                         trace.record("device stream_failed");
-                        break;
+                        device = None;
+                        mixer = Mixer::default();
+                        idle_deadline = None;
+                        idle = false;
+                        recovery.failed(std::time::Instant::now());
+                        continue;
                     }
                 }
             }
@@ -442,6 +520,20 @@ fn output(rx: Receiver<Sound>, wake: Arc<Wake>, keep_open: bool, trace: AudioTra
 #[cfg(test)]
 mod queue_tests {
     use super::*;
+    #[test]
+    fn transient_device_failure_has_bounded_note_driven_retry() {
+        let now = std::time::Instant::now();
+        let mut recovery = Recovery::default();
+        assert!(recovery.allowed(now));
+        for _ in 0..12 {
+            recovery.failed(now);
+        }
+        assert!(!recovery.allowed(now + std::time::Duration::from_millis(1999)));
+        assert!(recovery.allowed(now + std::time::Duration::from_secs(2)));
+        recovery.recovered();
+        assert!(recovery.allowed(now));
+        assert_eq!(recovery.failures, 0);
+    }
     #[test]
     fn retained_audio_has_no_idle_deadline_and_normal_mode_keeps_750ms_grace() {
         let now = std::time::Instant::now();

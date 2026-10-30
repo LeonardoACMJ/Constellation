@@ -413,6 +413,9 @@ pub fn same_tree_structure(a: &[TreeRow], b: &[TreeRow]) -> bool {
 /// The full preview has no profile filter and never displays notes or sound.
 /// Keep metadata edits from rerasterizing the whole fan-out.
 pub fn preview_equal(a: &Config, b: &Config, universe: usize) -> bool {
+    a.layout == b.layout && a.theme == b.theme && preview_tree_equal(a, b, universe)
+}
+pub fn preview_tree_equal(a: &Config, b: &Config, universe: usize) -> bool {
     fn nodes(a: &Node, b: &Node) -> bool {
         a.id == b.id
             && a.name == b.name
@@ -426,11 +429,10 @@ pub fn preview_equal(a: &Config, b: &Config, universe: usize) -> bool {
                 _ => false,
             }
     }
-    a.layout == b.layout
-        && a.universes
-            .get(universe)
-            .zip(b.universes.get(universe))
-            .is_some_and(|(a, b)| nodes(a, b))
+    a.universes
+        .get(universe)
+        .zip(b.universes.get(universe))
+        .is_some_and(|(a, b)| nodes(a, b))
 }
 
 #[derive(Debug, PartialEq, Eq)]

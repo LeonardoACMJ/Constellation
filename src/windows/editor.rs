@@ -9,8 +9,8 @@ use crate::{
         Binding, Browser, Config, CursorEnd, Instrument, ItemIcon, Mode, Node, Profile, Target,
     },
     editing::{self, History},
-    editor_layout::{Layout as FormLayout, Rect as FormRect},
-    geometry::{self, Point},
+    editor_layout::{Dpi, Layout as FormLayout, Rect as FormRect},
+    geometry::Point,
     storage,
 };
 use std::{
@@ -20,6 +20,7 @@ use std::{
     mem::{size_of, zeroed},
     path::PathBuf,
     ptr::{null, null_mut},
+    sync::Arc,
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -36,6 +37,7 @@ const BROWSER: i32 = 225;
 const RENAME: i32 = 309;
 const REFRESH_TREE: u32 = WM_APP + 40;
 const ADVICE_READY: u32 = WM_APP + 60;
+const PREVIEW_READY: u32 = WM_APP + 63;
 const BROWSE_TARGET: i32 = 211;
 const BROWSE_RUNNER: i32 = 212;
 const BROWSE_CWD: i32 = 213;
@@ -71,6 +73,9 @@ const SAVE: i32 = 401;
 const RELOAD: i32 = 402;
 const ADVANCED: i32 = 403;
 const PROFILES: i32 = 404;
+const TOOLS: i32 = 409;
+const RECOVER_DRAFT: i32 = 704;
+const DRAFT_TIMER: usize = 54;
 const JSON_TEXT: i32 = 410;
 const JSON_SAVE: i32 = 411;
 const RADIUS: i32 = 501;
@@ -130,6 +135,10 @@ struct Editor {
     json: HWND,
     profiles: Option<Profiles>,
     aux: Option<Aux>,
+    tools: Option<HWND>,
+    draft_writer: Option<crate::draft::Writer>,
+    recovery_draft: Option<crate::draft::Draft>,
+    recovery_error: Option<String>,
     status: String,
     preview: RECT,
     dirty: bool,
@@ -144,10 +153,15 @@ struct Editor {
     settings_invalid: bool,
     measure_preview: bool,
     preview_cache: Option<PreviewCache>,
+    preview_model: Arc<Config>,
+    preview_worker:
+        Option<crate::background::Latest<crate::preview::Request, Arc<crate::preview::Prepared>>>,
+    preview_data: Option<Arc<crate::preview::Prepared>>,
     wheel_delta: i32,
     form: FormLayout,
     controls: Vec<PlacedControl>,
     layout_applied: bool,
+    dpi: Dpi,
     icons: super::item_icons::Cache,
     icon_draft: ItemIcon,
     advice_worker: Option<crate::background::Latest<Target, String>>,
@@ -160,7 +174,7 @@ struct TreeViewState {
     horizontal: i32,
 }
 struct PreviewCache {
-    config: Config,
+    prepared: Arc<crate::preview::Prepared>,
     selected: u64,
     universe: usize,
     monitor: usize,
@@ -237,15 +251,16 @@ unsafe fn control(
         style
     };
     let parent = hwnd;
+    let dpi = Dpi(GetDpiForWindow(parent));
     let hwnd = CreateWindowExW(
         0,
         wide(class).as_ptr(),
         wide(label).as_ptr(),
         WS_CHILD | WS_VISIBLE | style | if class == "STATIC" { 0 } else { WS_TABSTOP },
-        x,
-        y,
-        w,
-        h,
+        dpi.pixels(x),
+        dpi.pixels(y),
+        dpi.pixels(w),
+        dpi.pixels(h),
         hwnd,
         id as usize as HMENU,
         GetModuleHandleW(null()),
@@ -628,7 +643,7 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             56,
             0,
         );
-        control(hwnd, "BUTTON", "Apply item", APPLY, 305, 585, 150, 32, 0);
+        control(hwnd, "BUTTON", "Update draft", APPLY, 305, 585, 150, 32, 0);
         label(
             hwnd,
             "LAYOUT (numeric values; no forced fitting)",
@@ -776,6 +791,10 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             35,
             WS_TABSTOP,
         );
+        theme::refresh(hwnd, e.c.theme);
+        control(
+            hwnd, "BUTTON", "Tools...", TOOLS, 690, 906, 150, 35, WS_TABSTOP,
+        );
         e.refresh();
         e.settings_to_controls();
         e.dirty = false;
@@ -786,15 +805,19 @@ pub fn run(root: PathBuf) -> Result<(), String> {
         ShowWindow(hwnd, SW_SHOWMAXIMIZED);
         UpdateWindow(hwnd);
         super::focus_window(hwnd);
+        if (*EDITOR).has_recovery() {
+            PostMessageW(hwnd, WM_COMMAND, RECOVER_DRAFT as usize, 0);
+        }
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             let e = &*EDITOR;
-            let dialog = e
-                .aux
-                .as_ref()
-                .map(|a| a.hwnd)
-                .or_else(|| e.profiles.as_ref().map(|p| p.hwnd))
-                .unwrap_or(if e.json.is_null() { hwnd } else { e.json });
+            let dialog = e.tools.unwrap_or_else(|| {
+                e.aux
+                    .as_ref()
+                    .map(|a| a.hwnd)
+                    .or_else(|| e.profiles.as_ref().map(|p| p.hwnd))
+                    .unwrap_or(if e.json.is_null() { hwnd } else { e.json })
+            });
             let recording = e.profiles.as_ref().is_some_and(|p| p.recording);
             if !recording && editor_accelerator(&msg, hwnd, e) {
                 continue;
@@ -833,7 +856,13 @@ unsafe extern "system" fn monitor_callback(
 }
 
 impl Editor {
+    fn has_recovery(&self) -> bool {
+        self.recovery_draft.is_some() || self.recovery_error.is_some()
+    }
     fn new(hwnd: HWND, root: PathBuf, c: Config, displays: Vec<Display>) -> Self {
+        let recovery = crate::draft::read(&root);
+        let recovery_error = recovery.as_ref().err().cloned();
+        let recovery_draft = recovery.ok().flatten();
         let selected = c.universes.first().map_or(0, |u| u.id);
         let advice_root = root.clone();
         let window = hwnd as usize;
@@ -857,8 +886,18 @@ impl Editor {
             settings_invalid: false,
             measure_preview: std::env::args().any(|s| s == "--measure-preview"),
             preview_cache: None,
+            preview_model: Arc::new(c.clone()),
+            preview_worker: crate::background::Latest::new(
+                crate::preview::prepare,
+                move || unsafe {
+                    PostMessageW(window as HWND, PREVIEW_READY, 0, 0);
+                },
+            )
+            .ok(),
+            preview_data: None,
             layout_applied: false,
-            icons: super::item_icons::Cache::new(hwnd, root),
+            dpi: Dpi(unsafe { GetDpiForWindow(hwnd) }),
+            icons: super::item_icons::Cache::new(hwnd, root.clone()),
             icon_draft: ItemIcon::Automatic,
             advice_worker,
             wheel_delta: 0,
@@ -877,6 +916,10 @@ impl Editor {
             json: null_mut(),
             profiles: None,
             aux: None,
+            tools: None,
+            draft_writer: crate::draft::Writer::new(root.clone()).ok(),
+            recovery_draft,
+            recovery_error,
             status: "Edit items, tune spacing or shortcut profiles, then Save.".into(),
             preview: RECT {
                 left: 700,
@@ -891,27 +934,15 @@ impl Editor {
     }
     unsafe fn paint_preview(&self, dc: HDC) -> usize {
         let e = self;
-        render::fill(dc, &e.preview, render::rgb(15, 22, 36));
-        let tree = &e.c.universes[e.universe];
-        let all = geometry::full_from(&e.c, tree, None);
-        let (workw, workh) = if let Some(d) = e.displays.get(e.monitor) {
-            let (mut x, mut y) = (96, 96);
-            GetDpiForMonitor(d.handle, MDT_EFFECTIVE_DPI, &mut x, &mut y);
-            (
-                (d.work.right - d.work.left) as f64 * 96. / x.max(1) as f64,
-                (d.work.bottom - d.work.top) as f64 * 96. / y.max(1) as f64,
-            )
-        } else {
-            (1920., 1080.)
+        render::fill(dc, &e.preview, theme::background());
+        let Some(prepared) = &e.preview_data else {
+            return 0;
         };
-        let mut extentx = workw / 2.;
-        let mut extenty = workh / 2.;
-        for s in &all {
-            for p in s.polygon() {
-                extentx = extentx.max(p.x.abs());
-                extenty = extenty.max(p.y.abs());
-            }
-        }
+        let config = &prepared.config;
+        let tree = &config.universes[prepared.universe];
+        let all = &prepared.sectors;
+        let (workw, workh) = (prepared.width, prepared.height);
+        let (extentx, extenty) = (prepared.extent_x, prepared.extent_y);
         let r = e.preview;
         let scale = (((r.right - r.left - 30) as f64) / (extentx * 2.))
             .min((r.bottom - r.top - 70) as f64 / (extenty * 2.))
@@ -936,30 +967,34 @@ impl Editor {
         SelectObject(dc, oldp);
         SelectObject(dc, oldb);
         DeleteObject(pen);
+        let mut nodes = HashMap::new();
+        fn index<'a>(n: &'a Node, out: &mut HashMap<u64, &'a Node>) {
+            out.insert(n.id, n);
+            for child in n.children.iter().flatten() {
+                index(child, out);
+            }
+        }
+        index(tree, &mut nodes);
         let images = e.icons.collect(
-            e.c.find(e.selected)
+            nodes
+                .get(&e.selected)
+                .copied()
                 .into_iter()
-                .chain(
-                    e.c.find(e.selected)
-                        .and_then(|n| n.children.as_ref())
-                        .into_iter()
-                        .flatten(),
-                )
-                .chain(std::iter::once(&e.c.universes[e.universe]))
+                .chain(std::iter::once(tree))
                 .chain(
                     all.iter()
                         .filter(|s| {
                             (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
                                 && (s.outer - s.inner) * scale >= 18.
                         })
-                        .filter_map(|s| e.c.find(s.id)),
+                        .filter_map(|s| nodes.get(&s.id).copied()),
                 ),
         );
         render::draw_with_icons(
             dc,
-            &e.c,
+            config,
             tree,
-            &all,
+            all,
             &[],
             None,
             origin,
@@ -980,29 +1015,65 @@ impl Editor {
             render::rgb(148, 164, 190),
             12,
         );
-        let warnings = geometry::warnings_for_sectors(&e.c, &all, workw, workh);
-        let warning = if warnings.is_empty() {
-            "Layout fits this monitor's work area.".into()
-        } else {
-            warnings.join(" ")
-        };
         render::text(
             dc,
-            &warning,
+            &prepared.warnings,
             r.left,
             r.bottom + 8,
             r.right - r.left,
-            theme::MUTED,
+            theme::muted(),
             12,
         );
         all.len()
     }
     unsafe fn cached_preview(&mut self, dc: HDC) -> usize {
+        if self.preview_model.universes.get(self.universe).is_none()
+            || !editing::preview_tree_equal(&self.preview_model, &self.c, self.universe)
+        {
+            self.preview_model = Arc::new(self.c.clone());
+        }
+        let (width_work, height_work) = if let Some(d) = self.displays.get(self.monitor) {
+            let (mut x, mut y) = (96, 96);
+            GetDpiForMonitor(d.handle, MDT_EFFECTIVE_DPI, &mut x, &mut y);
+            (
+                (d.work.right - d.work.left) as f64 * 96. / x.max(1) as f64,
+                (d.work.bottom - d.work.top) as f64 * 96. / y.max(1) as f64,
+            )
+        } else {
+            (1920., 1080.)
+        };
+        let request = crate::preview::Request {
+            config: self.preview_model.clone(),
+            universe: self.universe,
+            layout: self.c.layout,
+            theme: self.c.theme,
+            width: width_work,
+            height: height_work,
+        };
+        if let Some(data) = self
+            .preview_worker
+            .as_ref()
+            .and_then(|worker| worker.get(&request))
+        {
+            self.preview_data = Some(data);
+        }
         let r = self.preview;
         let width = (r.right - r.left).max(1);
         let height = (r.bottom - r.top + 110).max(1);
+        let Some(prepared) = self.preview_data.as_ref() else {
+            render::text(
+                dc,
+                "Preparing preview…",
+                r.left,
+                r.top + 40,
+                width,
+                theme::muted(),
+                14,
+            );
+            return 0;
+        };
         let valid = self.preview_cache.as_ref().is_some_and(|v| {
-            editing::preview_equal(&v.config, &self.c, self.universe)
+            Arc::ptr_eq(&v.prepared, prepared)
                 && v.selected == self.selected
                 && v.universe == self.universe
                 && v.monitor == self.monitor
@@ -1012,7 +1083,9 @@ impl Editor {
         if !valid {
             trace("preview.rebuild.begin");
             let memory = CreateCompatibleDC(dc);
-            let bitmap = CreateCompatibleBitmap(dc, width, height);
+            let bitmap =
+                CreateCompatibleBitmap(dc, self.dpi.pixels(width), self.dpi.pixels(height));
+            theme::logical_dc(memory, self.dpi.0);
             let old = SelectObject(memory, bitmap);
             render::fill(
                 memory,
@@ -1022,14 +1095,19 @@ impl Editor {
                     right: width,
                     bottom: height,
                 },
-                theme::BACKGROUND,
+                theme::background(),
             );
-            SetViewportOrgEx(memory, -r.left, -r.top, null_mut());
+            SetViewportOrgEx(
+                memory,
+                -self.dpi.pixels(r.left),
+                -self.dpi.pixels(r.top),
+                null_mut(),
+            );
             let sectors = self.paint_preview(memory);
             SelectObject(memory, old);
             DeleteDC(memory);
             self.preview_cache = Some(PreviewCache {
-                config: self.c.clone(),
+                prepared: self.preview_data.as_ref().unwrap().clone(),
                 selected: self.selected,
                 universe: self.universe,
                 monitor: self.monitor,
@@ -1043,6 +1121,7 @@ impl Editor {
         let cache = self.preview_cache.as_ref().unwrap();
         let memory = CreateCompatibleDC(dc);
         let old = SelectObject(memory, cache.bitmap);
+        theme::logical_dc(memory, self.dpi.0);
         BitBlt(dc, r.left, r.top, width, height, memory, 0, 0, SRCCOPY);
         SelectObject(memory, old);
         DeleteDC(memory);
@@ -1059,12 +1138,17 @@ impl Editor {
         self.c = c;
         self.dirty = self.c != self.saved;
     }
-    unsafe fn advice(&self) {
+    unsafe fn update_title(&self) {
         SetWindowTextW(
             self.hwnd,
             wide(format!(
-                "Constellation {} — Configure & Visualize{}",
+                "Constellation {} — Configure & Visualize{}{}",
                 env!("CARGO_PKG_VERSION"),
+                if self.dirty || self.item_dirty || self.settings_invalid {
+                    " · Unsaved"
+                } else {
+                    " · Saved"
+                },
                 if self.recovery.is_some() {
                     " [Recovered backup]"
                 } else {
@@ -1073,6 +1157,9 @@ impl Editor {
             ))
             .as_ptr(),
         );
+    }
+    unsafe fn advice(&self) {
+        self.update_title();
         let mut warning = self
             .c
             .launch_target(self.selected)
@@ -1084,6 +1171,10 @@ impl Editor {
                     .unwrap_or_else(|| "Target checks unavailable".into())
             })
             .unwrap_or_default();
+        let browser = crate::organize::browser_summary(&self.c, self.universe, self.selected);
+        if !browser.is_empty() {
+            warning = format!("{browser}\r\n{warning}");
+        }
         if self.c.find(self.selected).is_some_and(|n| {
             matches!(n.icon, ItemIcon::Custom { .. } | ItemIcon::Software { .. })
                 && self.icons.failed(n)
@@ -1092,6 +1183,9 @@ impl Editor {
         }
         if let Some(recovery) = &self.recovery {
             warning = format!("{recovery} {warning}");
+        }
+        if let Some(message) = self.draft_writer.as_ref().and_then(|w| w.error()) {
+            warning = format!("Draft recovery unavailable: {message}. {warning}");
         }
         set(self.hwnd, ADVICE, &warning);
     }
@@ -1242,6 +1336,9 @@ impl Editor {
         Ok(())
     }
     unsafe fn save(&mut self) -> Result<(), String> {
+        if self.has_recovery() {
+            return Err("Resolve the recovery draft first: Tools > Recover draft".into());
+        }
         self.apply()?;
         self.controls_to_settings()?;
         self.checkpoint_settings();
@@ -1251,6 +1348,11 @@ impl Editor {
             self.disk_revision.as_ref().map_err(Clone::clone)?,
         )?);
         self.recovery = None;
+        let recovery_warning = self
+            .draft_writer
+            .as_ref()
+            .and_then(|writer| writer.clear().err());
+        KillTimer(self.hwnd, DRAFT_TIMER);
         self.icons.invalidate();
         self.preview_cache = None;
         if let Some(worker) = &self.advice_worker {
@@ -1263,6 +1365,10 @@ impl Editor {
         self.status =
             "Saved. Launcher reloads in the background; an open menu keeps its current settings."
                 .into();
+        if let Some(message) = recovery_warning {
+            self.status
+                .push_str(&format!(" Recovery could not be cleared: {message}"));
+        }
         Ok(())
     }
     unsafe fn transfer(&mut self, export: bool) -> Result<(), String> {
@@ -1320,7 +1426,7 @@ impl Editor {
                 let mut r = self.form.control(c.base, c.id);
                 r.x -= self.scroll_x;
                 r.y -= self.scroll_y;
-                (c.hwnd, r)
+                (c.hwnd, self.dpi.rect(r))
             })
             .collect();
         let mut batch = BeginDeferWindowPos(positions.len() as i32);
@@ -1366,12 +1472,20 @@ impl Editor {
         // both axes together so crossing a threshold cannot leave a dead bar.
         let fullw = client.right + if style & WS_VSCROLL != 0 { barw } else { 0 };
         let fullh = client.bottom + if style & WS_HSCROLL != 0 { barh } else { 0 };
-        let next = FormLayout::new(fullw, fullh, barw, barh);
-        if self.layout_applied && self.form == next {
+        let next_dpi = Dpi(dpi);
+        let next = FormLayout::new(
+            next_dpi.logical(fullw),
+            next_dpi.logical(fullh),
+            next_dpi.logical(barw),
+            next_dpi.logical(barh),
+        );
+        if self.layout_applied && self.form == next && self.dpi == next_dpi {
             trace("layout.unchanged");
             return;
         }
         self.form = next;
+        self.dpi = next_dpi;
+        self.preview_cache = None;
         // Scrollbar visibility changes synchronously send WM_SIZE. Both axes
         // are already resolved above; replaying those intermediate sizes can
         // recursively schedule more layout/scrollbar work on restore.
@@ -1476,6 +1590,10 @@ impl Editor {
             .map(|(id, _)| *id)
     }
     unsafe fn refresh(&mut self) {
+        if theme::source() != self.c.theme {
+            theme::refresh(self.hwnd, self.c.theme);
+            self.preview_cache = None;
+        }
         self.tree_refresh_pending = false;
         self.capture_tree_view();
         self.universe = self.universe.min(self.c.universes.len() - 1);
@@ -1784,12 +1902,14 @@ impl Editor {
                 .parse()
                 .map_err(|_| "Enter numeric layout and volume values".into())
         };
-        let mut candidate = self.c.clone();
-        candidate.layout.radius = number(RADIUS)?;
-        candidate.layout.distance = number(DISTANCE)?;
-        candidate.layout.spread = number(SPREAD)?;
-        candidate.layout.gap = number(GAP)?;
-        candidate.sound.volume = number(VOLUME)?;
+        let layout = crate::config::Layout {
+            radius: number(RADIUS)?,
+            distance: number(DISTANCE)?,
+            spread: number(SPREAD)?,
+            gap: number(GAP)?,
+        };
+        let mut sound = self.c.sound;
+        sound.volume = number(VOLUME)?;
         let instrument = match send(self.hwnd, INSTRUMENT, CB_GETCURSEL, 0, 0) {
             0 => None,
             1 => Some(Instrument::Mallet),
@@ -1798,13 +1918,14 @@ impl Editor {
             4 => Some(Instrument::WindChimes),
             _ => return Err("Choose a sound".into()),
         };
-        candidate.sound.select_instrument(instrument);
-        candidate.validate()?;
-        if candidate != self.c {
+        sound.select_instrument(instrument);
+        crate::config::validate_settings(layout, sound)?;
+        if layout != self.c.layout || sound != self.c.sound {
             if self.settings_before.is_none() {
                 self.settings_before = Some(self.c.clone());
             }
-            self.c = candidate;
+            self.c.layout = layout;
+            self.c.sound = sound;
             self.dirty = self.c != self.saved;
         }
         self.settings_invalid = false;
@@ -2108,6 +2229,12 @@ unsafe fn advanced(e: &mut Editor) {
 }
 
 unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if let Some(result) = theme::display_message(hwnd, msg, w, l) {
+        return result;
+    }
+    if msg == WM_COMMAND && !EDITOR.is_null() {
+        SetTimer((*EDITOR).hwnd, DRAFT_TIMER, 500, None);
+    }
     if let Some(result) = theme::message(msg, w, l) {
         return result;
     }
@@ -2127,25 +2254,36 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
     let e = &mut *EDITOR;
     match msg {
         WM_PAINT => {
-            render::buffered(hwnd, theme::BACKGROUND, |_| {});
+            render::buffered(hwnd, theme::background(), |_| {});
             0
         }
         WM_SIZE => {
+            let dpi = Dpi(GetDpiForWindow(hwnd));
             let width = (l as u32 & 0xffff) as i32;
             let height = ((l as u32 >> 16) & 0xffff) as i32;
             MoveWindow(
                 GetDlgItem(hwnd, JSON_TEXT),
-                15,
-                40,
-                (width - 30).max(1),
-                (height - 105).max(1),
+                dpi.pixels(15),
+                dpi.pixels(40),
+                (width - dpi.pixels(30)).max(1),
+                (height - dpi.pixels(105)).max(1),
                 1,
             );
-            MoveWindow(GetDlgItem(hwnd, JSON_SAVE), 15, height - 50, 170, 32, 1);
+            MoveWindow(
+                GetDlgItem(hwnd, JSON_SAVE),
+                dpi.pixels(15),
+                height - dpi.pixels(50),
+                dpi.pixels(170),
+                dpi.pixels(32),
+                1,
+            );
             0
         }
         WM_COMMAND if w & 0xffff == JSON_SAVE as usize => {
             let result = (|| -> Result<(), String> {
+                if e.has_recovery() {
+                    return Err("Resolve the recovery draft first: Tools > Recover draft".into());
+                }
                 let c = storage::parse_config(get(hwnd, JSON_TEXT).as_bytes())?;
                 e.disk_revision = Ok(storage::save_checked(
                     &e.root,
@@ -2162,6 +2300,9 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                 e.commit(c.clone());
                 e.saved = c;
                 e.dirty = false;
+                if let Some(writer) = &e.draft_writer {
+                    let _ = writer.clear();
+                }
                 e.refresh();
                 e.settings_to_controls();
                 e.status =
@@ -2192,6 +2333,9 @@ unsafe extern "system" fn json_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if msg == WM_COMMAND && (w & 0xffff) == TOOLS as usize {
+        return show_tools_menu(hwnd);
+    }
     match msg {
         WM_ENTERSIZEMOVE => trace("native.move_or_resize.begin"),
         WM_EXITSIZEMOVE => trace("native.move_or_resize.end"),
@@ -2200,6 +2344,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         _ => {}
     }
     if let Some(result) = theme::message(msg, w, l) {
+        return result;
+    }
+    if let Some(result) = theme::display_message(hwnd, msg, w, l) {
         return result;
     }
     if msg == WM_DESTROY {
@@ -2222,7 +2369,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         if matches!(
             msg,
-            WM_HSCROLL | WM_VSCROLL | WM_DROPFILES | ADVICE_READY | super::item_icons::READY
+            WM_HSCROLL
+                | WM_VSCROLL
+                | WM_DROPFILES
+                | ADVICE_READY
+                | PREVIEW_READY
+                | super::item_icons::READY
         ) || (msg == WM_SIZE && !RESIZING.with(Cell::get) && w != SIZE_MINIMIZED as usize)
         {
             super::defer_message(hwnd, msg, w, l);
@@ -2238,7 +2390,39 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         return DefWindowProcW(hwnd, msg, w, l);
     };
     let e = &mut *EDITOR;
+    if matches!(msg, WM_COMMAND | WM_HSCROLL) {
+        SetTimer(hwnd, DRAFT_TIMER, 500, None);
+    }
     match msg {
+        WM_TIMER if w == DRAFT_TIMER => {
+            KillTimer(hwnd, DRAFT_TIMER);
+            e.capture_draft();
+            0
+        }
+        super::editor_tools::APPLY => {
+            e.finish_tool(w as HWND);
+            0
+        }
+        super::editor_tools::CLOSED => {
+            if e.tools == Some(w as HWND) {
+                e.tools = None;
+                EnableWindow(hwnd, 1);
+                super::focus_window(hwnd);
+                SetTimer(hwnd, DRAFT_TIMER, 500, None);
+            }
+            0
+        }
+        theme::DISPLAY_CHANGED => {
+            theme::apply_display(hwnd, e.c.theme, false);
+            e.preview_cache = None;
+            e.layout_applied = false;
+            e.resize_view();
+            0
+        }
+        PREVIEW_READY => {
+            InvalidateRect(hwnd, null(), 0);
+            0
+        }
         REFRESH_TREE => {
             if e.tree_refresh_pending {
                 // A newly typed edit must survive even if it arrives before
@@ -2641,6 +2825,19 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         "Reloaded portable configuration. Undo restores the previous draft.".into();
                     Ok(())
                 })(),
+                RECOVER_DRAFT => {
+                    open_aux(e, AuxKind::Recovery);
+                    Ok(())
+                }
+                id if matches!(
+                    id as u32,
+                    super::editor_tools::THEME
+                        | super::editor_tools::MOVE
+                        | super::editor_tools::PATHS
+                ) =>
+                {
+                    e.open_tool(id as u32)
+                }
                 PROFILES => {
                     profiles(e);
                     Ok(())
@@ -2679,11 +2876,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_PAINT => {
+            e.update_title();
             trace("paint.begin");
             let measured = std::time::Instant::now();
             let mut sectors = 0;
-            render::buffered(hwnd, theme::BACKGROUND, |dc| {
-                SetViewportOrgEx(dc, -e.scroll_x, -e.scroll_y, null_mut());
+            render::buffered(hwnd, theme::background(), |dc| {
+                theme::logical_dc(dc, e.dpi.0);
+                SetViewportOrgEx(
+                    dc,
+                    -e.dpi.pixels(e.scroll_x),
+                    -e.dpi.pixels(e.scroll_y),
+                    null_mut(),
+                );
                 for r in e.form.panels() {
                     theme::panel(dc, native(r));
                 }
@@ -2697,22 +2901,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         if e.dirty || e.item_dirty || e.settings_invalid {
                             "Unsaved changes · "
                         } else {
-                            ""
+                            "Saved · "
                         },
                         e.status
                     ),
                     15,
                     e.form.height - 32,
-                    cr.right - 30,
-                    theme::MUTED,
+                    e.dpi.logical(cr.right) - 30,
+                    theme::muted(),
                     12,
                 );
             });
             trace("paint.end");
-            if e.measure_preview {
+            if e.measure_preview && e.preview_data.is_some() {
                 e.measure_preview = false;
                 let report = serde_json::json!({"sectors":sectors,"paint_ms":measured.elapsed().as_secs_f64()*1000.,
-                    "conditions":"Native full-preview paint including layout, GDI drawing and warnings; excludes startup, user input and display scanout"});
+                    "background_prepare_ms":e.preview_data.as_ref().map(|p|p.elapsed_ms),"conditions":"UI paint and background geometry are measured separately; excludes startup, user input and display scanout"});
                 let _ = std::fs::write(
                     e.root.join("data/preview-measurement.json"),
                     serde_json::to_vec_pretty(&report).unwrap(),
@@ -2721,6 +2925,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_CLOSE => {
+            if let Some(tool) = e.tools {
+                super::focus_window(tool);
+                return 0;
+            }
             if e.aux.is_some() {
                 super::focus_window(e.aux.as_ref().unwrap().hwnd);
                 return 0;
@@ -2728,6 +2936,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if e.dirty || e.item_dirty || e.settings_invalid {
                 open_aux(e, AuxKind::Close);
             } else {
+                if !e.has_recovery() {
+                    if let Some(writer) = &e.draft_writer {
+                        let _ = writer.clear();
+                    }
+                }
                 DestroyWindow(hwnd);
             }
             0
@@ -2984,14 +3197,19 @@ impl Profiles {
     }
 }
 unsafe fn profiles(e: &mut Editor) {
+    profiles_inner(e, true);
+}
+unsafe fn profiles_inner(e: &mut Editor, validate: bool) {
     if let Some(p) = &e.profiles {
         super::focus_window(p.hwnd);
         return;
     }
     // Preserve any current item and spacing edits before opening the modal draft.
-    if let Err(err) = e.apply().and_then(|_| e.controls_to_settings()) {
-        error(&err);
-        return;
+    if validate {
+        if let Err(err) = e.apply().and_then(|_| e.controls_to_settings()) {
+            error(&err);
+            return;
+        }
     }
     let class = wide("Constellation.Profiles");
     let module = GetModuleHandleW(null());
@@ -3011,8 +3229,8 @@ unsafe fn profiles(e: &mut Editor) {
     let mut bounds = RECT {
         left: 0,
         top: 0,
-        right: 810,
-        bottom: 705,
+        right: Dpi(GetDpiForWindow(e.hwnd)).pixels(810),
+        bottom: Dpi(GetDpiForWindow(e.hwnd)).pixels(705),
     };
     AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
     let hwnd = CreateWindowExW(
@@ -3262,11 +3480,17 @@ unsafe fn profiles(e: &mut Editor) {
     super::focus_window(hwnd);
 }
 unsafe extern "system" fn profiles_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if let Some(result) = theme::display_message(hwnd, msg, w, l) {
+        return result;
+    }
+    if msg == WM_COMMAND && !EDITOR.is_null() {
+        SetTimer((*EDITOR).hwnd, DRAFT_TIMER, 500, None);
+    }
     if let Some(result) = theme::message(msg, w, l) {
         return result;
     }
     if msg == WM_PAINT {
-        render::buffered(hwnd, theme::BACKGROUND, |_| {});
+        render::buffered(hwnd, theme::background(), |_| {});
         return 0;
     }
     if EDITOR.is_null() {
@@ -4314,6 +4538,7 @@ mod lifecycle_tests {
 enum AuxKind {
     Browser(u64),
     Close,
+    Recovery,
 }
 struct Aux {
     hwnd: HWND,
@@ -4358,6 +4583,7 @@ unsafe fn editor_accelerator(msg: &MSG, main: HWND, e: &Editor) -> bool {
     let (window, id) = if root == main
         && IsWindowEnabled(main) != 0
         && e.aux.is_none()
+        && e.tools.is_none()
         && e.profiles.is_none()
         && e.json.is_null()
     {
@@ -4379,7 +4605,8 @@ unsafe fn editor_accelerator(msg: &MSG, main: HWND, e: &Editor) -> bool {
         (e.json, JSON_SAVE)
     } else if command == editing::EditorShortcut::Save
         && (e.aux.as_ref().is_some_and(|a| a.hwnd == root)
-            || e.profiles.as_ref().is_some_and(|p| p.hwnd == root))
+            || e.profiles.as_ref().is_some_and(|p| p.hwnd == root)
+            || e.tools == Some(root))
     {
         // A modal draft must not save the parent or insert a control character.
         return true;
@@ -4406,11 +4633,18 @@ unsafe fn aux_enable(hwnd: HWND, program: bool) {
     }
 }
 unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
+    open_aux_inner(e, kind, true);
+}
+unsafe fn open_aux_inner(e: &mut Editor, kind: AuxKind, validate: bool) {
+    if matches!(kind, AuxKind::Recovery) && !e.has_recovery() {
+        e.status = "No earlier recovery draft is pending.".into();
+        return;
+    }
     if let Some(aux) = &e.aux {
         super::focus_window(aux.hwnd);
         return;
     }
-    if matches!(kind, AuxKind::Browser(_)) {
+    if validate && matches!(kind, AuxKind::Browser(_)) {
         if let Err(error) = e.apply() {
             e.status = error;
             InvalidateRect(e.hwnd, null(), 0);
@@ -4433,8 +4667,8 @@ unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
     let mut bounds = RECT {
         left: 0,
         top: 0,
-        right: 600,
-        bottom: if browser { 330 } else { 190 },
+        right: Dpi(GetDpiForWindow(e.hwnd)).pixels(600),
+        bottom: Dpi(GetDpiForWindow(e.hwnd)).pixels(if browser { 330 } else { 190 }),
     };
     AdjustWindowRectExForDpi(&mut bounds, style, 0, 0, GetDpiForWindow(e.hwnd));
     let mut owner: RECT = zeroed();
@@ -4465,7 +4699,11 @@ unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
         wide(if browser {
             "Constellation — Web browser"
         } else {
-            "Constellation — Unsaved changes"
+            if matches!(kind, AuxKind::Recovery) {
+                "Constellation — Recover draft"
+            } else {
+                "Constellation — Unsaved changes"
+            }
         })
         .as_ptr(),
         style,
@@ -4596,14 +4834,30 @@ unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
     } else {
         label(
             hwnd,
-            "Save changes before closing configuration?",
+            if matches!(kind, AuxKind::Recovery) {
+                "Recover unfinished configuration edits? Saved settings stay unchanged."
+            } else {
+                "Save changes before closing configuration?"
+            },
             20,
             20,
             560,
         );
         control(hwnd, "STATIC", "", AUX_STATUS, 20, 52, 560, 65, 0);
         control(
-            hwnd, "BUTTON", "Save", AUX_APPLY, 20, 130, 150, 32, WS_TABSTOP,
+            hwnd,
+            "BUTTON",
+            if matches!(kind, AuxKind::Recovery) {
+                "Restore draft"
+            } else {
+                "Save"
+            },
+            AUX_APPLY,
+            20,
+            130,
+            150,
+            32,
+            WS_TABSTOP,
         );
         control(
             hwnd,
@@ -4620,6 +4874,29 @@ unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
             hwnd, "BUTTON", "Cancel", AUX_CANCEL, 350, 130, 150, 32, WS_TABSTOP,
         );
     }
+    if matches!(kind, AuxKind::Recovery) {
+        if let Some(message) = &e.recovery_error {
+            set(
+                hwnd,
+                AUX_STATUS,
+                &format!(
+                    "Recovery cannot be read: {message}. The file is preserved until you choose Discard."
+                ),
+            );
+            EnableWindow(GetDlgItem(hwnd, AUX_APPLY), 0);
+        }
+        if let Some(draft) = &e.recovery_draft {
+            set(
+                hwnd,
+                AUX_STATUS,
+                if draft.baseline != crate::draft::fingerprint(&e.saved) {
+                    "Saved configuration has changed since this draft. Restoring keeps it as an unsaved draft; review before Save."
+                } else {
+                    "One recovery file was found. Restore it to review, or Discard to remove it."
+                },
+            );
+        }
+    }
     EnableWindow(e.hwnd, 0);
     if IsWindowVisible(e.hwnd) != 0 {
         ShowWindow(hwnd, SW_SHOW);
@@ -4631,6 +4908,12 @@ unsafe fn open_aux(e: &mut Editor, kind: AuxKind) {
     }
 }
 unsafe extern "system" fn aux_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if let Some(result) = theme::display_message(hwnd, msg, w, l) {
+        return result;
+    }
+    if msg == WM_COMMAND && !EDITOR.is_null() {
+        SetTimer((*EDITOR).hwnd, DRAFT_TIMER, 500, None);
+    }
     if let Some(result) = theme::message(msg, w, l) {
         return result;
     }
@@ -4671,7 +4954,7 @@ unsafe extern "system" fn aux_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
     let kind = aux.kind;
     match msg {
         WM_PAINT => {
-            render::buffered(hwnd, theme::BACKGROUND, |_| {});
+            render::buffered(hwnd, theme::background(), |_| {});
             0
         }
         WM_COMMAND => {
@@ -4694,13 +4977,35 @@ unsafe extern "system" fn aux_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
                 AUX_CANCEL | 2 => {
                     close_aux(e, true);
                 }
+                AUX_DISCARD if matches!(kind, AuxKind::Recovery) => {
+                    let cleared = if let Some(writer) = &e.draft_writer {
+                        writer.clear()
+                    } else {
+                        Err("Recovery writer unavailable".into())
+                    };
+                    if let Err(message) = cleared {
+                        set(hwnd, AUX_STATUS, &message);
+                        return 0;
+                    }
+                    e.recovery_draft = None;
+                    e.recovery_error = None;
+                    close_aux(e, true);
+                }
                 AUX_DISCARD if matches!(kind, AuxKind::Close) => {
+                    if !e.has_recovery() {
+                        if let Some(writer) = &e.draft_writer {
+                            let _ = writer.clear();
+                        }
+                    }
                     close_aux(e, false);
                     DestroyWindow(e.hwnd);
                 }
                 AUX_APPLY | 1 => {
                     let result = (|| -> Result<(), String> {
-                        if let AuxKind::Browser(id) = kind {
+                        if matches!(kind, AuxKind::Recovery) {
+                            close_aux(e, true);
+                            e.restore_draft()?;
+                        } else if let AuxKind::Browser(id) = kind {
                             let root = id == e.c.universes[e.universe].id;
                             let index = send(hwnd, AUX_MODE, CB_GETCURSEL, 0, 0);
                             let browser = if index == if root { 1 } else { 2 } {
@@ -4747,5 +5052,382 @@ unsafe extern "system" fn aux_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             drop(guard);
             DefWindowProcW(hwnd, msg, w, l)
         }
+    }
+}
+
+// Small, owned tool windows keep this editor's draft/undo/save authority.
+unsafe fn show_tools_menu(hwnd: HWND) -> LRESULT {
+    let Some(guard) = super::DispatchGuard::enter() else {
+        super::defer_message(hwnd, WM_COMMAND, TOOLS as usize, 0);
+        return 0;
+    };
+    let menu = CreatePopupMenu();
+    for (id, name) in [
+        (super::editor_tools::THEME, "Themes & colors..."),
+        (super::editor_tools::MOVE, "Move items..."),
+        (super::editor_tools::PATHS, "Check / repair paths..."),
+        (RECOVER_DRAFT as u32, "Recover draft..."),
+    ] {
+        let disabled =
+            id == RECOVER_DRAFT as u32 && (EDITOR.is_null() || !(*EDITOR).has_recovery());
+        AppendMenuW(
+            menu,
+            MF_STRING | if disabled { MF_GRAYED } else { 0 },
+            id as usize,
+            wide(name).as_ptr(),
+        );
+    }
+    let mut rect: RECT = zeroed();
+    GetWindowRect(GetDlgItem(hwnd, TOOLS), &mut rect);
+    drop(guard);
+    let id = TrackPopupMenuEx(
+        menu,
+        TPM_RETURNCMD | TPM_NONOTIFY,
+        rect.left,
+        rect.bottom,
+        hwnd,
+        null(),
+    ) as u32;
+    DestroyMenu(menu);
+    if id != 0 {
+        PostMessageW(hwnd, WM_COMMAND, id as usize, 0);
+    }
+    0
+}
+impl Editor {
+    unsafe fn open_tool(&mut self, kind: u32) -> Result<(), String> {
+        if let Some(hwnd) = self.tools {
+            super::focus_window(hwnd);
+            return Ok(());
+        }
+        self.apply()?;
+        self.controls_to_settings()?;
+        self.checkpoint_settings();
+        self.tools = Some(super::editor_tools::open(
+            self.hwnd,
+            self.root.clone(),
+            self.c.clone(),
+            self.universe,
+            self.selected,
+            kind,
+        )?);
+        Ok(())
+    }
+    unsafe fn finish_tool(&mut self, hwnd: HWND) {
+        if self.tools != Some(hwnd) {
+            return;
+        }
+        let Some(action) = super::editor_tools::take_result(hwnd) else {
+            return;
+        };
+        let result = (|| -> Result<(), String> {
+            let mut candidate = self.c.clone();
+            let mut selected = self.selected;
+            let status = match action {
+                super::editor_tools::Action::Theme(palette) => {
+                    candidate.theme = palette;
+                    "Palette updated in this draft. Save applies it to the launcher.".to_string()
+                }
+                super::editor_tools::Action::Move(ids, destination) => {
+                    let count = crate::organize::move_nodes(&mut candidate, &ids, destination)?;
+                    selected = *ids.first().unwrap();
+                    format!("Moved {count} items. Undo restores the move; Save persists it.")
+                }
+                super::editor_tools::Action::Relink(old, new) => {
+                    let count = crate::organize::relink(&mut candidate, self.universe, &old, &new)?;
+                    format!(
+                        "Replaced {count} reviewed path fields in the draft. Undo restores them; Save persists them."
+                    )
+                }
+            };
+            candidate.validate()?;
+            self.commit(candidate);
+            self.universe = self
+                .c
+                .universes
+                .iter()
+                .position(|u| u.find(selected).is_some())
+                .unwrap_or(self.universe);
+            self.selected = selected;
+            self.tools = None;
+            DestroyWindow(hwnd);
+            EnableWindow(self.hwnd, 1);
+            super::focus_window(self.hwnd);
+            theme::refresh(self.hwnd, self.c.theme);
+            self.preview_cache = None;
+            self.refresh();
+            self.settings_to_controls();
+            self.status = status;
+            SetTimer(self.hwnd, DRAFT_TIMER, 500, None);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            super::editor_tools::error(hwnd, &error);
+        }
+    }
+    unsafe fn capture_draft(&self) {
+        if self.has_recovery() {
+            return;
+        }
+        let Some(writer) = &self.draft_writer else {
+            return;
+        };
+        if !(self.dirty
+            || self.item_dirty
+            || self.settings_invalid
+            || self.profiles.is_some()
+            || !self.json.is_null()
+            || self.tools.is_some()
+            || self
+                .aux
+                .as_ref()
+                .is_some_and(|a| matches!(a.kind, AuxKind::Browser(_))))
+        {
+            let _ = writer.clear();
+            return;
+        }
+        let mut fields = std::collections::BTreeMap::new();
+        for id in [
+            NAME, NOTE, TARGET, ARGS, RUNNER, CWD, RADIUS, DISTANCE, SPREAD, GAP, VOLUME,
+        ] {
+            fields.insert(format!("main:{id}"), get(self.hwnd, id));
+        }
+        for id in [KIND, PARENT, ICON_MODE, INSTRUMENT] {
+            fields.insert(
+                format!("combo:{id}"),
+                send(self.hwnd, id, CB_GETCURSEL, 0, 0).to_string(),
+            );
+        }
+        let visible: Vec<_> = self
+            .audience()
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| send(self.hwnd, VISIBLE, LB_GETSEL, *i, 0) > 0)
+            .map(|(_, p)| p.0)
+            .collect();
+        fields.insert("visible".into(), serde_json::to_string(&visible).unwrap());
+        fields.insert(
+            "icon".into(),
+            serde_json::to_string(&self.icon_draft).unwrap(),
+        );
+        if !self.json.is_null() {
+            fields.insert("json".into(), get(self.json, JSON_TEXT));
+        }
+        if let Some(p) = &self.profiles {
+            fields.insert("profiles".into(), serde_json::to_string(&p.draft).unwrap());
+            fields.insert("profile_index".into(), p.selected.unwrap_or(0).to_string());
+            for id in [P_NAME, P_BINDING] {
+                fields.insert(format!("profile_text:{id}"), get(p.hwnd, id));
+            }
+            for id in [P_MODE, P_RESTORE, P_UNIVERSE, P_ENTRY] {
+                fields.insert(
+                    format!("profile_combo:{id}"),
+                    send(p.hwnd, id, CB_GETCURSEL, 0, 0).to_string(),
+                );
+            }
+            for id in [P_HOVER, P_DIRECTIONAL, P_DOT] {
+                fields.insert(
+                    format!("profile_check:{id}"),
+                    send(p.hwnd, id, BM_GETCHECK, 0, 0).to_string(),
+                );
+            }
+        }
+        if let Some(aux) = &self.aux {
+            if let AuxKind::Browser(id) = aux.kind {
+                fields.insert("browser_node".into(), id.to_string());
+                fields.insert(
+                    "browser_mode".into(),
+                    send(aux.hwnd, AUX_MODE, CB_GETCURSEL, 0, 0).to_string(),
+                );
+                fields.insert("browser_path".into(), get(aux.hwnd, AUX_PATH));
+                fields.insert("browser_args".into(), get(aux.hwnd, AUX_ARGS));
+            }
+        }
+        if let Some(hwnd) = self.tools {
+            if let Some(value) = super::editor_tools::capture(hwnd) {
+                fields.insert("tools".into(), value);
+            }
+        }
+        writer.submit(crate::draft::Draft {
+            version: 1,
+            baseline: crate::draft::fingerprint(&self.saved),
+            config: self.c.clone(),
+            universe: self.c.universes[self.universe].id,
+            selected: self.selected,
+            fields,
+        });
+    }
+    unsafe fn restore_draft(&mut self) -> Result<(), String> {
+        let draft = self.recovery_draft.clone().ok_or("No recovery draft")?;
+        let baseline_changed = draft.baseline != crate::draft::fingerprint(&self.saved);
+        self.commit(draft.config.clone());
+        self.universe = self
+            .c
+            .universes
+            .iter()
+            .position(|u| u.id == draft.universe)
+            .unwrap_or(0);
+        self.selected = if self.c.universes[self.universe]
+            .find(draft.selected)
+            .is_some()
+        {
+            draft.selected
+        } else {
+            self.c.universes[self.universe].id
+        };
+        theme::refresh(self.hwnd, self.c.theme);
+        self.refresh();
+        self.settings_to_controls();
+        for id in [
+            NAME, NOTE, TARGET, ARGS, RUNNER, CWD, RADIUS, DISTANCE, SPREAD, GAP, VOLUME,
+        ] {
+            if let Some(value) = draft.fields.get(&format!("main:{id}")) {
+                set(self.hwnd, id, value);
+            }
+        }
+        for id in [KIND, PARENT, ICON_MODE, INSTRUMENT] {
+            if let Some(index) = draft
+                .fields
+                .get(&format!("combo:{id}"))
+                .and_then(|v| v.parse::<isize>().ok())
+            {
+                if index >= 0 && index < send(self.hwnd, id, CB_GETCOUNT, 0, 0) {
+                    send(self.hwnd, id, CB_SETCURSEL, index as usize, 0);
+                }
+            }
+        }
+        if let Some(icon) = draft
+            .fields
+            .get("icon")
+            .and_then(|v| serde_json::from_str(v).ok())
+        {
+            self.icon_draft = icon;
+        }
+        if let Some(visible) = draft
+            .fields
+            .get("visible")
+            .and_then(|v| serde_json::from_str::<Vec<u64>>(v).ok())
+        {
+            send(self.hwnd, VISIBLE, LB_SETSEL, 0, -1);
+            for (i, p) in self.audience().iter().enumerate() {
+                send(
+                    self.hwnd,
+                    VISIBLE,
+                    LB_SETSEL,
+                    visible.contains(&p.0) as usize,
+                    i as isize,
+                );
+            }
+        }
+        self.enable_fields();
+        self.note_counter();
+        self.item_dirty = true;
+        self.settings_invalid = self.controls_to_settings().is_err();
+        self.dirty = true;
+        if let Some(json) = draft.fields.get("json") {
+            advanced(self);
+            if !self.json.is_null() {
+                set(self.json, JSON_TEXT, json);
+            }
+        }
+        if let Some(list) = draft
+            .fields
+            .get("profiles")
+            .and_then(|v| serde_json::from_str::<Vec<Profile>>(v).ok())
+        {
+            profiles_inner(self, false);
+            if let Some(p) = &mut self.profiles {
+                p.draft = list;
+                p.selected = draft
+                    .fields
+                    .get("profile_index")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|i| *i < p.draft.len());
+                p.refresh();
+                for id in [P_NAME, P_BINDING] {
+                    if let Some(value) = draft.fields.get(&format!("profile_text:{id}")) {
+                        set(p.hwnd, id, value);
+                    }
+                }
+                for id in [P_MODE, P_RESTORE, P_UNIVERSE] {
+                    if let Some(index) = draft
+                        .fields
+                        .get(&format!("profile_combo:{id}"))
+                        .and_then(|v| v.parse::<usize>().ok())
+                    {
+                        send(p.hwnd, id, CB_SETCURSEL, index, 0);
+                    }
+                }
+                let tree_index = send(p.hwnd, P_UNIVERSE, CB_GETCURSEL, 0, 0).max(0) as usize;
+                fill_entries(p.hwnd, p.trees.get(tree_index), None);
+                if let Some(index) = draft
+                    .fields
+                    .get(&format!("profile_combo:{P_ENTRY}"))
+                    .and_then(|v| v.parse::<usize>().ok())
+                {
+                    send(p.hwnd, P_ENTRY, CB_SETCURSEL, index, 0);
+                }
+                for id in [P_HOVER, P_DIRECTIONAL, P_DOT] {
+                    if let Some(value) = draft
+                        .fields
+                        .get(&format!("profile_check:{id}"))
+                        .and_then(|v| v.parse::<usize>().ok())
+                    {
+                        send(p.hwnd, id, BM_SETCHECK, usize::from(value != 0), 0);
+                    }
+                }
+            }
+        } else if let Some(id) = draft
+            .fields
+            .get("browser_node")
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|id| self.c.find(*id).is_some())
+        {
+            open_aux_inner(self, AuxKind::Browser(id), false);
+            if let Some(aux) = &self.aux {
+                let hwnd = aux.hwnd;
+                for (key, id) in [("browser_path", AUX_PATH), ("browser_args", AUX_ARGS)] {
+                    if let Some(value) = draft.fields.get(key) {
+                        set(hwnd, id, value);
+                    }
+                }
+                if let Some(index) = draft
+                    .fields
+                    .get("browser_mode")
+                    .and_then(|v| v.parse::<usize>().ok())
+                {
+                    send(hwnd, AUX_MODE, CB_SETCURSEL, index, 0);
+                    aux_enable(
+                        hwnd,
+                        index
+                            == if id == self.c.universes[self.universe].id {
+                                1
+                            } else {
+                                2
+                            },
+                    );
+                }
+            }
+        } else if let Some(value) = draft.fields.get("tools") {
+            if let Some(kind) = super::editor_tools::recovery_kind(value) {
+                self.tools = Some(super::editor_tools::open(
+                    self.hwnd,
+                    self.root.clone(),
+                    self.c.clone(),
+                    self.universe,
+                    self.selected,
+                    kind,
+                )?);
+                if let Some(hwnd) = self.tools {
+                    super::editor_tools::restore(hwnd, value);
+                }
+            }
+        }
+        self.recovery_draft = None;
+        self.recovery_error = None;
+        self.status=if baseline_changed{"Recovered as an unsaved draft. The saved configuration changed since the recovery point; review before Save."}else{"Recovered unfinished edits into this draft. Save applies them to the launcher."}.into();
+        InvalidateRect(self.hwnd, null(), 0);
+        SetTimer(self.hwnd, DRAFT_TIMER, 500, None);
+        Ok(())
     }
 }

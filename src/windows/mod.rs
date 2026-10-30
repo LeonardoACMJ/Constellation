@@ -4,6 +4,7 @@ mod config_reload;
 mod cursor;
 mod editor;
 mod editor_theme;
+mod editor_tools;
 mod favicon;
 mod icons;
 mod input;

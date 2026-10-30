@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: qualification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   core:
     strategy:
@@ -15,6 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Correctness lints
+        run: cargo clippy --locked --all-targets -- -A warnings -D clippy::correctness
+      - name: Release documents and links
+        run: python scripts/check_release.py
       - run: cargo test --locked
       - run: cargo fmt --all --check
       - name: Native menu and dialog regressions
@@ -35,6 +45,12 @@ jobs:
       - name: Verify embedded application icon
         if: runner.os == 'Windows'
         run: python scripts/check_icons.py
+      - name: Verify packaged build and documents
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          python scripts/check_release.py --archive "dist/Constellation-$version-windows-x64.zip"
       - name: Save portable archive
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7.0.2

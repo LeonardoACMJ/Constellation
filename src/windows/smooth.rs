@@ -666,11 +666,22 @@ impl Renderer {
         let cache = self
             .icons
             .get_or_insert_with(|| super::item_icons::Cache::new(hwnd, root.to_path_buf()));
+        let mut nodes = std::collections::HashMap::new();
+        fn index<'a>(
+            node: &'a crate::config::Node,
+            out: &mut std::collections::HashMap<u64, &'a crate::config::Node>,
+        ) {
+            out.insert(node.id, node);
+            for child in node.children.iter().flatten() {
+                index(child, out);
+            }
+        }
+        index(start, &mut nodes);
         let images = cache.collect(
             hover
-                .and_then(|id| c.find(id))
+                .and_then(|id| nodes.get(&id).copied())
                 .into_iter()
-                .chain(path.iter().rev().filter_map(|id| c.find(*id)))
+                .chain(path.iter().rev().filter_map(|id| nodes.get(id).copied()))
                 .chain(std::iter::once(start))
                 .chain(
                     sectors
@@ -680,7 +691,7 @@ impl Renderer {
                             (s.inner + s.outer) * 0.5 * s.sweep * scale >= 18.
                                 && (s.outer - s.inner) * scale >= 18.
                         })
-                        .filter_map(|s| c.find(s.id)),
+                        .filter_map(|s| nodes.get(&s.id).copied()),
                 ),
         );
         let surface = self.surface.as_mut().unwrap();
@@ -915,7 +926,7 @@ impl Canvas {
             status(GdipDrawPath(self.graphics, pen, shape.pointer))
         }
     }
-    unsafe fn constellation(&mut self, p: Point, scale: f64) -> Result<(), String> {
+    unsafe fn constellation(&mut self, p: Point, scale: f64, value: u32) -> Result<(), String> {
         for (x, y, radius) in super::icons::CLUSTER {
             self.sparkle(
                 Point {
@@ -923,7 +934,7 @@ impl Canvas {
                     y: p.y + y * scale,
                 },
                 radius * scale,
-                color(195, 175, 255, 255),
+                value,
                 true,
                 scale,
             )?;
@@ -1010,18 +1021,23 @@ impl Canvas {
             }
         }
         index(start, &mut nodes, &mut parents);
+        let palette = super::editor_theme::effective(c.theme);
         let fills = [
-            color(28, 43, 59, 255),
-            color(43, 38, 67, 255),
-            color(40, 100, 102, 255),
-            color(89, 69, 131, 255),
+            palette.star.argb(255),
+            palette.constellation.argb(255),
+            palette.star_highlight.argb(255),
+            palette.constellation_highlight.argb(255),
         ];
-        let edges = [
-            color(16, 28, 48, 255),
-            color(26, 27, 51, 255),
-            color(23, 65, 85, 255),
-            color(49, 43, 94, 255),
-        ];
+        let edges = if palette.is_default() {
+            [
+                color(16, 28, 48, 255),
+                color(26, 27, 51, 255),
+                color(23, 65, 85, 255),
+                color(49, 43, 94, 255),
+            ]
+        } else {
+            [palette.outline.argb(255); 4]
+        };
         for sector in sectors {
             if sector.sweep <= 0. {
                 continue;
@@ -1031,16 +1047,16 @@ impl Canvas {
             };
             let folder = node.children.is_some();
             let active = hover == Some(sector.id) || path.contains(&sector.id);
-            let palette = usize::from(folder) + 2 * usize::from(active);
+            let palette_index = usize::from(folder) + 2 * usize::from(active);
             let shape = self.sector_path(sector, origin, scale)?;
             let halo = self.pen(
-                (edges[palette] & 0x00ffffff) | 0x46000000,
+                (edges[palette_index] & 0x00ffffff) | 0x46000000,
                 (3. * scale) as f32,
             )?;
             status(GdipDrawPath(self.graphics, halo, shape.pointer))?;
-            let fill = self.brush(fills[palette])?;
+            let fill = self.brush(fills[palette_index])?;
             status(GdipFillPath(self.graphics, fill, shape.pointer))?;
-            let edge = self.pen(edges[palette], (3. * scale) as f32)?;
+            let edge = self.pen(edges[palette_index], (3. * scale) as f32)?;
             status(GdipDrawPath(self.graphics, edge, shape.pointer))?;
             // A small deterministic field: never animate or move it on hover.
             let area = 0.5 * (sector.outer.powi(2) - sector.inner.powi(2)) * sector.sweep;
@@ -1081,9 +1097,9 @@ impl Canvas {
             if let Some(image) = images.get(&node.id) {
                 self.image(symbol, image, 24. * scale)?;
             } else if folder {
-                self.constellation(symbol, scale)?;
+                self.constellation(symbol, scale, palette.cluster.argb(255))?;
             } else {
-                self.sparkle(symbol, 7.5 * scale, color(142, 226, 205, 255), true, scale)?;
+                self.sparkle(symbol, 7.5 * scale, palette.symbol.argb(255), true, scale)?;
             }
             let width = arc.clamp(12. * scale, 125. * scale);
             self.text(
@@ -1092,7 +1108,7 @@ impl Canvas {
                 (point.y + 3. * scale) as f32,
                 width as f32,
                 (12. * scale).max(7.) as f32,
-                color(233, 237, 250, 255),
+                palette.text.argb(255),
             )?;
         }
         let lit: Vec<_> = sectors
@@ -1103,7 +1119,7 @@ impl Canvas {
         for sector in &lit {
             if let Some(parent) = parents.get(&sector.id).and_then(|id| by_id.get(id)) {
                 let (a, b) = (map(parent.dot), map(sector.dot));
-                let pen = self.pen(color(172, 210, 247, 210), (1.25 * scale) as f32)?;
+                let pen = self.pen(palette.line.argb(210), (1.25 * scale) as f32)?;
                 status(GdipDrawLine(
                     self.graphics,
                     pen,
@@ -1135,7 +1151,7 @@ impl Canvas {
             )?;
         }
         let radius = (c.layout.radius * 0.27 * scale).max(3.);
-        self.circle(origin, radius, color(18, 25, 39, 255))?;
+        self.circle(origin, radius, palette.hub.argb(255))?;
         let center_symbol = Point {
             x: origin.x,
             y: origin.y - 7. * scale,
@@ -1143,7 +1159,7 @@ impl Canvas {
         if let Some(image) = images.get(&start.id) {
             self.image(center_symbol, image, 24. * scale)?;
         } else {
-            self.constellation(center_symbol, scale)?;
+            self.constellation(center_symbol, scale, palette.cluster.argb(255))?;
         }
         if radius > 25. * scale {
             self.text(
@@ -1152,7 +1168,7 @@ impl Canvas {
                 (origin.y + 7. * scale) as f32,
                 (56. * scale) as f32,
                 (9. * scale) as f32,
-                color(156, 175, 207, 255),
+                palette.muted.argb(255),
             )?;
         }
         Result::Ok(())

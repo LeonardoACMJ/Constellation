@@ -6,6 +6,10 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
+from desktop_fixture import require_interactive, find_window
+require_interactive()
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/".local/editor-stress";OUT.mkdir(parents=True,exist_ok=True)
@@ -21,7 +25,7 @@ def balanced(depth,width,counter):
     counter[0]+=1;i=counter[0]
     return star(i) if depth==0 else {"id":i,"name":f"Branch {i}","children":[balanced(depth-1,width,counter) for _ in range(width)]}
 cases=[("flat-10000",{"id":1,"name":"10,000 Stars","children":[star(i) for i in range(2,10002)]}),
-       ("balanced-4681",balanced(4,8,[0])),("deep-64",balanced(64,1,[0]))]
+       ("balanced-4681",balanced(4,8,[0])),("deep-64",balanced(63,1,[0]))]
 results=[]
 try:
     for name,tree in cases:
@@ -30,7 +34,7 @@ try:
         (OUT/"data").mkdir(exist_ok=True)
         (OUT/"data/config.json").write_text(json.dumps(config),encoding="utf-8")
         report=OUT/"data/preview-measurement.json";report.unlink(missing_ok=True)
-        process=subprocess.Popen([str(EXE),"--configure","--measure-preview"])
+        process=subprocess.Popen([str(EXE),"--configure","--measure-preview"],creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL)
         then=time.monotonic();measurement=None
         try:
             deadline=then+30
@@ -43,7 +47,7 @@ try:
             assert measurement is not None,f"{name}: no completed preview within test timeout"
             measurement.update(case=name,startup_to_report_ms=round((time.monotonic()-then)*1000,2))
             results.append(measurement)
-            hwnd=U.FindWindowW("Constellation.Config",None);assert hwnd
+            hwnd=find_window("Constellation.Config",{process.pid});assert hwnd
             U.PostMessageW(hwnd,0x10,0,0);process.wait(timeout=5)
             assert process.returncode==0
             print(json.dumps(measurement),flush=True)

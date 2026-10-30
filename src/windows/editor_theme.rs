@@ -1,66 +1,239 @@
 //! Editor-only native resources. Nothing is allocated in the tray process.
 #![allow(unsafe_op_in_unsafe_fn)]
 use super::{render, wide};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{Dwm::*, Gdi::*},
     UI::{
+        Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
         Controls::*,
         Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled},
         Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
         WindowsAndMessaging::*,
     },
 };
-pub const BACKGROUND: u32 = render::rgb(15, 22, 36);
-pub const TEXT: u32 = render::rgb(233, 237, 250);
-pub const MUTED: u32 = render::rgb(148, 164, 190);
-const INPUT: u32 = render::rgb(23, 33, 50);
+pub const DISPLAY_CHANGED: u32 = WM_APP + 64;
+thread_local! {
+    static DISPLAY:RefCell<std::collections::HashMap<usize,(RECT,u32,u32)>>=RefCell::new(std::collections::HashMap::new());
+}
+/// Copy the suggested rectangle while its native message is live. The posted
+/// message carries no pointer and enters layout through the normal guard.
+pub unsafe fn display_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESULT> {
+    if msg == WM_DPICHANGED && l != 0 {
+        let rect = *(l as *const RECT);
+        let old = GetPropW(hwnd, wide("Constellation.EditorDpi").as_ptr()) as u32;
+        DISPLAY.with(|items| {
+            items
+                .borrow_mut()
+                .insert(hwnd as usize, (rect, old.max(96), (w & 0xffff) as u32))
+        });
+        PostMessageW(hwnd, DISPLAY_CHANGED, 0, 0);
+        return Some(0);
+    }
+    if msg == WM_SETTINGCHANGE {
+        PostMessageW(hwnd, DISPLAY_CHANGED, 0, 0);
+    }
+    if msg == DISPLAY_CHANGED {
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(hwnd, class.as_mut_ptr(), 64).max(0) as usize;
+        if String::from_utf16_lossy(&class[..n]) != "Constellation.Config" {
+            if let Some(guard) = super::DispatchGuard::enter() {
+                apply_display(hwnd, SOURCE.with(|p| p.get()), true);
+                drop(guard);
+            } else {
+                super::defer_message(hwnd, msg, w, l);
+            }
+            return Some(0);
+        }
+    }
+    None
+}
+pub unsafe fn apply_display(hwnd: HWND, palette: crate::theme::Palette, scale_children: bool) {
+    let change = DISPLAY.with(|items| items.borrow_mut().remove(&(hwnd as usize)));
+    if let Some((rect, old, new)) = change {
+        if scale_children {
+            let mut child = GetWindow(hwnd, GW_CHILD);
+            while !child.is_null() {
+                let next = GetWindow(child, GW_HWNDNEXT);
+                let mut r: RECT = std::mem::zeroed();
+                GetWindowRect(child, &mut r);
+                MapWindowPoints(std::ptr::null_mut(), hwnd, (&mut r as *mut RECT).cast(), 2);
+                let px = |n: i32| (n as f64 * new as f64 / old as f64).round() as i32;
+                SetWindowPos(
+                    child,
+                    std::ptr::null_mut(),
+                    px(r.left),
+                    px(r.top),
+                    px(r.right - r.left),
+                    px(r.bottom - r.top),
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
+                );
+                child = next;
+            }
+        }
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+    SetPropW(
+        hwnd,
+        wide("Constellation.EditorDpi").as_ptr(),
+        windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as usize as HANDLE,
+    );
+    refresh(hwnd, palette);
+}
+pub unsafe fn logical_dc(dc: HDC, dpi: u32) {
+    SetMapMode(dc, MM_ANISOTROPIC);
+    SetWindowExtEx(dc, 96, 96, std::ptr::null_mut());
+    SetViewportExtEx(dc, dpi as i32, dpi as i32, std::ptr::null_mut());
+}
+thread_local! {static PALETTE:Cell<crate::theme::Palette>=Cell::new(crate::theme::Palette::default());}
+pub fn source() -> crate::theme::Palette {
+    SOURCE.with(|p| p.get())
+}
+pub fn background() -> u32 {
+    PALETTE.with(|p| p.get().background.gdi())
+}
+pub fn text_color() -> u32 {
+    PALETTE.with(|p| p.get().text.gdi())
+}
+pub fn muted() -> u32 {
+    PALETTE.with(|p| p.get().muted.gdi())
+}
+fn input_color() -> u32 {
+    PALETTE.with(|p| p.get().input.gdi())
+}
+pub fn effective(mut palette: crate::theme::Palette) -> crate::theme::Palette {
+    unsafe {
+        let mut hc: HIGHCONTRASTW = std::mem::zeroed();
+        hc.cbSize = std::mem::size_of::<HIGHCONTRASTW>() as u32;
+        if SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            hc.cbSize,
+            (&mut hc as *mut HIGHCONTRASTW).cast(),
+            0,
+        ) != 0
+            && hc.dwFlags & HCF_HIGHCONTRASTON != 0
+        {
+            let from = |index| {
+                let c = GetSysColor(index);
+                crate::theme::Color(((c & 255) << 16) | (c & 0xff00) | (c >> 16))
+            };
+            palette.background = from(COLOR_WINDOW);
+            palette.input = from(COLOR_WINDOW);
+            palette.text = from(COLOR_WINDOWTEXT);
+            palette.muted = from(COLOR_WINDOWTEXT);
+            palette.star = from(COLOR_WINDOW);
+            palette.constellation = from(COLOR_WINDOW);
+            palette.star_highlight = from(COLOR_HIGHLIGHT);
+            palette.constellation_highlight = from(COLOR_HIGHLIGHT);
+            palette.outline = from(COLOR_WINDOWTEXT);
+            palette.line = from(COLOR_WINDOWTEXT);
+            palette.symbol = from(COLOR_WINDOWTEXT);
+            palette.cluster = from(COLOR_WINDOWTEXT);
+            palette.hub = from(COLOR_WINDOW);
+        }
+        palette
+    }
+}
 struct Theme {
     background: HBRUSH,
     input: HBRUSH,
-    font: HFONT,
 }
 impl Drop for Theme {
     fn drop(&mut self) {
         unsafe {
             DeleteObject(self.background);
             DeleteObject(self.input);
-            DeleteObject(self.font);
         }
     }
 }
+thread_local! {static FONTS:RefCell<std::collections::HashMap<u32,HFONT>>=RefCell::new(std::collections::HashMap::new());}
+thread_local! {static SOURCE:Cell<crate::theme::Palette>=Cell::new(crate::theme::Palette::default());}
 thread_local! {static THEME:RefCell<Option<Theme>>=const {RefCell::new(None)};}
 pub unsafe fn install() {
-    let font = CreateFontW(
-        -16,
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET as u32,
-        OUT_DEFAULT_PRECIS as u32,
-        CLIP_DEFAULT_PRECIS as u32,
-        CLEARTYPE_QUALITY as u32,
-        DEFAULT_PITCH as u32,
-        wide("Segoe UI").as_ptr(),
-    );
+    install_at(crate::theme::Palette::default(), 96);
+}
+pub unsafe fn install_at(palette: crate::theme::Palette, dpi: u32) {
+    PALETTE.with(|p| p.set(effective(palette)));
+    SOURCE.with(|p| p.set(palette));
+    let _ = font_for(dpi);
     THEME.with(|v| {
         *v.borrow_mut() = Some(Theme {
-            background: CreateSolidBrush(BACKGROUND),
-            input: CreateSolidBrush(INPUT),
-            font,
+            background: CreateSolidBrush(background()),
+            input: CreateSolidBrush(input_color()),
         })
     });
 }
+unsafe fn font_for(dpi: u32) -> HFONT {
+    FONTS.with(|fonts| {
+        *fonts.borrow_mut().entry(dpi).or_insert_with(|| {
+            let font = CreateFontW(
+                -(16. * dpi as f64 / 96.).round() as i32,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET as u32,
+                OUT_DEFAULT_PRECIS as u32,
+                CLIP_DEFAULT_PRECIS as u32,
+                CLEARTYPE_QUALITY as u32,
+                DEFAULT_PITCH as u32,
+                wide("Segoe UI").as_ptr(),
+            );
+            font
+        })
+    })
+}
+pub unsafe fn refresh(hwnd: HWND, palette: crate::theme::Palette) {
+    install_at(
+        palette,
+        windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd),
+    );
+    unsafe extern "system" fn visit(hwnd: HWND, _: LPARAM) -> i32 {
+        unsafe {
+            let mut class = [0u16; 64];
+            let n = GetClassNameW(hwnd, class.as_mut_ptr(), 64).max(0) as usize;
+            control(hwnd, &String::from_utf16_lossy(&class[..n]));
+        }
+        1
+    }
+    window(hwnd);
+    EnumChildWindows(hwnd, Some(visit), 0);
+    RedrawWindow(
+        hwnd,
+        std::ptr::null(),
+        std::ptr::null_mut(),
+        RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE,
+    );
+}
 pub fn shutdown() {
     THEME.with(|v| v.borrow_mut().take());
+    FONTS.with(|fonts| {
+        for (_, font) in fonts.borrow_mut().drain() {
+            unsafe {
+                DeleteObject(font);
+            }
+        }
+    });
 }
 pub unsafe fn window(hwnd: HWND) {
-    let dark = 1i32;
+    SetPropW(
+        hwnd,
+        wide("Constellation.EditorDpi").as_ptr(),
+        windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as usize as HANDLE,
+    );
+    let dark = i32::from(PALETTE.with(|p| p.get().background.0 & 0xffffff) < 0x808080);
     DwmSetWindowAttribute(
         hwnd,
         DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
@@ -69,21 +242,24 @@ pub unsafe fn window(hwnd: HWND) {
     );
 }
 pub unsafe fn control(hwnd: HWND, class: &str) {
-    THEME.with(|v| {
-        if let Some(t) = v.borrow().as_ref() {
-            SendMessageW(hwnd, WM_SETFONT, t.font as usize, 0);
-        }
-    });
+    let font = font_for(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd));
+    SendMessageW(hwnd, WM_SETFONT, font as usize, 0);
     if class == "EDIT" {
         SetWindowSubclass(hwnd, Some(edit_proc), 2, 0);
     }
     if class == "SysTreeView32" {
         SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
-        SendMessageW(hwnd, TVM_SETBKCOLOR, 0, INPUT as isize);
-        SendMessageW(hwnd, TVM_SETTEXTCOLOR, 0, TEXT as isize);
+        SendMessageW(hwnd, TVM_SETBKCOLOR, 0, input_color() as isize);
+        SendMessageW(hwnd, TVM_SETTEXTCOLOR, 0, text_color() as isize);
         SendMessageW(hwnd, TVM_SETLINECOLOR, 0, render::rgb(65, 81, 105) as isize);
         SendMessageW(hwnd, TVM_SETINDENT, 20, 0);
-        SendMessageW(hwnd, TVM_SETITEMHEIGHT, 24, 0);
+        SendMessageW(
+            hwnd,
+            TVM_SETITEMHEIGHT,
+            (24. * windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as f64 / 96.).round()
+                as usize,
+            0,
+        );
     }
     if class == "msctls_trackbar32" {
         // Preserve native input/accessibility; replace only the paint path.
@@ -111,8 +287,8 @@ pub unsafe fn message(msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESULT> {
             v.borrow().as_ref().map(|t| {
                 let dc = w as HDC;
                 let input = matches!(msg, WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX);
-                SetTextColor(dc, TEXT);
-                SetBkColor(dc, if input { INPUT } else { BACKGROUND });
+                SetTextColor(dc, text_color());
+                SetBkColor(dc, if input { input_color() } else { background() });
                 if !input {
                     SetBkMode(dc, TRANSPARENT as i32);
                 }
@@ -138,11 +314,11 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let color = if down {
         render::rgb(55, 98, 105)
     } else if primary {
-        render::rgb(40, 100, 102)
+        PALETTE.with(|p| p.get().star_highlight.gdi())
     } else {
-        render::rgb(30, 43, 62)
+        input_color()
     };
-    render::fill(dc, &r, BACKGROUND);
+    render::fill(dc, &r, background());
     let brush = CreateSolidBrush(color);
     let pen = CreatePen(
         PS_SOLID,
@@ -163,8 +339,8 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let len = GetWindowTextLengthW(item.hwndItem);
     let mut text = vec![0u16; len as usize + 1];
     GetWindowTextW(item.hwndItem, text.as_mut_ptr(), text.len() as i32);
-    let old = THEME.with(|v| v.borrow().as_ref().map(|t| SelectObject(dc, t.font)));
-    SetTextColor(dc, if disabled { MUTED } else { TEXT });
+    let old = SelectObject(dc, SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT);
+    SetTextColor(dc, if disabled { muted() } else { text_color() });
     SetBkMode(dc, TRANSPARENT as i32);
     let mut text_rect = r;
     DrawTextW(
@@ -179,12 +355,10 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
         InflateRect(&mut focus, -4, -4);
         DrawFocusRect(dc, &focus);
     }
-    if let Some(old) = old {
-        SelectObject(dc, old);
-    }
+    SelectObject(dc, old);
 }
 pub unsafe fn panel(dc: HDC, r: RECT) {
-    let pen = CreatePen(PS_SOLID, 1, render::rgb(43, 57, 80));
+    let pen = CreatePen(PS_SOLID, 1, PALETTE.with(|p| p.get().outline.gdi()));
     let old = SelectObject(dc, pen);
     let brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
     RoundRect(dc, r.left, r.top, r.right, r.bottom, 10, 10);
@@ -304,13 +478,13 @@ unsafe extern "system" fn slider_proc(
     match msg {
         WM_ERASEBKGND => 1,
         WM_PAINT => {
-            render::buffered(hwnd, BACKGROUND, |dc| draw_slider(hwnd, dc));
+            render::buffered(hwnd, background(), |dc| draw_slider(hwnd, dc));
             0
         }
         WM_PRINTCLIENT => {
             let mut bounds: RECT = std::mem::zeroed();
             GetClientRect(hwnd, &mut bounds);
-            render::fill(w as HDC, &bounds, BACKGROUND);
+            render::fill(w as HDC, &bounds, background());
             draw_slider(hwnd, w as HDC);
             0
         }
@@ -338,9 +512,9 @@ unsafe fn draw_slider(hwnd: HWND, dc: HDC) {
     };
     render::fill(dc, &progress, render::rgb(115, 191, 182));
     let color = if IsWindowEnabled(hwnd) == 0 {
-        MUTED
+        muted()
     } else {
-        TEXT
+        text_color()
     };
     let brush = CreateSolidBrush(color);
     let old_brush = SelectObject(dc, brush);

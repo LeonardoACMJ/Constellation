@@ -118,3 +118,16 @@ These checks are pending user review. Automated input and queue checks do not mo
 | In that copy, save invalid JSON, invoke, then repair it. | One change-driven error report; the last good menu remains usable. Repair reloads without a restart. Logs and backups do not cause configuration reloads. |
 
 Automated device-free checks cover directory notifications, atomic saves, malformed-file recovery, latest-only snapshot deferral and dispatch-queue preservation. Actual opening latency and input feel remain manual checks.
+
+## Editor tools and resilience (0.1.49) — pending
+
+| Check | Expected result |
+|---|---|
+| Tools → Themes & colors; choose Daylight, edit a color, Reset, apply, Undo/Redo and Save. | Miniature preview follows valid edits. Main preview/editor follow draft; launcher follows Save. Default appearance restores without a theme field. |
+| Tools → Move items; Ctrl-select a branch plus its child, choose another universe. Repeat with a referenced profile entry. | First move preserves subtree/IDs once and is one Undo step; dependency-breaking move refuses without mutation. |
+| Check / repair paths with an offline/missing reference; preview replacements including a similar-but-different folder name. | Checks run without launching; exact affected fields are reviewable, similar prefixes stay unchanged, Save remains explicit, Undo restores all. |
+| In a disposable copy, leave invalid item text or an unfinished profile/browser/theme/JSON draft, terminate only that disposable editor, then reopen. | Restore/Discard offered, invalid text retained, launcher stays on saved config. Changed saved baseline is explained. Save/explicit discard clears recovery. |
+| Move Settings and each owned dialog between differently scaled displays; toggle Windows high contrast. Resize/restore by dragging. | Controls, text, preview and scroll ranges scale together, focus remains visible, no freeze or forced launch. High contrast temporarily overrides colors. |
+| With opt-in audio tracing, change the default audio device between phrases, briefly disconnect output, then try a later note. | Later notes recover when output is available. No old-note replay; launcher input remains usable. Preserve trace if clicking persists. |
+
+The isolated small-screen layout experiment needs separate review; it is not included in the normal 0.1.49 package. Automated checks cannot establish audio quality or mixed-monitor ergonomics.

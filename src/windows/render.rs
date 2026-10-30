@@ -79,16 +79,16 @@ unsafe fn dot(dc: HDC, p: Point, r: i32, color: u32) {
     DeleteObject(brush);
 }
 
-unsafe fn symbol(dc: HDC, p: Point, folder: bool, scale: f64) {
+unsafe fn symbol(dc: HDC, p: Point, folder: bool, scale: f64, palette: crate::theme::Palette) {
     let shapes: &[(f64, f64, f64)] = if folder {
         &super::icons::CLUSTER
     } else {
         &[(0., 0., 7.5)]
     };
     let brush = CreateSolidBrush(if folder {
-        rgb(195, 175, 255)
+        palette.cluster.gdi()
     } else {
-        rgb(142, 226, 205)
+        palette.symbol.gdi()
     });
     let old_brush = SelectObject(dc, brush);
     let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
@@ -175,16 +175,17 @@ pub unsafe fn draw_with_icons(
     let mut nodes = std::collections::HashMap::new();
     let mut parents = std::collections::HashMap::new();
     index(start, &mut nodes, &mut parents);
+    let palette = super::editor_theme::effective(c.theme);
     let brushes = [
-        rgb(28, 43, 59),
-        rgb(43, 38, 67),
-        rgb(40, 100, 102),
-        rgb(89, 69, 131),
+        palette.star.gdi(),
+        palette.constellation.gdi(),
+        palette.star_highlight.gdi(),
+        palette.constellation_highlight.gdi(),
     ]
     .map(|v| CreateSolidBrush(v));
     let pens = [
-        CreatePen(PS_SOLID, 1, rgb(77, 89, 117)),
-        CreatePen(PS_SOLID, 1, rgb(203, 184, 255)),
+        CreatePen(PS_SOLID, 3, palette.outline.gdi()),
+        CreatePen(PS_SOLID, 3, palette.outline.gdi()),
     ];
     for s in sectors {
         let Some(node) = nodes.get(&s.id) else {
@@ -237,6 +238,7 @@ pub unsafe fn draw_with_icons(
                 },
                 folder,
                 scale,
+                palette,
             );
         }
         text(
@@ -245,7 +247,7 @@ pub unsafe fn draw_with_icons(
             p.x as i32 - w / 2,
             p.y as i32 + 3,
             w,
-            rgb(233, 237, 250),
+            palette.text.gdi(),
             size,
         );
     }
@@ -271,7 +273,7 @@ pub unsafe fn draw_with_icons(
                 map(parent.dot),
                 map(child.dot),
                 if preview { 1 } else { 2 },
-                rgb(172, 210, 247),
+                palette.line.gdi(),
             );
         }
     }
@@ -298,7 +300,7 @@ pub unsafe fn draw_with_icons(
         );
     }
     let radius = (c.layout.radius * 0.27 * scale).max(3.) as i32;
-    dot(dc, origin, radius, rgb(18, 25, 39));
+    dot(dc, origin, radius, palette.hub.gdi());
     if let Some(image) = images.get(&start.id) {
         let size = (24. * scale).round().max(1.) as i32;
         super::item_icons::draw_gdi(
@@ -317,6 +319,7 @@ pub unsafe fn draw_with_icons(
             },
             true,
             scale,
+            palette,
         );
     }
     if radius > 25 {
@@ -326,7 +329,7 @@ pub unsafe fn draw_with_icons(
             origin.x as i32 - 28,
             origin.y as i32 + 7,
             56,
-            rgb(156, 175, 207),
+            palette.muted.gdi(),
             10,
         );
     }

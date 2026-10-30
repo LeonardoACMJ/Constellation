@@ -1,6 +1,25 @@
 //! Pure editor layout, independent of native windows and their current pixels.
 pub const MIN_WIDTH: i32 = 1050;
 pub const MIN_HEIGHT: i32 = 996;
+/// Editor coordinates are logical 96-DPI units, including scroll positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dpi(pub u32);
+impl Dpi {
+    pub fn pixels(self, logical: i32) -> i32 {
+        (logical as f64 * self.0.max(96) as f64 / 96.).round() as i32
+    }
+    pub fn logical(self, pixels: i32) -> i32 {
+        (pixels as f64 * 96. / self.0.max(96) as f64).round() as i32
+    }
+    pub fn rect(self, r: Rect) -> Rect {
+        Rect {
+            x: self.pixels(r.x),
+            y: self.pixels(r.y),
+            w: self.pixels(r.w),
+            h: self.pixels(r.h),
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,

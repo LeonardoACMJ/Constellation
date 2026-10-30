@@ -29,12 +29,14 @@ Format changes and run the checks that cover them:
 
 ```cmd
 cargo fmt --all --check
-cargo test --test core --test editing --test editor_layout --test feedback --test notes --test icon_assets --test background --test browser --test bundle --locked
+cargo clippy --locked --all-targets -- -A warnings -D clippy::correctness
+python scripts/check_release.py
+cargo test --test core --test editing --test editor_layout --test feedback --test notes --test icon_assets --test background --test browser --test bundle --test audit_tools --locked
 ```
 
 These integration targets cover the model, editing, layout, feedback and assets without driving the desktop. Windows still needs the activated build environment to compile them.
 
-The complete suite (`cargo test --locked`) also contains native Windows checks that launch controlled child processes and create console resources. Run those in CI or a desktop session dedicated to testing. The interactive `tests/native_smoke.py` and `tests/large_editor_smoke.py` scripts move the pointer, interact with windows or change foreground state; use them only when that desktop is available for testing. Do not play audio or take over someone else's working session as an incidental check.
+The complete suite (`cargo test --locked`) also contains native Windows checks that launch controlled child processes and create console resources. Run those in CI or a desktop session dedicated to testing. The interactive `tests/native_smoke.py` and `tests/large_editor_smoke.py` scripts move the pointer, interact with windows or change foreground state; use them only when that desktop is available for testing, with `--interactive-session`. They refuse an ordinary running resident/editor and address only fixture-owned windows. The idle measurement helper has the same gate. Do not play audio or take over someone else's working session as an incidental check.
 
 CI runs on Windows and Linux, checks formatting, exercises native Windows regressions, and builds and validates the portable package. Passing automation does not establish subjective audio quality, gesture comfort or compatibility with every monitor/game setup. The [manual checklist](docs/MANUAL-CHECKS.md) covers hands-on review.
 
@@ -53,3 +55,7 @@ CI runs on Windows and Linux, checks formatting, exercises native Windows regres
 Keep useful implementation documentation and reproducible checks in the repository. Put exploratory notes, local evidence and personal working material under `.local/`; build output and runtime data are ignored by Git.
 
 Describe what your change fixes and how you checked it. Avoid unrelated changes, preserve existing configurations, and keep input/rendering paths responsive.
+
+After packaging, run `python scripts/check_release.py --archive dist/Constellation-VERSION-windows-x64.zip`. It checks the checksum, exact five-file contents, qualified executable and packaged documents. After publishing, pass `--published-json PATH` with the saved GitHub release API response to compare the public asset digest/size/tag against that same qualified archive. Missing digests fail verification. Existing published archives must not be rebuilt in place.
+
+CI cancels superseded runs on the same ref. Branch and tag builds remain independently qualified so a tag cannot bypass checks. For an explicit device-free large-tree timing probe, run `cargo test --release --test audit_tools measure_large_tree_preview -- --ignored --nocapture`; this does not open windows, synthesize input or play sound.
