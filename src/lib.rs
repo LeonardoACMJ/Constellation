@@ -21,3 +21,4 @@ pub mod background;
 pub mod bundle;
 
 pub mod compact_layout;
+pub mod palettes;

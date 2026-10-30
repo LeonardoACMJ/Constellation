@@ -1219,6 +1219,9 @@ mod native_modal_tests {
             let mut config = (*APP).config.clone();
             config.profiles[0].mode = Mode::Hold;
             storage::save(&(*APP).root, &config).unwrap();
+            // Keep the fixture synchronous; the reload watcher is unrelated to
+            // this input-state regression and may observe the save at any time.
+            (*APP).config = config.clone();
             SendMessageW(hwnd, INVOKE, 0, 0);
             assert!((*APP).cursor.enabled);
             SendMessageW(hwnd, RELEASE, 0, pack_point((*APP).center));
@@ -1229,6 +1232,7 @@ mod native_modal_tests {
             config.profiles[0].mode = Mode::Click;
             config.profiles[0].dot_cursor = false;
             storage::save(&(*APP).root, &config).unwrap();
+            (*APP).config = config.clone();
             SendMessageW(hwnd, INVOKE, 0, 0);
             assert!(!(*APP).cursor.enabled);
             assert_ne!(WindowFromPoint(blank), hwnd);

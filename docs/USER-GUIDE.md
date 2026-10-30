@@ -156,7 +156,7 @@ The **Tools…** button opens these tools. Each tool changes the editor draft; *
 
 | Tool | How to use it |
 |---|---|
-| Themes & colors | Pick Constellation, Forest, Rose dusk or Daylight, or enter six-digit hex colors / use Choose. The miniature menu previews the palette. Use palette in draft, then Save. Reset restores original colors. Windows high contrast overrides colors while enabled. |
+| Themes & colors | Pick a built-in or saved palette, or enter six-digit hex colors / use Choose. The miniature menu previews the palette. Four optional outline colors control inactive and highlighted Stars and Constellations separately; leave one blank or click Auto to derive a blue-shifted shade from Outline. Use palette in draft, then Save. Reset restores original colors. Windows high contrast overrides colors while enabled. |
 | Move items | Ctrl/Shift-select sources in the current universe. Search the destination's full path, choose a Constellation in any universe, then Move selected. A branch includes its descendants; selecting those too does not copy/move them twice. Invalid profile dependencies or descendant destinations are rejected. Undo restores the whole move. |
 | Check / repair paths | Check launch targets, runners, working directories and icon/browser sources without running them. Missing/unavailable is advice, including offline drives. To relocate references, enter both folder prefixes and Preview replacements; review exact fields before Apply. Only directory-boundary matches change, never URL/argument/note text. Undo restores them; Save persists them. External programs are not copied. |
 | Recover draft | Restore or discard the recovery document, if one exists. Cancel keeps it for later; resolve it before saving a different draft. Restoration is unsaved, and warns if the saved configuration changed since the recovery point. |
@@ -164,3 +164,13 @@ The **Tools…** button opens these tools. Each tool changes the editor draft; *
 Unfinished edits are captured after a short editing pause in **one** `data/editor-draft.json`, including unvalidated text and open configuration-tool drafts. It never feeds the launcher. Save or explicit discard clears recovery; an abnormal exit may leave it for the next editor start. Captures are bounded to 16 MiB and are best effort: changes made immediately before power loss may not be present. The document contains the text you were editing; it travels only when you copy the whole portable folder, not with JSON/bundle exports. If recovery cannot be written, ordinary explicit Save remains available.
 
 **Theme compatibility (0.1.49):** the default palette is omitted. Custom palettes add `theme`, rejected by older builds. Preserve a compatible configuration before downgrading, or Reset the palette and Save with this build first. The format version is unchanged; a backup is useful only if it predates the incompatible field.
+
+**Outline compatibility (0.1.52):** new builds read existing palettes and derive any missing outline shades. Saving a custom theme or palette may add up to four outline fields; older builds reject those fields. Keep a copy of `config.json` and `data/palettes.json` before downgrading.
+
+### Keep your own palettes
+
+In **Tools → Themes & colors**, enter a **Name** and click **Save palette**. Your palette appears in the Palette selector beside the built-in options. Selecting it reloads those colors for editing. To update it, select it, edit the colors and click **Replace palette**; a different name creates another palette. Built-in names cannot be replaced.
+
+This button saves the portable library immediately. It does not change the active launcher theme or save unrelated edits: use **Use palette in draft → Save** to apply the colors. The library lives in `data/palettes.json`; copying the whole portable folder preserves it. JSON/bundle exports carry the active theme, not this separate library.
+
+The palette selector fits up to twelve visible entries within the monitor work area, then scrolls normally. Each palette can set four outline colors: inactive Star, inactive Constellation, highlighted Star and highlighted Constellation. A blank field or **Auto** derives a darker, blue-shifted shade from **Outline** and the corresponding sector color. The default palette keeps its original four outline shades.

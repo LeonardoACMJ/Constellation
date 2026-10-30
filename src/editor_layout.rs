@@ -1,6 +1,12 @@
 //! Pure editor layout, independent of native windows and their current pixels.
 pub const MIN_WIDTH: i32 = 1050;
 pub const MIN_HEIGHT: i32 = 996;
+/// Fit whole dropdown rows in physical pixels; large libraries retain a scrollbar.
+pub fn dropdown_rows(count: usize, row_height: i32, available: i32, padding: i32) -> usize {
+    count
+        .clamp(1, 12)
+        .min(((available - padding).max(0) / row_height.max(1)).max(1) as usize)
+}
 /// Editor coordinates are logical 96-DPI units, including scroll positions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Dpi(pub u32);

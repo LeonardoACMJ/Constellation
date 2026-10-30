@@ -1,6 +1,21 @@
 //! Headless layout arithmetic only. No windows, input or native UI calls.
 use constellation::editor_layout::{Layout, MIN_HEIGHT, MIN_WIDTH, Rect};
 #[test]
+fn palette_dropdown_fits_all_six_entries_and_bounds_long_lists_for_each_dpi() {
+    use constellation::editor_layout::{Dpi, dropdown_rows};
+    for dpi in [96, 120, 144, 192] {
+        let d = Dpi(dpi);
+        let row = d.pixels(22);
+        let padding = d.pixels(6);
+        assert_eq!(dropdown_rows(6, row, d.pixels(500), padding), 6);
+        assert_eq!(dropdown_rows(100, row, d.pixels(500), padding), 12);
+        let available = d.pixels(100);
+        let visible = dropdown_rows(6, row, available, padding);
+        assert!(visible < 6);
+        assert!(visible as i32 * row + padding <= available);
+    }
+}
+#[test]
 fn maximized_content_uses_both_dimensions_without_dead_scrollbars() {
     let big = Layout::new(2451, 1080, 17, 17);
     assert!(!big.horizontal && !big.vertical);

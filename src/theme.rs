@@ -44,10 +44,23 @@ pub struct Palette {
     pub star_highlight: Color,
     pub constellation_highlight: Color,
     pub outline: Color,
+    /// Per-state outline colors. `None` derives a blue-shifted shade from the
+    /// base outline and that sector's fill; each can be overridden separately.
+    #[serde(default = "auto_outline", skip_serializing_if = "Option::is_none")]
+    pub star_outline: Option<Color>,
+    #[serde(default = "auto_outline", skip_serializing_if = "Option::is_none")]
+    pub constellation_outline: Option<Color>,
+    #[serde(default = "auto_outline", skip_serializing_if = "Option::is_none")]
+    pub star_highlight_outline: Option<Color>,
+    #[serde(default = "auto_outline", skip_serializing_if = "Option::is_none")]
+    pub constellation_highlight_outline: Option<Color>,
     pub line: Color,
     pub symbol: Color,
     pub cluster: Color,
     pub hub: Color,
+}
+fn auto_outline() -> Option<Color> {
+    None
 }
 impl Default for Palette {
     fn default() -> Self {
@@ -61,6 +74,10 @@ impl Default for Palette {
             star_highlight: Color(0x286466),
             constellation_highlight: Color(0x594583),
             outline: Color(0x101c30),
+            star_outline: Some(Color(0x101c30)),
+            constellation_outline: Some(Color(0x1a1b33)),
+            star_highlight_outline: Some(Color(0x174155)),
+            constellation_highlight_outline: Some(Color(0x312b5e)),
             line: Color(0xacd2f7),
             symbol: Color(0x8ee2cd),
             cluster: Color(0xc3afff),
@@ -83,6 +100,12 @@ impl Palette {
         "Star symbol",
         "Constellation symbol",
         "Center hub",
+    ];
+    pub const OUTLINE_LABELS: [&'static str; 4] = [
+        "Star outline",
+        "Constellation outline",
+        "Highlighted star outline",
+        "Highlighted constellation outline",
     ];
     pub fn is_default(&self) -> bool {
         *self == Self::default()
@@ -108,8 +131,46 @@ impl Palette {
         let mut colors = self.colors();
         if let Some(value) = colors.get_mut(index) {
             *value = color;
+            let outlines = self.outline_overrides();
             *self = Self::from_colors(colors);
+            self.set_outline_overrides(outlines);
         }
+    }
+    pub fn outline_overrides(self) -> [Option<Color>; 4] {
+        [
+            self.star_outline,
+            self.constellation_outline,
+            self.star_highlight_outline,
+            self.constellation_highlight_outline,
+        ]
+    }
+    pub fn set_outline(&mut self, index: usize, color: Option<Color>) {
+        match index {
+            0 => self.star_outline = color,
+            1 => self.constellation_outline = color,
+            2 => self.star_highlight_outline = color,
+            3 => self.constellation_highlight_outline = color,
+            _ => {}
+        }
+    }
+    fn set_outline_overrides(&mut self, colors: [Option<Color>; 4]) {
+        self.star_outline = colors[0];
+        self.constellation_outline = colors[1];
+        self.star_highlight_outline = colors[2];
+        self.constellation_highlight_outline = colors[3];
+    }
+    /// Inactive Star, inactive Constellation, highlighted Star, highlighted
+    /// Constellation. Missing overrides stay darker than their fills and shift
+    /// gently toward blue so hand-made palettes need only choose one outline.
+    pub fn outline_colors(self) -> [Color; 4] {
+        let automatic = [
+            derive_outline(self.outline, self.star, Color(0x24496c)),
+            derive_outline(self.outline, self.constellation, Color(0x3b3a67)),
+            derive_outline(self.outline, self.star_highlight, Color(0x315f7e)),
+            derive_outline(self.outline, self.constellation_highlight, Color(0x514a7d)),
+        ];
+        let overrides = self.outline_overrides();
+        std::array::from_fn(|i| overrides[i].unwrap_or(automatic[i]))
     }
     fn from_colors(c: [Color; 13]) -> Self {
         Self {
@@ -122,6 +183,10 @@ impl Palette {
             star_highlight: c[6],
             constellation_highlight: c[7],
             outline: c[8],
+            star_outline: None,
+            constellation_outline: None,
+            star_highlight_outline: None,
+            constellation_highlight_outline: None,
             line: c[9],
             symbol: c[10],
             cluster: c[11],
@@ -139,6 +204,12 @@ impl Palette {
                 p.star_highlight = Color(0x427862);
                 p.constellation_highlight = Color(0x65733e);
                 p.outline = Color(0x14251e);
+                p.set_outline_overrides([
+                    Some(Color(0x162d25)),
+                    Some(Color(0x26321f)),
+                    Some(Color(0x386d56)),
+                    Some(Color(0x596535)),
+                ]);
                 p.symbol = Color(0xb0e6be);
                 p.cluster = Color(0xe0df9b);
                 p.hub = Color(0x18231c);
@@ -151,6 +222,12 @@ impl Palette {
                 p.star_highlight = Color(0x986078);
                 p.constellation_highlight = Color(0x805c9c);
                 p.outline = Color(0x291b2c);
+                p.set_outline_overrides([
+                    Some(Color(0x2b1c2c)),
+                    Some(Color(0x35213b)),
+                    Some(Color(0x754b62)),
+                    Some(Color(0x694b80)),
+                ]);
                 p.symbol = Color(0xffc4d4);
                 p.cluster = Color(0xdfc1ff);
                 p.hub = Color(0x2d1e29);
@@ -165,6 +242,12 @@ impl Palette {
                 p.star_highlight = Color(0x90c9c3);
                 p.constellation_highlight = Color(0xbba2da);
                 p.outline = Color(0x6a7992);
+                p.set_outline_overrides([
+                    Some(Color(0x596e84)),
+                    Some(Color(0x6b6384)),
+                    Some(Color(0x528c87)),
+                    Some(Color(0x7f69a0)),
+                ]);
                 p.line = Color(0x4c5b85);
                 p.symbol = Color(0x146a60);
                 p.cluster = Color(0x60418a);
@@ -174,4 +257,33 @@ impl Palette {
         };
         p
     }
+}
+
+fn derive_outline(outline: Color, fill: Color, blue_tint: Color) -> Color {
+    let shifted = mix(mix(outline, blue_tint, 18), fill, 8);
+    let brightness = |color: Color| {
+        let red = ((color.0 >> 16) & 255) as f64;
+        let green = ((color.0 >> 8) & 255) as f64;
+        let blue = (color.0 & 255) as f64;
+        red * 0.299 + green * 0.587 + blue * 0.114
+    };
+    let source = brightness(shifted);
+    let target = source.min(brightness(fill) * 0.52);
+    if source <= 0.0 {
+        return shifted;
+    }
+    let scale = target / source;
+    let red = (((shifted.0 >> 16) & 255) as f64 * scale).round() as u32;
+    let green = (((shifted.0 >> 8) & 255) as f64 * scale).round() as u32;
+    let blue = ((shifted.0 & 255) as f64 * scale).round() as u32;
+    Color((red << 16) | (green << 8) | blue)
+}
+
+fn mix(first: Color, second: Color, weight: u32) -> Color {
+    let channel = |shift: u32| {
+        ((((first.0 >> shift) & 255) * (100 - weight) + ((second.0 >> shift) & 255) * weight + 50)
+            / 100)
+            << shift
+    };
+    Color(channel(16) | channel(8) | channel(0))
 }

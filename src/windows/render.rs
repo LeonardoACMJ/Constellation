@@ -183,10 +183,9 @@ pub unsafe fn draw_with_icons(
         palette.constellation_highlight.gdi(),
     ]
     .map(|v| CreateSolidBrush(v));
-    let pens = [
-        CreatePen(PS_SOLID, 3, palette.outline.gdi()),
-        CreatePen(PS_SOLID, 3, palette.outline.gdi()),
-    ];
+    let pens = palette
+        .outline_colors()
+        .map(|color| CreatePen(PS_SOLID, 3, color.gdi()));
     for s in sectors {
         let Some(node) = nodes.get(&s.id) else {
             continue;
@@ -194,7 +193,7 @@ pub unsafe fn draw_with_icons(
         let active = hover == Some(s.id) || path.contains(&s.id);
         let folder = node.children.is_some();
         let brush = brushes[usize::from(folder) + 2 * usize::from(active)];
-        let pen = pens[usize::from(active)];
+        let pen = pens[usize::from(folder) + 2 * usize::from(active)];
         let ob = SelectObject(dc, brush);
         let op = SelectObject(dc, pen);
         let polygon: Vec<POINT> = s
