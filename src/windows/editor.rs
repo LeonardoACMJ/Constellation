@@ -4040,6 +4040,8 @@ mod lifecycle_tests {
                 symbols(root);
             }
             let mut editor = Editor::new(null_mut(), PathBuf::new(), config.clone(), vec![]);
+            // Exercise cache invalidation/reuse independently from background worker timing.
+            editor.preview_worker = None;
             let dc = CreateCompatibleDC(null_mut());
             assert!(!dc.is_null());
             let bitmap = CreateCompatibleBitmap(dc, 1400, 900);
