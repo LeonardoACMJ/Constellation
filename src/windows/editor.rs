@@ -1532,16 +1532,27 @@ impl Editor {
                 (c.hwnd, self.dpi.rect(r))
             })
             .collect();
-        let mut batch = BeginDeferWindowPos(positions.len() as i32);
-        for &(hwnd, r) in &positions {
-            if batch.is_null() {
-                break;
-            }
-            batch = DeferWindowPos(batch, hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
+        // DeferWindowPos requires every window in a batch to have the same
+        // parent. Pane children and the fixed footer cannot share one batch.
+        let mut groups: HashMap<usize, Vec<(HWND, FormRect)>> = HashMap::new();
+        for (hwnd, r) in positions {
+            groups
+                .entry(GetParent(hwnd) as usize)
+                .or_default()
+                .push((hwnd, r));
         }
-        if batch.is_null() || EndDeferWindowPos(batch) == 0 {
-            for (hwnd, r) in positions {
-                SetWindowPos(hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
+        for positions in groups.values() {
+            let mut batch = BeginDeferWindowPos(positions.len() as i32);
+            for &(hwnd, r) in positions {
+                if batch.is_null() {
+                    break;
+                }
+                batch = DeferWindowPos(batch, hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
+            }
+            if batch.is_null() || EndDeferWindowPos(batch) == 0 {
+                for &(hwnd, r) in positions {
+                    SetWindowPos(hwnd, null_mut(), r.x, r.y, r.w, r.h, flags);
+                }
             }
         }
         for c in &self.controls {
@@ -4103,7 +4114,17 @@ mod lifecycle_tests {
                 y: bounds.bottom,
             };
             ScreenToClient(owner, &mut bottom);
-            assert!(bottom.y <= client.bottom && bottom.x <= client.right);
+            assert!(
+                bottom.y <= client.bottom && bottom.x <= client.right,
+                "Footer bottom {},{} outside client {},{} (logical page {}x{}, dpi {})",
+                bottom.x,
+                bottom.y,
+                client.right,
+                client.bottom,
+                (*EDITOR).form.page_width,
+                (*EDITOR).form.page_height,
+                (*EDITOR).dpi.0
+            );
             DestroyWindow(owner);
             drop(Box::from_raw(EDITOR));
             EDITOR = null_mut();
