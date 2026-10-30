@@ -4045,6 +4045,20 @@ mod lifecycle_tests {
             let bitmap = CreateCompatibleBitmap(dc, 1400, 900);
             assert!(!bitmap.is_null());
             let previous = SelectObject(dc, bitmap);
+            let preview_model = editor.preview_model.clone();
+            let layout = editor.c.layout;
+            let theme = editor.c.theme;
+            let prepare = |universe| {
+                crate::preview::prepare(&crate::preview::Request {
+                    config: preview_model.clone(),
+                    universe,
+                    layout,
+                    theme,
+                    width: 1920.,
+                    height: 1080.,
+                })
+            };
+            editor.preview_data = Some(prepare(0));
             let first = editor.cached_preview(dc);
             assert!(first > 0);
             let cached = editor.preview_cache.as_ref().unwrap().bitmap;
@@ -4052,14 +4066,19 @@ mod lifecycle_tests {
             assert_eq!(editor.preview_cache.as_ref().unwrap().bitmap, cached);
             editor.universe = 1;
             editor.selected = config.universes[1].id;
+            editor.preview_data = Some(prepare(1));
             assert_eq!(
                 editor.cached_preview(dc),
                 0,
                 "old universe pixels were reused"
             );
+            assert_eq!(editor.preview_cache.as_ref().unwrap().universe, 1);
+            assert_eq!(editor.preview_cache.as_ref().unwrap().prepared.universe, 1);
             editor.universe = 0;
             editor.selected = config.universes[0].id;
+            editor.preview_data = Some(prepare(0));
             assert_eq!(editor.cached_preview(dc), first);
+            assert_eq!(editor.preview_cache.as_ref().unwrap().universe, 0);
             assert_eq!(editor.c, config);
             assert!(!editor.dirty && !editor.item_dirty);
             drop(editor);
