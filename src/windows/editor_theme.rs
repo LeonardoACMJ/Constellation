@@ -135,6 +135,11 @@ pub fn effective(mut palette: crate::theme::Palette) -> crate::theme::Palette {
             palette.star_highlight = from(COLOR_HIGHLIGHT);
             palette.constellation_highlight = from(COLOR_HIGHLIGHT);
             palette.outline = from(COLOR_WINDOWTEXT);
+            let outline = palette.outline;
+            palette.star_outline = Some(outline);
+            palette.constellation_outline = Some(outline);
+            palette.star_highlight_outline = Some(outline);
+            palette.constellation_highlight_outline = Some(outline);
             palette.line = from(COLOR_WINDOWTEXT);
             palette.symbol = from(COLOR_WINDOWTEXT);
             palette.cluster = from(COLOR_WINDOWTEXT);

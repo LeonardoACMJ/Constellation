@@ -37,6 +37,7 @@ const PRESET: i32 = 5;
 const PALETTE_NAME: i32 = 7;
 const PALETTE_SAVE: i32 = 8;
 const RESET: i32 = 6;
+const OUTLINE_AUTO: i32 = 220;
 const SOURCES: i32 = 10;
 const FILTER: i32 = 11;
 const DESTINATIONS: i32 = 12;
@@ -142,7 +143,7 @@ pub unsafe fn capture(hwnd: HWND) -> Option<String> {
     let (kind, ids) = match &state(hwnd)?.kind {
         Kind::Theme { .. } => (
             THEME,
-            (100..113)
+            (100..117)
                 .chain(std::iter::once(PALETTE_NAME))
                 .collect::<Vec<_>>(),
         ),
@@ -173,7 +174,7 @@ pub fn recovery_kind(value: &str) -> Option<u32> {
 pub unsafe fn restore(hwnd: HWND, value: &str) {
     if let Ok(recovery) = serde_json::from_str::<Recovery>(value) {
         for (id, value) in recovery.fields {
-            if (100..113).contains(&id) || matches!(id, PALETTE_NAME | FILTER | OLD | NEW) {
+            if (100..117).contains(&id) || matches!(id, PALETTE_NAME | FILTER | OLD | NEW) {
                 set(hwnd, id, &value);
             }
         }
@@ -348,17 +349,17 @@ pub unsafe fn open(
             );
             for (i, name) in Palette::LABELS.iter().enumerate() {
                 let x = 20 + (i / 7) as i32 * 265;
-                let y = 65 + (i % 7) as i32 * 57;
-                label(hwnd, name, x, y, 245);
+                let y = 65 + (i % 7) as i32 * 45;
+                control(hwnd, "STATIC", name, 0, x, y, 245, 18, 0);
                 control(
                     hwnd,
                     "EDIT",
                     "",
                     100 + i as i32,
                     x,
-                    y + 22,
+                    y + 18,
                     145,
-                    27,
+                    24,
                     WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
                 );
                 control(
@@ -367,9 +368,49 @@ pub unsafe fn open(
                     "Choose…",
                     200 + i as i32,
                     x + 153,
-                    y + 22,
+                    y + 18,
                     90,
-                    27,
+                    24,
+                    WS_TABSTOP,
+                );
+            }
+            for (i, name) in Palette::OUTLINE_LABELS.iter().enumerate() {
+                let column = (i % 2) as i32;
+                let row = 7 + (i / 2) as i32;
+                let x = 20 + column * 265;
+                let y = 65 + row * 45;
+                control(hwnd, "STATIC", name, 0, x, y, 245, 18, 0);
+                control(
+                    hwnd,
+                    "EDIT",
+                    "",
+                    113 + i as i32,
+                    x,
+                    y + 18,
+                    105,
+                    24,
+                    WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+                );
+                control(
+                    hwnd,
+                    "BUTTON",
+                    "Choose…",
+                    213 + i as i32,
+                    x + 109,
+                    y + 18,
+                    70,
+                    24,
+                    WS_TABSTOP,
+                );
+                control(
+                    hwnd,
+                    "BUTTON",
+                    "Auto",
+                    OUTLINE_AUTO + i as i32,
+                    x + 183,
+                    y + 18,
+                    55,
+                    24,
                     WS_TABSTOP,
                 );
             }
@@ -400,6 +441,13 @@ pub unsafe fn open(
                 "Live preview · changes stay in this draft until Save",
                 555,
                 55,
+                360,
+            );
+            label(
+                hwnd,
+                "Blank outline fields derive from Outline; Auto clears an override.",
+                555,
+                78,
                 360,
             );
             label(
@@ -700,6 +748,13 @@ unsafe fn fill_palette(hwnd: HWND, palette: Palette) {
     for (i, c) in palette.colors().iter().enumerate() {
         set(hwnd, 100 + i as i32, &c.hex());
     }
+    for (i, color) in palette.outline_overrides().into_iter().enumerate() {
+        set(
+            hwnd,
+            113 + i as i32,
+            &color.map_or_else(String::new, Color::hex),
+        );
+    }
     if let Kind::Theme { palette: p, .. } = &mut state(hwnd).unwrap().kind {
         *p = palette;
     }
@@ -709,6 +764,15 @@ unsafe fn read_palette(hwnd: HWND) -> Result<Palette, String> {
     let mut palette = Palette::default();
     for i in 0..13 {
         palette.set(i, Color::parse(&text(hwnd, 100 + i as i32))?);
+    }
+    for i in 0..4 {
+        let value = text(hwnd, 113 + i as i32);
+        let color = if value.trim().is_empty() {
+            None
+        } else {
+            Some(Color::parse(&value)?)
+        };
+        palette.set_outline(i, color);
     }
     Ok(palette)
 }
@@ -926,11 +990,13 @@ unsafe fn proc_impl(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESUL
                 if let Err(message) = result {
                     error(hwnd, &message);
                 }
+            } else if (OUTLINE_AUTO..OUTLINE_AUTO + 4).contains(&id) {
+                set(hwnd, 113 + id - OUTLINE_AUTO, "");
             } else if id == RESET {
                 fill_palette(hwnd, Palette::default());
                 send(hwnd, PRESET, CB_SETCURSEL, 0, 0);
                 set(hwnd, PALETTE_NAME, "");
-            } else if (100..113).contains(&id) && notify == EN_CHANGE as usize {
+            } else if (100..117).contains(&id) && notify == EN_CHANGE as usize {
                 match read_palette(hwnd) {
                     Ok(p) => {
                         if let Some(Tools {
@@ -1078,11 +1144,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         return DefWindowProcW(hwnd, msg, w, l);
     };
-    if msg == WM_COMMAND && (200..213).contains(&((w & 0xffff) as i32)) {
+    if msg == WM_COMMAND && (200..217).contains(&((w & 0xffff) as i32)) {
         let index = (w & 0xffff) as usize - 200;
         let initial = state(hwnd).and_then(|t| {
             if let Kind::Theme { palette, .. } = &t.kind {
-                Some(palette.colors()[index].gdi())
+                if index < 13 {
+                    Some(palette.colors()[index].gdi())
+                } else {
+                    Some(palette.outline_colors()[index - 13].gdi())
+                }
             } else {
                 None
             }

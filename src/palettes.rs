@@ -59,7 +59,13 @@ pub fn load(root: &Path) -> Result<Vec<NamedPalette>, String> {
 pub fn save_named(root: &Path, name: &str, palette: Palette) -> Result<Vec<NamedPalette>, String> {
     let name = name.trim();
     validate_name(name)?;
-    if palette.colors().iter().any(|c| c.0 > 0xffffff) {
+    if palette.colors().iter().any(|c| c.0 > 0xffffff)
+        || palette
+            .outline_overrides()
+            .into_iter()
+            .flatten()
+            .any(|c| c.0 > 0xffffff)
+    {
         return Err("Palette colors must be six-digit RGB values".into());
     }
     // Re-read so saving one preset preserves other presets changed since opening.

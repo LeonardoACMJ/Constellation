@@ -1028,16 +1028,7 @@ impl Canvas {
             palette.star_highlight.argb(255),
             palette.constellation_highlight.argb(255),
         ];
-        let edges = if palette.is_default() {
-            [
-                color(16, 28, 48, 255),
-                color(26, 27, 51, 255),
-                color(23, 65, 85, 255),
-                color(49, 43, 94, 255),
-            ]
-        } else {
-            [palette.outline.argb(255); 4]
-        };
+        let edges = palette.outline_colors().map(|edge| edge.argb(255));
         for sector in sectors {
             if sector.sweep <= 0. {
                 continue;
