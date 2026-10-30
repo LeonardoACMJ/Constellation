@@ -350,6 +350,25 @@ mod tests {
                 .as_nanos()
         ))
     }
+    fn receive_until(
+        receiver: &std::sync::mpsc::Receiver<()>,
+        worker: &Worker,
+        mut accept: impl FnMut(&Result<Snapshot, String>) -> bool,
+    ) -> Result<Snapshot, String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let timeout = deadline.saturating_duration_since(Instant::now());
+            receiver
+                .recv_timeout(timeout)
+                .expect("configuration worker did not publish the expected state");
+            let Some(result) = worker.take_ready(false) else {
+                continue;
+            };
+            if accept(&result) {
+                return result;
+            }
+        }
+    }
     fn record(name: &str) -> Vec<u8> {
         let name: Vec<_> = name.encode_utf16().collect();
         let mut bytes = vec![0; 12];
@@ -413,13 +432,51 @@ mod tests {
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
         config.universes[0].name = "Reloaded atomically".into();
         storage::save(&root, &config).unwrap();
-        assert_eq!(receive().unwrap().config, config);
+        assert_eq!(
+            receive_until(&rx, &worker, |result| {
+                result
+                    .as_ref()
+                    .is_ok_and(|snapshot| snapshot.config == config)
+            })
+            .unwrap()
+            .config,
+            config
+        );
         std::fs::write(root.join("data/config.json"), b"{broken").unwrap();
-        assert!(receive().is_err());
+        assert!(receive_until(&rx, &worker, |result| result.is_err()).is_err());
         storage::save(&root, &config).unwrap();
-        assert_eq!(receive().unwrap().config, config);
+        assert_eq!(
+            receive_until(&rx, &worker, |result| {
+                result
+                    .as_ref()
+                    .is_ok_and(|snapshot| snapshot.config == config)
+            })
+            .unwrap()
+            .config,
+            config
+        );
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(()) => {
+                    let _ = worker.take_ready(false);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("configuration worker closed its notification channel")
+                }
+            }
+        }
         worker.request();
-        assert_eq!(receive().unwrap().config, config);
+        assert_eq!(
+            receive_until(&rx, &worker, |result| {
+                result
+                    .as_ref()
+                    .is_ok_and(|snapshot| snapshot.config == config)
+            })
+            .unwrap()
+            .config,
+            config
+        );
         drop(worker);
         // The worker owns cancellation; no user data or native UI is touched.
         // Fixture files can remain if its asynchronous shutdown still holds a handle.
