@@ -335,9 +335,14 @@ fn run(shared: Arc<Shared>, root: PathBuf, notify: impl Fn()) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static FIXTURE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     fn fixture_root() -> PathBuf {
+        // SystemTime can have coarse resolution on hosted Windows runners;
+        // parallel tests also need a process-local uniqueness guarantee.
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "constellation-config-worker-{}-{}",
+            "constellation-config-worker-{}-{}-{sequence}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
