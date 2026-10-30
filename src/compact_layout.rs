@@ -1,4 +1,4 @@
-//! Isolated small-window experiment: fixed footer and independently clipped panes.
+//! Small-window editor layout: fixed footer and independently clipped panes.
 use crate::editor_layout::{Layout, MIN_HEIGHT, Rect};
 pub const ITEM: i32 = 9000;
 pub const SIDE: i32 = 9001;

@@ -1,5 +1,3 @@
-> Optional layout experiment, 0.1.49-layout.1. This is not the normal installed build. Save/status stay fixed; sidebar and item fields scroll independently. Hide preview frees its column. Review with a disposable configuration before using real data.
-
 # Constellation — portable preview
 
 Extract this whole folder to a writable location, then run `constellation.exe`. Constellation is free software under the GNU General Public License v3 or later; the full text ships beside the executable as `LICENSE`, and `THIRD-PARTY-NOTICES.txt` lists the dependencies.
@@ -46,7 +44,7 @@ Right-click the tray icon and choose **Configure / Visualize…**, or double-cli
 constellation.exe --configure
 ```
 
-- The native panel shares the radial’s navy/teal/lavender palette. Its fonts, preview cache and drawing buffers exist only in the configuration process. The panel has scrollbars for smaller windows; the mouse wheel scrolls vertically. Its controls can be reached with Tab.
+- The native panel uses your theme. Its fonts, preview cache and drawing buffers exist only in the configuration process. The hierarchy/sidebar and item fields scroll independently, while Save, Reload, profiles, JSON, Tools and status stay in the footer. **Hide preview** frees the preview column for wider fields; **Show preview** restores it. Tab/Shift+Tab reveal the focused field. Preview visibility and pane positions are session-only; hiding the preview does not apply or discard pending fields.
 - Select an item in the left list. Edit its name, kind, target, arguments, script runner, working directory, or parent. **Apply item** keeps the changes in the draft; switching items also applies valid edits automatically. Invalid fields stay visible and prevent switching until corrected or undone.
 - Use **Browse…** for target files, script runners, and filesystem folders. Drop one or several files/folders into the panel to add Stars under the selected Constellation (or beside the selected Star). Types and names are inferred. Paths within the portable folder are stored relatively.
 - Arguments use normal double-quoted values, for example `--profile "Work profile" ""`. The last value is an empty argument. Backslashes before quotes follow Windows-style escaping. These become separate argument strings; no shell expansion or environment substitution is performed by the editor.

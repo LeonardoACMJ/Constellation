@@ -1,4 +1,6 @@
-# Constellation 0.1.42 — manual checks
+# Constellation — manual checks
+
+For the 0.1.53 layout, resize the window and scroll each pane independently; Save/status must remain visible. Hide/Show preview with invalid field text, then use Tab/Shift+Tab through fields below the fold. Text must survive, focus must scroll into view, and scrolling over the preview must leave pane positions unchanged. Repeat maximize/drag-to-restore and border resizing. The separate preview was user-approved; mixed-monitor review remains useful.
 
 Desktop automation is paused while the user uses the PC. These checks exercise the current changes without an agent controlling input.
 
