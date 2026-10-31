@@ -6,7 +6,8 @@ use super::{
 };
 use crate::{
     config::{
-        Binding, Browser, Config, CursorEnd, Instrument, ItemIcon, Mode, Node, Profile, Target,
+        Binding, Browser, Config, CursorEnd, IconStyle, Instrument, ItemIcon, Mode, Node, Profile,
+        Target,
     },
     editing::{self, History},
     editor_layout::{Dpi, Layout as FormLayout, Rect as FormRect},
@@ -44,6 +45,7 @@ const BROWSE_CWD: i32 = 213;
 const ADVICE: i32 = 214;
 const ICON_MODE: i32 = 215;
 const ICON_BROWSE: i32 = 216;
+const ICON_STYLE: i32 = 226;
 const UNDO: i32 = 405;
 const REDO: i32 = 406;
 const IMPORT: i32 = 407;
@@ -622,6 +624,33 @@ pub fn run(root: PathBuf) -> Result<(), String> {
             );
         }
         control(hwnd, "BUTTON", "Image…", ICON_BROWSE, 490, 484, 73, 28, 0);
+        label(hwnd, "Icon appearance", 490, 518, 175);
+        control(
+            hwnd,
+            "COMBOBOX",
+            "",
+            ICON_STYLE,
+            490,
+            540,
+            175,
+            180,
+            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+        );
+        for title in [
+            "Original",
+            "Folder + icon",
+            "Constellation (3 stars)",
+            "Star frame",
+        ] {
+            send(
+                hwnd,
+                ICON_STYLE,
+                CB_ADDSTRING,
+                0,
+                wide(title).as_ptr() as isize,
+            );
+        }
+
         for (id, rect, enabled) in [
             (
                 STARTUP,
@@ -1997,6 +2026,16 @@ impl Editor {
             ItemIcon::Software { .. } => 3,
         };
         send(self.hwnd, ICON_MODE, CB_SETCURSEL, mode, 0);
+        send(
+            self.hwnd,
+            ICON_STYLE,
+            CB_SETCURSEL,
+            IconStyle::ALL
+                .iter()
+                .position(|s| *s == n.icon_style)
+                .unwrap_or(0),
+            0,
+        );
         let (mut kind, mut path, mut args, mut runner, mut cwd) =
             (0, String::new(), vec![], String::new(), String::new());
         if let Some(t) = &n.target {
@@ -2218,6 +2257,10 @@ impl Editor {
         {
             n.browser = None;
         }
+        n.icon_style = IconStyle::ALL
+            .get(send(self.hwnd, ICON_STYLE, CB_GETCURSEL, 0, 0) as usize)
+            .copied()
+            .ok_or("Choose an icon appearance")?;
         n.icon = match send(self.hwnd, ICON_MODE, CB_GETCURSEL, 0, 0) {
             0 => ItemIcon::Automatic,
             1 => ItemIcon::Symbol,
@@ -2282,6 +2325,7 @@ impl Editor {
             browser: None,
             note: String::new(),
             icon: Default::default(),
+            icon_style: Default::default(),
             visible_in: vec![],
             id,
             name: if folder {
@@ -2838,7 +2882,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 InvalidateRect(hwnd, null(), 1);
                 return 0;
             }
-            if matches!(id, KIND | PARENT | ICON_MODE) && notify == CBN_SELCHANGE as u32 {
+            if matches!(id, KIND | PARENT | ICON_MODE | ICON_STYLE)
+                && notify == CBN_SELCHANGE as u32
+            {
                 e.item_dirty = true;
                 e.enable_fields();
                 return 0;
@@ -2976,6 +3022,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         browser: None,
                         note: String::new(),
                         icon: Default::default(),
+                        icon_style: Default::default(),
                         visible_in: vec![],
                         id,
                         name: "New universe".into(),
@@ -4536,7 +4583,7 @@ mod lifecycle_tests {
             for id in [NAME, NOTE, TARGET, ARGS, RUNNER, CWD, ITEM_PATH] {
                 control(owner, "EDIT", "", id, 300, 10, 300, 25, 0);
             }
-            for id in [KIND, PARENT, ICON_MODE, UNIVERSE] {
+            for id in [KIND, PARENT, ICON_MODE, ICON_STYLE, UNIVERSE] {
                 control(
                     owner,
                     "COMBOBOX",
@@ -4579,6 +4626,20 @@ mod lifecycle_tests {
                 90,
                 LBS_MULTIPLESEL as u32,
             );
+            for title in [
+                "Original",
+                "Folder + icon",
+                "Constellation (3 stars)",
+                "Star frame",
+            ] {
+                send(
+                    owner,
+                    ICON_STYLE,
+                    CB_ADDSTRING,
+                    0,
+                    wide(title).as_ptr() as isize,
+                );
+            }
             control(owner, "STATIC", "", ADVICE, 300, 180, 300, 80, 0);
             control(owner, "STATIC", "", NOTE_COUNT, 300, 260, 300, 20, 0);
             for (id, title, rect) in crate::editor_layout::CREATE_CONTROLS {
@@ -4628,6 +4689,22 @@ mod lifecycle_tests {
                 let _guard = super::super::DispatchGuard::enter().unwrap();
                 (*EDITOR).refresh();
             }
+            let original = (*EDITOR).c.clone();
+            for (i, style) in IconStyle::ALL.iter().enumerate().skip(1) {
+                send(owner, ICON_STYLE, CB_SETCURSEL, i, 0);
+                (*EDITOR).item_dirty = true;
+                (*EDITOR).apply().unwrap();
+                assert_eq!((*EDITOR).c.find(1).unwrap().icon_style, *style);
+                assert_eq!(send(owner, ICON_STYLE, CB_GETCURSEL, 0, 0), i as isize);
+                assert_eq!((*EDITOR).c.find(1).unwrap().icon, ItemIcon::Symbol);
+                (*EDITOR).travel(false).unwrap();
+                assert_eq!((*EDITOR).c, original);
+                (*EDITOR).travel(true).unwrap();
+                assert_eq!((*EDITOR).c.find(1).unwrap().icon_style, *style);
+                (*EDITOR).travel(false).unwrap();
+            }
+            (*EDITOR).dirty = false;
+            (*EDITOR).item_dirty = false;
             let state = |id| {
                 let mut item = TVITEMW {
                     mask: TVIF_STATE,
@@ -5604,7 +5681,7 @@ impl Editor {
         ] {
             fields.insert(format!("main:{id}"), get(self.hwnd, id));
         }
-        for id in [KIND, PARENT, ICON_MODE, INSTRUMENT] {
+        for id in [KIND, PARENT, ICON_MODE, ICON_STYLE, INSTRUMENT] {
             fields.insert(
                 format!("combo:{id}"),
                 send(self.hwnd, id, CB_GETCURSEL, 0, 0).to_string(),
@@ -5697,7 +5774,7 @@ impl Editor {
                 set(self.hwnd, id, value);
             }
         }
-        for id in [KIND, PARENT, ICON_MODE, INSTRUMENT] {
+        for id in [KIND, PARENT, ICON_MODE, ICON_STYLE, INSTRUMENT] {
             if let Some(index) = draft
                 .fields
                 .get(&format!("combo:{id}"))

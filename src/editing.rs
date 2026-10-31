@@ -198,6 +198,7 @@ pub fn star_from_path(root: &Path, path: &Path, id: u64) -> Result<Node, String>
         browser: None,
         note: String::new(),
         icon: Default::default(),
+        icon_style: Default::default(),
         visible_in: vec![],
         id,
         name: if path.is_dir() {
@@ -420,6 +421,7 @@ pub fn preview_tree_equal(a: &Config, b: &Config, universe: usize) -> bool {
         a.id == b.id
             && a.name == b.name
             && a.icon == b.icon
+            && a.icon_style == b.icon_style
             && (!matches!(a.icon, crate::config::ItemIcon::Automatic) || a.target == b.target)
             && match (&a.children, &b.children) {
                 (None, None) => true,

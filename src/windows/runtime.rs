@@ -83,6 +83,26 @@ struct Runtime {
 static mut APP: *mut Runtime = null_mut();
 
 pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
+    crate::lifecycle::install_panic_hook(root.clone());
+    crate::lifecycle::record(
+        &root,
+        "start",
+        if smoke { "mode=smoke" } else { "mode=resident" },
+    );
+    let result = run_resident(root.clone(), smoke);
+    crate::lifecycle::record(
+        &root,
+        "run_returned",
+        if result.is_ok() {
+            "result=ok"
+        } else {
+            "result=error"
+        },
+    );
+    result
+}
+
+fn run_resident(root: PathBuf, smoke: bool) -> Result<(), String> {
     unsafe {
         let instance = CreateMutexW(
             null(),
@@ -178,9 +198,23 @@ pub fn run(root: PathBuf, smoke: bool) -> Result<(), String> {
         if smoke {
             SetTimer(hwnd, 10, 350, None);
         }
+        crate::lifecycle::record(&a.root, "ready", "hooks=installed tray=added");
         drop(startup_guard);
         let mut msg: MSG = zeroed();
-        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+        loop {
+            let received = GetMessageW(&mut msg, null_mut(), 0, 0);
+            if received <= 0 {
+                crate::lifecycle::record(
+                    &(*APP).root,
+                    "message_loop_end",
+                    &format!(
+                        "status={received} code={} win32_error={}",
+                        msg.wParam,
+                        if received < 0 { GetLastError() } else { 0 }
+                    ),
+                );
+                break;
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -213,6 +247,7 @@ unsafe fn cleanup() {
     }
     let mut a = Box::from_raw(APP);
     APP = null_mut();
+    crate::lifecycle::record(&a.root, "cleanup_begin", "");
     drop(a.reload.take());
     a.dismiss(true);
     drop(a.input.take());
@@ -222,6 +257,7 @@ unsafe fn cleanup() {
     DestroyWindow(a.hwnd);
     ReleaseMutex(a.instance);
     CloseHandle(a.instance);
+    crate::lifecycle::record(&a.root, "cleanup_complete", "");
 }
 
 /// Yield input to fullscreen applications and the shortcut-profile editor.
@@ -868,6 +904,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             1
         }
         WM_ENDSESSION if w != 0 => {
+            crate::lifecycle::record(&a.root, "exit_requested", "reason=windows_end_session");
             PostQuitMessage(0);
             0
         }
@@ -899,6 +936,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     a.dismiss(true);
                 }
                 TRAY_QUIT => {
+                    crate::lifecycle::record(&a.root, "exit_requested", "reason=tray_quit");
                     PostQuitMessage(0);
                     return 0;
                 }
@@ -951,6 +989,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         WM_DESTROY => {
+            crate::lifecycle::record(&a.root, "exit_requested", "reason=window_destroyed");
             PostQuitMessage(0);
             0
         }

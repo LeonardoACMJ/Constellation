@@ -303,6 +303,7 @@ fn guarded_fan_fixture() -> Config {
                 name: format!("Branch {i}"),
                 note: String::new(),
                 icon: Default::default(),
+                icon_style: Default::default(),
                 visible_in: vec![],
                 target: None,
                 children: Some(vec![child]),

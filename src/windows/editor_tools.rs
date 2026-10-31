@@ -463,7 +463,8 @@ pub unsafe fn open(
                 );
             }
             fill_palette(hwnd, config.theme);
-            let built_in = (0..4).find(|i| Palette::preset(*i) == config.theme);
+            let built_in =
+                (0..crate::palettes::BUILTINS.len()).find(|i| Palette::preset(*i) == config.theme);
             if let Some(index) = built_in {
                 send(hwnd, PRESET, CB_SETCURSEL, index, 0);
             } else {
@@ -479,7 +480,13 @@ pub unsafe fn open(
                     }
                 });
                 if let Some((index, name)) = matching {
-                    send(hwnd, PRESET, CB_SETCURSEL, index + 4, 0);
+                    send(
+                        hwnd,
+                        PRESET,
+                        CB_SETCURSEL,
+                        index + crate::palettes::BUILTINS.len(),
+                        0,
+                    );
                     set(hwnd, PALETTE_NAME, &name);
                     palette_save_label(hwnd);
                 }
@@ -1005,10 +1012,12 @@ unsafe fn proc_impl(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESUL
                 size_palette_dropdown(hwnd);
             } else if id == PRESET && notify == CBN_SELCHANGE as usize {
                 let index = send(hwnd, PRESET, CB_GETCURSEL, 0, 0);
-                let selected = if index >= 4 {
+                let selected = if index >= crate::palettes::BUILTINS.len() as isize {
                     state(hwnd).and_then(|t| {
                         if let Kind::Theme { saved, .. } = &t.kind {
-                            saved.get(index as usize - 4).cloned()
+                            saved
+                                .get(index as usize - crate::palettes::BUILTINS.len())
+                                .cloned()
                         } else {
                             None
                         }
@@ -1040,7 +1049,13 @@ unsafe fn proc_impl(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESUL
                         *slot = saved;
                     }
                     refresh_presets(hwnd);
-                    send(hwnd, PRESET, CB_SETCURSEL, index + 4, 0);
+                    send(
+                        hwnd,
+                        PRESET,
+                        CB_SETCURSEL,
+                        index + crate::palettes::BUILTINS.len(),
+                        0,
+                    );
                     set(hwnd, PALETTE_NAME, name.trim());
                     palette_save_label(hwnd);
                     error(

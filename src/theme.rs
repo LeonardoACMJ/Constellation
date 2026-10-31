@@ -208,6 +208,14 @@ impl Palette {
         }
     }
     pub fn preset(index: usize) -> Self {
+        if index == 4 {
+            return serde_json::from_str(include_str!("starry-night.json"))
+                .expect("built-in Starry Night palette");
+        }
+        if index == 5 {
+            return serde_json::from_str(include_str!("gracidea.json"))
+                .expect("built-in Gracidea palette");
+        }
         let mut p = Self::default();
         match index {
             1 => {

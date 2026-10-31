@@ -19,6 +19,7 @@ fn root(id: u64) -> Node {
         note: String::new(),
         browser: None,
         icon: ItemIcon::Automatic,
+        icon_style: Default::default(),
         visible_in: vec![],
         children: Some(vec![]),
         target: None,

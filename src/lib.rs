@@ -22,3 +22,8 @@ pub mod bundle;
 
 pub mod compact_layout;
 pub mod palettes;
+
+#[cfg(any(windows, test))]
+mod lifecycle;
+
+pub mod icon_composition;

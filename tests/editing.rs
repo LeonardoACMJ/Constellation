@@ -198,6 +198,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
         browser: None,
         note: String::new(),
         icon: Default::default(),
+        icon_style: Default::default(),
         visible_in: vec![],
         id: 65,
         name: "Deep Star".into(),
@@ -209,6 +210,7 @@ fn deepest_supported_tree_survives_json_import_storage_and_backup_recovery() {
             browser: None,
             note: String::new(),
             icon: Default::default(),
+            icon_style: Default::default(),
             visible_in: vec![],
             id,
             name: format!("Level {id}"),
@@ -253,6 +255,7 @@ fn ten_thousand_stars_remain_individually_selectable_without_paging() {
                 browser: None,
                 note: String::new(),
                 icon: Default::default(),
+                icon_style: Default::default(),
                 visible_in: vec![],
                 id,
                 name: format!("Star {id}"),
@@ -320,6 +323,7 @@ fn duplicate_star_preserves_launch_fields_and_uses_global_ids() {
         cwd: Some("C:/Work".into()),
     });
     n.note = "Work browser".into();
+    n.icon_style = constellation::config::IconStyle::StarFrame;
     n.icon = ItemIcon::Software {
         path: "icons/browser.exe".into(),
     };

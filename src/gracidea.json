@@ -1,0 +1,19 @@
+{
+  "background": "#F0F5EF",
+  "input": "#FFFFFF",
+  "text": "#183526",
+  "muted": "#486451",
+  "star": "#E5F1DD",
+  "constellation": "#F7E1E8",
+  "star_highlight": "#B9DA91",
+  "constellation_highlight": "#EFA6BA",
+  "outline": "#5D8059",
+  "line": "#6B8B48",
+  "symbol": "#457D2C",
+  "cluster": "#A23D64",
+  "hub": "#FFFFFF",
+  "star_outline": "#4C7056",
+  "constellation_outline": "#765D75",
+  "star_highlight_outline": "#6B9B5B",
+  "constellation_highlight_outline": "#B66D84"
+}

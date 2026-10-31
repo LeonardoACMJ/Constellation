@@ -133,3 +133,5 @@ Automated device-free checks cover directory notifications, atomic saves, malfor
 | With opt-in audio tracing, change the default audio device between phrases, briefly disconnect output, then try a later note. | Later notes recover when output is available. No old-note replay; launcher input remains usable. Preserve trace if clicking persists. |
 
 The isolated small-screen layout experiment needs separate review; it is not included in the normal 0.1.49 package. Automated checks cannot establish audio quality or mixed-monitor ergonomics.
+
+| Icon appearances | Pick From Software on a Constellation. Try Folder + icon, Constellation (3 stars), Star frame, then Original; Update draft and Save each choice. Repeat with a custom image and an automatic URL favicon. | Radial and full preview show the same appearance. Original retains the selected source; launching children is unchanged. Undo/Redo, Duplicate, Reload, draft recovery and bundle import/export retain the appearance. Missing sources and Symbol mode keep their normal symbol. |

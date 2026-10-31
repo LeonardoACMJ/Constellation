@@ -118,3 +118,30 @@ fn malformed_or_unsupported_libraries_and_invalid_names_are_preserved() {
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 }
+
+#[test]
+fn official_palettes_preserve_legacy_customizations_without_duplicate_presets() {
+    assert_eq!(palettes::BUILTINS.len(), 6);
+    assert_eq!(Palette::preset(4).star, Color(0xc7a23f));
+    assert_eq!(Palette::preset(4).star_text, Some(Color(0x15213a)));
+    assert_eq!(Palette::preset(5).constellation, Color(0xf7e1e8));
+    let root = sandbox();
+    std::fs::create_dir_all(root.join("data")).unwrap();
+    let path = root.join("data/palettes.json");
+    let document = serde_json::json!({"version":1, "palettes":[
+        {"name":"Starry Night", "palette":Palette::preset(4)},
+        {"name":"Gracidea", "palette":Palette::default()},
+        {"name":"Gracidea (custom)", "palette":Palette::preset(1)}
+    ]});
+    let raw = serde_json::to_vec(&document).unwrap();
+    std::fs::write(&path, &raw).unwrap();
+    let entries = palettes::load(&root).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].name, "Gracidea (custom) 2");
+    assert_eq!(entries[0].palette, Palette::default());
+    assert_eq!(std::fs::read(&path).unwrap(), raw);
+    let saved = palettes::save_named(&root, "Personal", Palette::preset(4)).unwrap();
+    assert_eq!(palettes::load(&root).unwrap(), saved);
+    assert_eq!(saved[0], entries[0]);
+    assert!(palettes::save_named(&root, "Starry Night", Palette::default()).is_err());
+}

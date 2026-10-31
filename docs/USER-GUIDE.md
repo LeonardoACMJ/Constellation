@@ -165,6 +165,12 @@ Unfinished edits are captured after a short editing pause in **one** `data/edito
 
 **Outline compatibility (0.1.52):** new builds read existing palettes and derive any missing outline shades. Saving a custom theme or palette may add up to four outline fields; older builds reject those fields. Keep a copy of `config.json` and `data/palettes.json` before downgrading.
 
+### Distinguish program icons from their Constellations
+
+Select an item and choose **Icon appearance → Original**, **Folder + icon**, **Constellation (3 stars)** or **Star frame**, then **Update draft → Save**. Appearance is separate from Automatic / Custom image / From Software: it never changes what the item launches. For a MusicBee Constellation, use **From Software → Browse…** to choose its executable, then pick an appearance. Its child Star can keep the original program icon.
+
+The same appearance works with custom images and automatic favicons. Symbol mode and unavailable sources retain the ordinary Star/Constellation symbol. Compositions are generated in the background and cached; no image generator, Python runtime or extra image files are required. Configuration and bundle transfers carry the appearance choice; bundles still include custom source images and never software executables. To undo a decoration, select Original. Untouched nodes keep their existing config format; older builds reject a saved nondefault `icon_style`, so back up config before downgrading.
+
 ### Keep your own palettes
 
 In **Tools → Themes & colors**, enter a **Name** and click **Save palette**. Your palette appears in the Palette selector beside the built-in options. Selecting it reloads those colors for editing. To update it, select it, edit the colors and click **Replace palette**; a different name creates another palette. Built-in names cannot be replaced.
@@ -172,3 +178,7 @@ In **Tools → Themes & colors**, enter a **Name** and click **Save palette**. Y
 This button saves the portable library immediately. It does not change the active launcher theme or save unrelated edits: use **Use palette in draft → Save** to apply the colors. The library lives in `data/palettes.json`; copying the whole portable folder preserves it. JSON/bundle exports carry the active theme, not this separate library.
 
 The palette selector fits up to twelve visible entries within the monitor work area, then scrolls normally. Each palette can set four outline colors: inactive Star, inactive Constellation, highlighted Star and highlighted Constellation. A blank field or **Auto** derives a darker, blue-shifted shade from **Outline** and the corresponding sector color. The default palette keeps its original four outline shades.
+
+The six built-in themes are Constellation, Forest, Rose dusk, Daylight, Starry Night and Gracidea. Starry Night uses luminous gold Stars with dark blue labels and blue Constellations. Built-in themes are always available, including in a fresh portable folder. Save your changes under another name to keep a custom variation. Older saved Starry Night or Gracidea entries that differ from the built-in are preserved as custom palettes.
+
+**Unexpected exits:** `data/lifecycle.log` records resident startup, readiness, requested exits, message-loop termination, cleanup and Rust panic locations. It stores no typed keys, window titles or panic payloads, and retains one previous segment (about 128 KiB total). Forced termination and some native crashes cannot write a final record; a missing shutdown record is evidence of an incomplete session, not proof of a particular cause.

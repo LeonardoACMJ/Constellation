@@ -3,7 +3,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use super::wide;
 use crate::{
-    config::{ItemIcon, Node, Target},
+    config::{IconStyle, ItemIcon, Node, Target},
     storage,
 };
 use std::{
@@ -39,13 +39,23 @@ pub struct Pixels {
 pub type Images = HashMap<u64, Arc<Pixels>>;
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Source {
+    Decorated(Box<Source>, IconStyle),
     Program(String),
     File(String),
     Url(String),
     Custom(String),
 }
+impl Source {
+    fn origin(&self) -> Option<&str> {
+        match self {
+            Self::Url(origin) => Some(origin),
+            Self::Decorated(base, _) => base.origin(),
+            _ => None,
+        }
+    }
+}
 fn source(node: &Node) -> Option<Source> {
-    match &node.icon {
+    let base = match &node.icon {
         ItemIcon::Symbol => None,
         ItemIcon::Software { path } => Some(Source::Program(path.clone())),
         ItemIcon::Custom { path } => Some(Source::Custom(path.clone())),
@@ -56,7 +66,12 @@ fn source(node: &Node) -> Option<Source> {
             }
             Target::Url { url } => crate::favicon::origin(url).map(Source::Url),
         },
-    }
+    }?;
+    Some(if node.icon_style.is_original() {
+        base
+    } else {
+        Source::Decorated(Box::new(base), node.icon_style)
+    })
 }
 struct Entry {
     image: Option<Arc<Pixels>>,
@@ -254,11 +269,9 @@ fn start_worker(
                 }) {
                     continue;
                 }
-                let disk = if let Source::Url(origin) = &key {
-                    Some(crate::favicon::DiskCache::new(&root, origin))
-                } else {
-                    None
-                };
+                let disk = key
+                    .origin()
+                    .map(|origin| crate::favicon::DiskCache::new(&root, origin));
                 if is_network {
                     if let Some(disk) = &disk {
                         // A failed client setup is also cached/backed off.
@@ -656,6 +669,12 @@ unsafe fn custom(path: &Path, gdiplus: bool) -> Option<Pixels> {
 }
 pub(super) unsafe fn load(root: &Path, key: &Source, gdiplus: bool) -> Option<Pixels> {
     match key {
+        Source::Decorated(base, style) => {
+            let image = load(root, base, gdiplus)?;
+            Some(Pixels {
+                bytes: crate::icon_composition::compose(&image.bytes, SIZE, *style)?,
+            })
+        }
         Source::Custom(path) => custom(&storage::resolve(root, path), gdiplus),
         Source::Url(origin) => {
             let path = crate::favicon::DiskCache::new(root, origin).image()?;
@@ -738,6 +757,23 @@ pub unsafe fn draw_gdi(dc: HDC, image: &Pixels, x: i32, y: i32, size: i32) {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+    #[test]
+    fn decorated_keys_separate_styles_without_losing_favicon_origin() {
+        let mut n = node(7);
+        n.target = Some(Target::Url {
+            url: "https://example.org/music".into(),
+        });
+        let original = source(&n).unwrap();
+        for style in IconStyle::ALL.into_iter().skip(1) {
+            n.icon_style = style;
+            let decorated = source(&n).unwrap();
+            assert!(decorated != original);
+            assert_eq!(decorated.origin(), Some("https://example.org"));
+            n.icon = ItemIcon::Symbol;
+            assert!(source(&n).is_none());
+            n.icon = ItemIcon::Automatic;
+        }
+    }
     fn node(id: u64) -> Node {
         Node {
             browser: None,
@@ -752,6 +788,7 @@ mod cache_tests {
             }),
             note: String::new(),
             icon: ItemIcon::Automatic,
+            icon_style: Default::default(),
         }
     }
     #[test]

@@ -3,7 +3,14 @@ use crate::{storage, theme::Palette};
 use serde::{Deserialize, Serialize};
 use std::{io::Read, path::Path};
 
-pub const BUILTINS: [&str; 4] = ["Constellation (default)", "Forest", "Rose dusk", "Daylight"];
+pub const BUILTINS: [&str; 6] = [
+    "Constellation (default)",
+    "Forest",
+    "Rose dusk",
+    "Daylight",
+    "Starry Night",
+    "Gracidea",
+];
 const MAX_BYTES: u64 = 256 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,11 +49,41 @@ pub fn load(root: &Path) -> Result<Vec<NamedPalette>, String> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err("Palette library exceeds 256 KiB".into());
     }
-    let library: Library =
+    let mut library: Library =
         serde_json::from_slice(&bytes).map_err(|e| format!("Cannot read palette library: {e}"))?;
     if library.version != 1 || library.palettes.len() > 128 {
         return Err("Unsupported palette library".into());
     }
+    let mut original_names = std::collections::HashSet::new();
+    for entry in &library.palettes {
+        if !(4..BUILTINS.len()).any(|i| key(BUILTINS[i]) == key(&entry.name)) {
+            validate_name(&entry.name)?;
+        }
+        if !original_names.insert(key(&entry.name)) {
+            return Err("Duplicate names in palette library".into());
+        }
+    }
+    // These two presets used to be user-library entries. Preserve modified
+    // copies under an unambiguous name; omit identical built-ins from the menu.
+    let mut occupied: std::collections::HashSet<String> =
+        library.palettes.iter().map(|p| key(&p.name)).collect();
+    library.palettes.retain_mut(|entry| {
+        if let Some(index) = (4..BUILTINS.len()).find(|&i| key(BUILTINS[i]) == key(&entry.name)) {
+            if entry.palette == Palette::preset(index) {
+                return false;
+            }
+            let base = format!("{} (custom)", BUILTINS[index]);
+            let mut name = base.clone();
+            let mut suffix = 2;
+            while occupied.contains(&key(&name)) {
+                name = format!("{base} {suffix}");
+                suffix += 1;
+            }
+            occupied.insert(key(&name));
+            entry.name = name;
+        }
+        true
+    });
     let mut names = std::collections::HashSet::new();
     for entry in &library.palettes {
         validate_name(&entry.name)?;

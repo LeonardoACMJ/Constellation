@@ -103,6 +103,8 @@ pub struct Node {
     pub target: Option<Target>,
     #[serde(default, skip_serializing_if = "ItemIcon::is_auto")]
     pub icon: ItemIcon,
+    #[serde(default, skip_serializing_if = "IconStyle::is_original")]
+    pub icon_style: IconStyle,
     /// Shortcut profiles that show this item. Empty means every profile, so an
     /// item is shared unless it is deliberately restricted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -133,6 +135,27 @@ impl Browser {
         Ok(())
     }
 }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconStyle {
+    #[default]
+    Original,
+    Folder,
+    Constellation,
+    StarFrame,
+}
+impl IconStyle {
+    pub const ALL: [Self; 4] = [
+        Self::Original,
+        Self::Folder,
+        Self::Constellation,
+        Self::StarFrame,
+    ];
+    pub fn is_original(&self) -> bool {
+        *self == Self::Original
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ItemIcon {
@@ -617,6 +640,7 @@ impl Default for Config {
                 browser: None,
                 note: String::new(),
                 icon: Default::default(),
+                icon_style: Default::default(),
                 visible_in: vec![],
                 id,
                 name: name.into(),
@@ -630,6 +654,7 @@ impl Default for Config {
                 browser: None,
                 note: String::new(),
                 icon: Default::default(),
+                icon_style: Default::default(),
                 visible_in: vec![],
                 id: 1,
                 name: "Your universe".into(),
@@ -639,6 +664,7 @@ impl Default for Config {
                         browser: None,
                         note: String::new(),
                         icon: Default::default(),
+                        icon_style: Default::default(),
                         visible_in: vec![],
                         id: 2,
                         name: "Everyday".into(),
@@ -666,6 +692,7 @@ impl Default for Config {
                                 browser: None,
                                 note: String::new(),
                                 icon: Default::default(),
+                                icon_style: Default::default(),
                                 visible_in: vec![],
                                 id: 5,
                                 name: "Explore".into(),

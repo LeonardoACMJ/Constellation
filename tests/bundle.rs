@@ -34,7 +34,8 @@ fn configured(root: &std::path::Path) -> Config {
 fn portable_bundle_roundtrips_shared_assets_and_history_without_original_folder() {
     let source = sandbox();
     let destination = sandbox();
-    let c = configured(&source);
+    let mut c = configured(&source);
+    c.universes[0].icon_style = constellation::config::IconStyle::Constellation;
     let file = source.join("export.constellation");
     bundle::export(&file, &source, &c).unwrap();
     let document: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
